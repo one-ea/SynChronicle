@@ -79,7 +79,7 @@
   - `extra` 通过自定义 fetch wrapper 注入 headers
   - 覆盖 Req 4 (LLM Provider Adapter) 全部 AC 1--12
   - [ ] 7.1 运行 `pnpm vitest run providers/`，使用 mock provider 验证 Failover 切换、模型热切换和 `extra_body`/`extra` 透传
-- [ ] 8. Tools 实现
+- [x] 8. Tools 实现
   - R: `src/tools/novel_context.ts`，按角色返回不同上下文（Req 5 AC 9）
   - R: `src/tools/save_foundation.ts`，保存前提/大纲/角色/世界规则
   - R: `src/tools/plan_chapter.ts`，规划章节
@@ -98,8 +98,8 @@
   - R: `src/tools/registry.ts`，工具注册表，提供每个角色对应的工具集合
   - 每个工具定义 Zod 参数 schema、执行业务逻辑、原子落盘、追加 checkpoint、返回结构化结果
   - 覆盖 Req 5 AC 9、Req 6 AC 1--2 (Checkpoint 写入)、Req 7 AC 1--12 (Store 写入)
-  - [ ] 8.1 运行 `pnpm vitest run tools/`，验证 15 个工具的参数校验和业务逻辑
-  - [ ] 8.2 验证每个工具在成功完成后向 Store 追加了 checkpoint
+  - [x] 8.1 运行 `pnpm vitest run tools/`，验证 15 个工具的参数校验和业务逻辑
+  - [x] 8.2 验证每个工具在成功完成后向 Store 追加了 checkpoint
 - [ ] 9. Agents 实现
   - R: `src/agents/build.ts`，`buildCoordinator(cfg, store, models, bundle, recordUsage, onFlowBoundary, onGuardBlock)`，构建 Coordinator 和子代理
   - R: `src/agents/coordinator.ts`，Coordinator 系统提示词和工具注册

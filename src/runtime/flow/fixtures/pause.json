@@ -1,0 +1,8 @@
+[
+  {"name":"无停靠点","pausePoint":null,"progress":{"phase":"writing"},"expected":"keep"},
+  {"name":"未知触发条件保守保留","pausePoint":{"after":"chapter_committed","reason":""},"progress":{"phase":"writing"},"expected":"keep"},
+  {"name":"progress 缺失保守保留","pausePoint":{"after":"rewrites_drained","reason":"重写第3章"},"progress":null,"expected":"keep"},
+  {"name":"队列未排空","pausePoint":{"after":"rewrites_drained","reason":"重写第3章"},"progress":{"phase":"writing","pending_rewrites":[3]},"expected":"keep"},
+  {"name":"排空且写作中消费并停机","pausePoint":{"after":"rewrites_drained","reason":"重写第3章"},"progress":{"phase":"writing"},"expected":"consume_and_stop"},
+  {"name":"排空但已完本只消费","pausePoint":{"after":"rewrites_drained","reason":"重写第3章"},"progress":{"phase":"complete"},"expected":"consume"}
+]
