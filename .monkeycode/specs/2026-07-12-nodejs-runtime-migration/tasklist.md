@@ -150,7 +150,7 @@
   - R: `src/headless/ask_user.ts`，headless 模式下的 AskUser 实现，通过 stdin/stderr 交互
   - 覆盖 Req 9 (Headless 模式) 全部 AC 1--6
   - [ ] 14.1 运行 `pnpm vitest run headless/`，使用 mock Host 验证 stdout/stderr 输出和 AskUser 交互
-- [ ] 15. TUI 实现
+- [x] 15. TUI 实现
   - R: `src/tui/app.tsx`，Ink 根组件，管理页面路由
   - R: `src/tui/startup.tsx`，欢迎页和启动模式选择
   - R: `src/tui/cocreate.tsx`，协同创作入口
@@ -169,7 +169,7 @@
   - R: `src/tui/events.tsx`，事件处理器
   - 使用 React Context（`createContext`/`useContext`）管理 TUI 状态，通过 Host 事件流驱动更新
   - 覆盖 Req 8 (TUI 交互) 全部 AC 1--13
-  - [ ] 15.1 运行 `pnpm vitest run tui/`，使用 `ink-testing-library` 渲染关键组件并验证状态更新
+  - [x] 15.1 运行 `pnpm vitest run tui/`，使用 `ink-testing-library` 渲染关键组件并验证状态更新
 - [ ] 16. Assets 加载实现
   - R: `src/assets/load.ts`，使用 `fs.readFileSync` 从 `assets/` 目录加载 Markdown 提示词、参考文档和风格模板，运行时缓存
   - `assets/` 目录内容不变：`assets/prompts/`（coordinator/architect-short/architect-long/writer/editor/simulation-source/simulation-merge/import-foundation/import-chapter-analyzer）、`assets/references/`（全部参考文档）、`assets/styles/`（风格模板）
