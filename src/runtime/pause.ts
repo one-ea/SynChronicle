@@ -1,0 +1,7 @@
+interface PauseDependencies { loadMeta(): Promise<{ pause_point?: { after: string; reason: string } | null } | null>; loadProgress(): Promise<{ phase?: string; pending_rewrites?: number[] } | null>; clear(): Promise<void>; }
+export class PausePointSentinel {
+  constructor(private readonly deps: PauseDependencies, private readonly abort: (reason: string) => void, private readonly report: (level: string, summary: string) => void = () => undefined) {}
+  async handleBoundary(): Promise<boolean> { const [meta, progress] = await Promise.all([this.deps.loadMeta(), this.deps.loadProgress()]); const point = meta?.pause_point; if (!point) return false; const complete = progress?.phase === "complete"; const rewritesEmpty = point.after === "rewrite_queue_empty" && (progress?.pending_rewrites?.length ?? 0) === 0; if (!complete && !rewritesEmpty) return false; await this.deps.clear(); if (complete) { this.report("info", `验收停靠点已随完本收尾解除${reason(point.reason)}`); return false; } this.abort(`返工队列已排空，已自动暂停等待验收${reason(point.reason)}`); return true; }
+  async reconcileOnResume(): Promise<void> { const [meta, progress] = await Promise.all([this.deps.loadMeta(), this.deps.loadProgress()]); if (!meta?.pause_point) return; if (progress?.phase === "complete" || (meta.pause_point.after === "rewrite_queue_empty" && (progress?.pending_rewrites?.length ?? 0) === 0)) { await this.deps.clear(); this.report("info", `上次的验收停靠点已完成，恢复时自动解除${reason(meta.pause_point.reason)}`); } }
+}
+function reason(value: string): string { return value ? `（诉求：${value}）` : ""; }

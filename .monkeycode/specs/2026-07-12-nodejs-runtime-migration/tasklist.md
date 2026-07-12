@@ -116,7 +116,7 @@
   - 从 Go 版本 `internal/host/flow/router.go` 复制决策表和所有路由逻辑，包括 Strand、WindBack、Draft tier 判断
   - 覆盖 design.md 正确性属性 (3) Flow Router Determinism：给定相同 State 输入，返回与 Go 版本完全相同的 Instruction
   - [ ] 10.1 使用 Go 版本 router 的决策表输入输出构建 fixture，运行兼容测试，确认 Node.js 版本返回完全相同的 Instruction
-- [ ] 11. Host 运行时实现
+- [x] 11. Host 运行时实现
   - R: `src/runtime/host.ts`，`Host.new(cfg, bundle): Promise<Host>`、`startPrepared(prompt)`、`resume()`、`continue(prompt)`、`abort(reason, level)`、`close()`、`events().subscribe()`
   - R: `src/runtime/observer.ts`，Agent 事件到 Host 事件的投影
   - R: `src/runtime/budget.ts`，`BudgetSentinel`，订阅子代理边界事件执行停机
@@ -131,8 +131,8 @@
   - R: `src/runtime/exp/`，导出为 txt 和 epub
   - R: `src/runtime/sim/`，仿真创作
   - 覆盖 Req 5 AC 1--8、Req 6 AC 1--7、Req 11 (通知告警) AC 1--6
-  - [ ] 11.1 运行 `pnpm vitest run runtime/`，覆盖 Host 生命周期、Budget/Pause Sentinel、事件投影、恢复和通知集成
-  - [ ] 11.2 使用 mock provider 运行端到端 Host `startPrepared` → `resume` → `continue` 流程
+  - [x] 11.1 运行 `pnpm vitest run runtime/`，覆盖 Host 生命周期、Budget/Pause Sentinel、事件投影、恢复和通知集成
+  - [x] 11.2 使用 mock provider 运行端到端 Host `startPrepared` → `resume` → `continue` 流程
 - [ ] 12. 检查点
   - 确保 Provider + Tools + Agents + Flow Router + Host 全部单元和集成测试通过，`pnpm typecheck && pnpm test` 无报错
 - [ ] 13. CLI 入口实现
