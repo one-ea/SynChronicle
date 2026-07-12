@@ -1,0 +1,63 @@
+{
+  "name": "synchronicle",
+  "version": "2.0.0",
+  "description": "Multi-Agent AI Novel Writing Engine - Coordinate teams of Architect, Writer, and Editor agents to craft complete novels",
+  "type": "module",
+  "bin": {
+    "synchronicle": "./dist/cli/index.js"
+  },
+  "files": [
+    "dist",
+    "assets",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@10.34.5",
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "ai",
+    "novel",
+    "writing",
+    "llm",
+    "multi-agent",
+    "cli",
+    "tui"
+  ],
+  "license": "Apache-2.0",
+  "author": "one-ea",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/one-ea/SynChronicle.git"
+  },
+  "dependencies": {
+    "ai": "^5.0.48",
+    "@ai-sdk/openai": "^2.0.32",
+    "@ai-sdk/anthropic": "^2.0.16",
+    "@ai-sdk/google": "^2.0.15",
+    "ink": "^6.3.1",
+    "react": "^19.1.0",
+    "zod": "^3.25.76",
+    "gpt-tokenizer": "^3.4.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "tsup": "^8.5.0",
+    "vitest": "^3.2.4",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.1.2",
+    "ink-testing-library": "^4.0.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  }
+}
