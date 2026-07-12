@@ -1,105 +1,16 @@
 import { z } from "zod";
 
-export interface Novel {
-  Name: string;
-  TotalChapters: number;
-}
-
-export const NovelSchema = z.object({
-  Name: z.string(),
-  TotalChapters: z.number().int().nonnegative(),
-});
-
-export interface OutlineEntry {
-  Chapter: number;
-  Title: string;
-  CoreEvent: string;
-  Hook: string;
-  Scenes: string[];
-}
-
-export const OutlineEntrySchema = z.object({
-  Chapter: z.number().int().positive(),
-  Title: z.string(),
-  CoreEvent: z.string(),
-  Hook: z.string(),
-  Scenes: z.array(z.string()),
-});
-
-export interface Character {
-  Name: string;
-  Aliases: string[];
-  Role: string;
-  Description: string;
-  Arc: string;
-  Traits: string[];
-  Tier: string;
-}
-
-export const CharacterSchema = z.object({
-  Name: z.string(),
-  Aliases: z.array(z.string()),
-  Role: z.string(),
-  Description: z.string(),
-  Arc: z.string(),
-  Traits: z.array(z.string()),
-  Tier: z.string(),
-});
-
-export interface VolumeOutline {
-  Index: number;
-  Title: string;
-  Theme: string;
-  Final: boolean;
-  Arcs: ArcOutline[];
-}
-
-export const VolumeOutlineSchema: z.ZodType<VolumeOutline> = z.object({
-  Index: z.number().int().nonnegative(),
-  Title: z.string(),
-  Theme: z.string(),
-  Final: z.boolean(),
-  Arcs: z.lazy(() => z.array(ArcOutlineSchema)),
-});
-
-export interface ArcOutline {
-  Index: number;
-  Title: string;
-  Goal: string;
-  EstimatedChapters: number;
-  Chapters: OutlineEntry[];
-}
-
-export const ArcOutlineSchema: z.ZodType<ArcOutline> = z.object({
-  Index: z.number().int().nonnegative(),
-  Title: z.string(),
-  Goal: z.string(),
-  EstimatedChapters: z.number().int().nonnegative(),
-  Chapters: z.array(OutlineEntrySchema),
-});
-
-export interface WorldRule {
-  Category: string;
-  Rule: string;
-  Boundary: string;
-}
-
-export const WorldRuleSchema = z.object({
-  Category: z.string(),
-  Rule: z.string(),
-  Boundary: z.string(),
-});
-
-export interface StoryCompass {
-  EndingDirection: string;
-  OpenThreads: string[];
-  EstimatedScale: string;
-  LastUpdated: number;
-}
-
-export const StoryCompassSchema = z.object({
-  EndingDirection: z.string(),
-  OpenThreads: z.array(z.string()),
-  EstimatedScale: z.string(),
-  LastUpdated: z.number().int().nonnegative(),
-});
+export const NovelSchema = z.object({ name: z.string(), total_chapters: z.number().int().nonnegative() }).strict();
+export type Novel = z.infer<typeof NovelSchema>;
+export const OutlineEntrySchema = z.object({ chapter: z.number().int().positive(), title: z.string(), core_event: z.string(), hook: z.string(), scenes: z.array(z.string()) }).strict();
+export type OutlineEntry = z.infer<typeof OutlineEntrySchema>;
+export const CharacterSchema = z.object({ name: z.string(), aliases: z.array(z.string()).optional(), role: z.string(), description: z.string(), arc: z.string(), traits: z.array(z.string()), tier: z.string().optional() }).strict();
+export type Character = z.infer<typeof CharacterSchema>;
+export const ArcOutlineSchema: z.ZodType<ArcOutline> = z.object({ index: z.number().int().nonnegative(), title: z.string(), goal: z.string(), estimated_chapters: z.number().int().nonnegative().optional(), chapters: z.array(OutlineEntrySchema) }).strict();
+export type ArcOutline = { index: number; title: string; goal: string; estimated_chapters?: number; chapters: OutlineEntry[] };
+export const VolumeOutlineSchema: z.ZodType<VolumeOutline> = z.object({ index: z.number().int().nonnegative(), title: z.string(), theme: z.string(), final: z.boolean().optional(), arcs: z.array(ArcOutlineSchema) }).strict();
+export type VolumeOutline = { index: number; title: string; theme: string; final?: boolean; arcs: ArcOutline[] };
+export const WorldRuleSchema = z.object({ category: z.string(), rule: z.string(), boundary: z.string() }).strict();
+export type WorldRule = z.infer<typeof WorldRuleSchema>;
+export const StoryCompassSchema = z.object({ ending_direction: z.string(), open_threads: z.array(z.string()).optional(), estimated_scale: z.string().optional(), last_updated: z.number().int().nonnegative().optional() }).strict();
+export type StoryCompass = z.infer<typeof StoryCompassSchema>;

@@ -1,74 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { ChapterPlanSchema, CommitResultSchema, WritingStyleRulesSchema, RecallItemSchema } from "./writing.js";
-
-describe("ChapterPlanSchema", () => {
-  it("parses valid plan", () => {
-    const valid = {
-      Chapter: 1,
-      Title: "Start",
-      Goal: "Intro",
-      Conflict: "None",
-      Hook: "A mystery",
-      EmotionArc: "curious",
-      Notes: "",
-      Contract: {
-        RequiredBeats: ["beat1"],
-        ForbiddenMoves: [],
-        ContinuityChecks: [],
-        EvaluationFocus: [],
-        EmotionTarget: "excited",
-        PayoffPoints: [],
-        HookGoal: "compelling",
-      },
-    };
-    expect(ChapterPlanSchema.safeParse(valid).success).toBe(true);
-  });
-});
-
-describe("CommitResultSchema", () => {
-  it("parses with null Feedback", () => {
-    const valid = {
-      Chapter: 1,
-      Committed: true,
-      WordCount: 2500,
-      NextChapter: 2,
-      ReviewRequired: false,
-      ReviewReason: "",
-      HookType: "cliffhanger",
-      DominantStrand: "main",
-      Feedback: null,
-      ArcEnd: false,
-      VolumeEnd: false,
-      Volume: 1,
-      Arc: 1,
-      NeedsExpansion: false,
-      NeedsNewVolume: false,
-      NextVolume: 1,
-      NextArc: 1,
-      BookComplete: false,
-      Flow: "writing",
-    };
-    expect(CommitResultSchema.safeParse(valid).success).toBe(true);
-  });
-});
-
-describe("WritingStyleRulesSchema", () => {
-  it("parses valid rules", () => {
-    const valid = {
-      Volume: 1,
-      Arc: 1,
-      Prose: ["vivid"],
-      Dialogue: [{ Name: "Alice", Rules: ["witty"] }],
-      Taboos: ["info-dump"],
-      UpdatedAt: "now",
-    };
-    expect(WritingStyleRulesSchema.safeParse(valid).success).toBe(true);
-  });
-});
-
-describe("RecallItemSchema", () => {
-  it("parses valid recall", () => {
-    const valid = { Kind: "character", Key: "Alice", Chapter: 3, Reason: "reappears", Summary: "Alice returns" };
-    expect(RecallItemSchema.safeParse(valid).success).toBe(true);
-  });
+describe("writing persistence schemas", () => {
+  it("parses chapter plan", () => { expect(ChapterPlanSchema.safeParse({ chapter: 1, title: "Start", goal: "Intro", conflict: "None", hook: "Mystery", emotion_arc: "curious", notes: "", contract: { required_beats: ["beat1"], forbidden_moves: [], continuity_checks: [], evaluation_focus: [], emotion_target: "excited", payoff_points: [], hook_goal: "compelling" } }).success).toBe(true); });
+  it("parses commit result", () => { expect(CommitResultSchema.safeParse({ chapter: 1, committed: true, word_count: 2500, next_chapter: 2, review_required: false, feedback: null, flow: "writing" }).success).toBe(true); });
+  it("parses style rules", () => { expect(WritingStyleRulesSchema.safeParse({ volume: 1, arc: 1, prose: ["vivid"], dialogue: [{ name: "Alice", rules: ["witty"] }], taboos: ["info-dump"], updated_at: "now" }).success).toBe(true); });
+  it("parses recall item", () => { expect(RecallItemSchema.safeParse({ kind: "character", key: "Alice", chapter: 3, reason: "reappears", summary: "Alice returns" }).success).toBe(true); });
 });

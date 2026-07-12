@@ -1,41 +1,7 @@
 import { z } from "zod";
-
-export interface AgentUsageTotals {
-  Input: number;
-  Output: number;
-  CacheRead: number;
-  CacheWrite: number;
-  Cost: number;
-  Saved: number;
-  CacheCapable: boolean;
-  CacheBreaks: number;
-}
-
-export const AgentUsageTotalsSchema = z.object({
-  Input: z.number().int().nonnegative(),
-  Output: z.number().int().nonnegative(),
-  CacheRead: z.number().int().nonnegative(),
-  CacheWrite: z.number().int().nonnegative(),
-  Cost: z.number().nonnegative(),
-  Saved: z.number().nonnegative(),
-  CacheCapable: z.boolean(),
-  CacheBreaks: z.number().int().nonnegative(),
-});
-
-export interface UsageState {
-  Schema: number;
-  UpdatedAt: string;
-  Overall: AgentUsageTotals;
-  PerAgent: Record<string, AgentUsageTotals>;
-  PerModel: Record<string, AgentUsageTotals>;
-  MissingUsage: number;
-}
-
-export const UsageStateSchema = z.object({
-  Schema: z.number().int().nonnegative(),
-  UpdatedAt: z.string(),
-  Overall: AgentUsageTotalsSchema,
-  PerAgent: z.record(z.string(), AgentUsageTotalsSchema),
-  PerModel: z.record(z.string(), AgentUsageTotalsSchema),
-  MissingUsage: z.number().int().nonnegative(),
-});
+export const AgentUsageTotalsSchema = z.object({ input: z.number().int().nonnegative(), output: z.number().int().nonnegative(), cache_read: z.number().int().nonnegative(), cache_write: z.number().int().nonnegative(), cost_usd: z.number().nonnegative(), saved_usd: z.number().nonnegative(), cache_capable: z.boolean(), cache_breaks: z.number().int().nonnegative().optional() }).strict();
+export type AgentUsageTotals = z.infer<typeof AgentUsageTotalsSchema>;
+export const UsageStateSchema = z.object({ schema: z.number().int().nonnegative(), updated_at: z.string(), overall: AgentUsageTotalsSchema, per_agent: z.record(z.string(), AgentUsageTotalsSchema), per_model: z.record(z.string(), AgentUsageTotalsSchema).optional(), missing_assistant_usage: z.number().int().nonnegative() }).strict();
+export type UsageState = z.infer<typeof UsageStateSchema>;
+export const UsageSchema = UsageStateSchema; export type Usage = UsageState;
+export const WritingStatsSchema = z.object({ total_words: z.number().int().nonnegative(), chapters: z.number().int().nonnegative() }).strict(); export type WritingStats = z.infer<typeof WritingStatsSchema>;

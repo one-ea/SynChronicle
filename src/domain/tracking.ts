@@ -1,19 +1,2 @@
 import { z } from "zod";
-
-export interface StateChange {
-  Chapter: number;
-  Entity: string;
-  Field: string;
-  OldValue: string;
-  NewValue: string;
-  Reason: string;
-}
-
-export const StateChangeSchema = z.object({
-  Chapter: z.number().int().positive(),
-  Entity: z.string(),
-  Field: z.string(),
-  OldValue: z.string(),
-  NewValue: z.string(),
-  Reason: z.string(),
-});
+export const StateChangeSchema = z.object({ chapter: z.number().int().positive(), entity: z.string(), field: z.string(), old_value: z.string().optional(), new_value: z.string(), reason: z.string().optional() }).strict(); export type StateChange = z.infer<typeof StateChangeSchema>;
