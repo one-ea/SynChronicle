@@ -1,0 +1,52 @@
+import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { z } from "zod";
+
+export class FileIO {
+  constructor(readonly dir: string) {}
+  path(rel: string) { return join(this.dir, rel); }
+  async ensureDirs(dirs: string[]) { await Promise.all(dirs.map((dir) => mkdir(this.path(dir), { recursive: true }))); }
+  async readFile(rel: string) { return readFile(this.path(rel)); }
+  async readText(rel: string) { try { return await readFile(this.path(rel), "utf8"); } catch (error) { if (isMissing(error)) return ""; throw error; } }
+  async readJSON<T>(rel: string, schema?: z.ZodType<T>): Promise<T | null> {
+    try {
+      const value: unknown = JSON.parse(await readFile(this.path(rel), "utf8"));
+      return schema ? schema.parse(value) : value as T;
+    } catch (error) {
+      if (isMissing(error)) return null;
+      throw error;
+    }
+  }
+  async writeFile(rel: string, data: string | Uint8Array) { await atomicWrite(this.path(rel), data); }
+  async writeJSON(rel: string, value: unknown) { await this.writeFile(rel, JSON.stringify(value, null, 2)); }
+  async appendJSONLine(rel: string, value: unknown) {
+    const path = this.path(rel);
+    await mkdir(dirname(path), { recursive: true });
+    const handle = await open(path, "a", 0o644);
+    try { await handle.write(`${JSON.stringify(value)}\n`); await handle.sync(); } finally { await handle.close(); }
+  }
+  async remove(rel: string) { await rm(this.path(rel), { force: true, recursive: true }); }
+}
+
+export async function atomicWrite(path: string, data: string | Uint8Array) {
+  await mkdir(dirname(path), { recursive: true });
+  const temp = join(dirname(path), `${path.split("/").at(-1)}.tmp-${randomUUID()}`);
+  const handle = await open(temp, "w", 0o644);
+  try { await handle.writeFile(data); await handle.sync(); } finally { await handle.close(); }
+  try { await rename(temp, path); } catch (error) { await rm(temp, { force: true }); throw error; }
+}
+
+export function parseJSONLines<T>(text: string, schema?: z.ZodType<T>, tolerateInvalid = false): T[] {
+  const result: T[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try { const value: unknown = JSON.parse(line); result.push(schema ? schema.parse(value) : value as T); }
+    catch (error) { if (!tolerateInvalid) throw error; }
+  }
+  return result;
+}
+
+export function isMissing(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
+}

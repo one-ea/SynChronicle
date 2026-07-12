@@ -1,0 +1,5 @@
+import { SimulationProfileSchema, UsageStateSchema, type SimulationProfile, type UsageState } from "../domain/index.js";
+import { FileIO } from "./io.js";
+export class UsageStore { constructor(private readonly io: FileIO) {} async load() { const state = await this.io.readJSON("meta/usage.json", UsageStateSchema); return state?.schema === 1 ? state : null; } save(state: UsageState) { return this.io.writeJSON("meta/usage.json", { ...state, schema: 1 }); } }
+export class SimulationStore { constructor(private readonly io: FileIO) {} load() { return this.io.readJSON("meta/simulation_profile.json", SimulationProfileSchema); } save(profile: SimulationProfile) { const value = SimulationProfileSchema.parse(profile); return this.io.writeJSON("meta/simulation_profile.json", value); } }
+export class JSONStore<T> { constructor(private readonly io: FileIO, private readonly path: string) {} load() { return this.io.readJSON<T>(this.path); } save(value: T) { return this.io.writeJSON(this.path, value); } clear() { return this.io.remove(this.path); } }
