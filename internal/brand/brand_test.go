@@ -117,13 +117,32 @@ func TestDocumentationBrandContract(t *testing.T) {
 	}
 
 	content := string(data)
+	lineCount := strings.Count(content, "\n")
+	if lineCount < 180 || lineCount > 250 {
+		t.Errorf("README line count = %d, want 180-250", lineCount)
+	}
 	for _, want := range []string{
 		"# SynChronicle\n\n多智能体 AI 长篇创作引擎。SynChronicle 由 Coordinator 驱动 Architect、Writer 与 Editor 协作完成规划、写作、评审和持续演进，把一句创作需求推进为可恢复、可干预的完整长篇作品。",
+		"## 核心能力",
+		"## 多智能体工作流",
+		"## 快速安装",
+		"## 最小配置",
+		"## 启动与常用命令",
+		"## 作品输出",
+		"## 架构概览",
+		"## Docker",
+		"## 本地开发",
+		"## 数据与密钥安全",
+		"## 许可证",
 		"go install github.com/one-ea/SynChronicle/cmd/synchronicle@latest",
 		"synchronicle --version",
+		"synchronicle --help",
 		"ghcr.io/one-ea/synchronicle:latest",
 		"~/.synchronicle",
 		"./.synchronicle",
+		`"api_key": "your-api-key"`,
+		"Apache License 2.0",
+		"Copyright 2026 one-ea",
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("README does not contain %q", want)
@@ -132,6 +151,9 @@ func TestDocumentationBrandContract(t *testing.T) {
 
 	legacyExecutable := "ai" + "novel-cli"
 	for _, unwanted := range []string{
+		"scripts/sample.gif",
+		"scripts/novel.png",
+		"MIT License",
 		"github.com/voocel/" + legacyExecutable,
 		"voocel/" + legacyExecutable,
 		legacyExecutable,
@@ -139,6 +161,49 @@ func TestDocumentationBrandContract(t *testing.T) {
 	} {
 		if strings.Contains(content, unwanted) {
 			t.Errorf("README contains legacy value %q", unwanted)
+		}
+	}
+}
+
+func TestLicenseContract(t *testing.T) {
+	root := filepath.Join("..", "..")
+	license, err := os.ReadFile(filepath.Join(root, "LICENSE"))
+	if err != nil {
+		t.Fatalf("read LICENSE: %v", err)
+	}
+	licenseText := string(license)
+	for _, want := range []string{
+		"Apache License",
+		"Version 2.0, January 2004",
+		"http://www.apache.org/licenses/",
+	} {
+		if !strings.Contains(licenseText, want) {
+			t.Errorf("LICENSE does not contain %q", want)
+		}
+	}
+
+	notice, err := os.ReadFile(filepath.Join(root, "NOTICE"))
+	if err != nil {
+		t.Fatalf("read NOTICE: %v", err)
+	}
+	wantNotice := "SynChronicle\nCopyright 2026 one-ea\n\nLicensed under the Apache License, Version 2.0.\n"
+	if string(notice) != wantNotice {
+		t.Errorf("NOTICE content mismatch\ngot:\n%s\nwant:\n%s", notice, wantNotice)
+	}
+
+	release, err := os.ReadFile(filepath.Join(root, ".goreleaser.yml"))
+	if err != nil {
+		t.Fatalf("read GoReleaser config: %v", err)
+	}
+	for _, want := range []string{"      - README.md", "      - LICENSE", "      - NOTICE"} {
+		if !strings.Contains(string(release), want) {
+			t.Errorf(".goreleaser.yml does not contain %q", want)
+		}
+	}
+
+	for _, path := range []string{"scripts/sample.gif", "scripts/novel.png"} {
+		if _, err := os.Stat(filepath.Join(root, path)); !os.IsNotExist(err) {
+			t.Errorf("deleted visual resource still exists: %s", path)
 		}
 	}
 }

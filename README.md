@@ -2,642 +2,232 @@
 
 多智能体 AI 长篇创作引擎。SynChronicle 由 Coordinator 驱动 Architect、Writer 与 Editor 协作完成规划、写作、评审和持续演进，把一句创作需求推进为可恢复、可干预的完整长篇作品。
 
-<p align="center">
-  <img src="scripts/sample.gif" alt="SynChronicle demo" width="800">
-  <img src="scripts/novel.png" alt="SynChronicle novel preview" width="800">
-</p>
+[![Go](https://img.shields.io/github/go-mod/go-version/one-ea/SynChronicle)](https://github.com/one-ea/SynChronicle)
+[![Release](https://img.shields.io/github/v/release/one-ea/SynChronicle)](https://github.com/one-ea/SynChronicle/releases)
+[![License](https://img.shields.io/github/license/one-ea/SynChronicle)](LICENSE)
 
-## 特性
+SynChronicle 面向需要持续推进长篇故事的创作者与开发者。它把规划、章节写作、质量评审、状态维护和断点恢复组织为一个可观察的本地工作流。
 
-- **多智能体协作** — Coordinator 在一次长循环中调度 Architect / Writer / Editor 三个子代理，自主决策创作流程
-- **LLM 驱动长循环** — 一次 Prompt 写完整本书，Host 不介入调度。越简单越稳定，拒绝复杂编排
-- **Step 级断点恢复** — 每个工具执行成功后写入 checkpoint，崩溃后精确到 plan/draft/check/commit 步骤级恢复
-- **卷弧双层滚动规划** — 长篇不再一次性规划全部章节。初始只规划前 2 卷弧骨架 + 第 1 弧详细章节，后续弧/卷在写作推进到时再由 Architect 展开，每次展开都参考前文摘要和角色状态，远期规划不空洞
-- **相关章节智能推荐** — 每章写作时从伏笔、角色出场、状态变化、关系四个维度自动推荐相关历史章节，配合下一章预告，确保 500+ 章长篇的连续性
-- **自适应上下文策略** — 根据总章节数自动切换全量 / 滑窗 / 分层摘要，支持 500+ 章长篇
-- **七维质量评审** — Editor 从设定一致性、角色行为、节奏、叙事连贯、伏笔、钩子、审美品质七个维度评审，审美维度细分描写质感/叙事手法/对话区分度/用词质量/情感打动力五项，每项必须引用原文举证
-- **用户实时干预** — 写作过程中随时在输入框注入修改意见（无需暂停），系统自动评估影响范围并重写受影响章节
-- **统一 TUI 入口** — 交互界面实时观察进度，也支持携带一句需求直接启动
-- **多 LLM 支持** — OpenRouter / Anthropic / Gemini / OpenAI 等等随意切换
+## 核心能力
 
-## 架构
+- Coordinator 在单次长循环中统筹完整创作流程。
+- Architect 维护前提、大纲、卷弧规划、角色和世界规则。
+- Writer 结合近期正文、摘要、伏笔和角色状态逐章创作。
+- Editor 从结构、一致性、节奏和审美维度审阅正文。
+- 每个关键工具步骤写入 checkpoint，进程中断后可恢复。
+- 卷、弧、章三级摘要支持数百章作品的上下文管理。
+- TUI 展示运行进度，并接受创作过程中的用户干预。
+- OpenRouter、Anthropic、Gemini、OpenAI 及兼容接口可按配置切换。
 
-核心设计：**LLM 驱动，Host 服务**。Coordinator 在一次 Run 中自主决策整本书的创作流程，Host 只做启动、恢复和事件观察。
-
-```
-┌─────────────────────────────────────────────────┐
-│                Host（薄外壳）                     │
-│           启动 / 恢复 / 观察 / 干预注入            │
-└──────────────────────┬──────────────────────────┘
-                       │ 一次 Prompt
-┌──────────────────────▼──────────────────────────┐
-│              Coordinator（LLM 长循环）            │
-│    读 novel_context → 调子代理 → 读结果 → 继续     │
-└────┬──────────┬──────────┬──────────────────────┘
-     │          │          │
- ┌───▼────┐ ┌───▼───┐ ┌────▼────┐
- │Architect│ │Writer │ │ Editor  │
- └───┬────┘ └───┬───┘ └────┬────┘
-     └──────────┼──────────┘
-                │ 工具调用（IO + checkpoint）
-┌───────────────▼─────────────────────────────────┐
-│                   Store                         │
-│  Progress / Checkpoint / Outline / Drafts / ... │
-└─────────────────────────────────────────────────┘
-```
-
-- **Host** — 启动 Coordinator、崩溃恢复、事件投影给 TUI。不做任何调度决策
-- **Coordinator** — 唯一的决策者，在一次 Run 里驱动规划→写作→评审→总结的完整流程
-- **SubAgents** — Architect / Writer / Editor 各自独立 context，通过 Store 中的工件协作
-- **Tools** — 原子 IO + checkpoint 写入，只返事实 JSON，不夹带指令
-
-### 智能体职责
-
-| 智能体 | 职责 | 工具 |
-|--------|------|------|
-| **Coordinator** | 调度全局，处理评审裁定和用户干预 | `subagent` `novel_context` |
-| **Architect** | 生成前提、大纲、角色档案、世界规则 | `novel_context` `save_foundation` |
-| **Writer** | 自主完成一章的构思、写作、自审和提交 | `novel_context` `read_chapter` `plan_chapter` `draft_chapter` `check_consistency` `commit_chapter` |
-| **Editor** | 阅读原文，从结构和审美两个层面审阅 | `novel_context` `read_chapter` `save_review` `save_arc_summary` `save_volume_summary` |
-
-### 写作流程
-
-```
-用户需求 → Architect 规划骨架 + 首弧章节 → Writer 逐章写作 → Editor 弧级评审
-                                                  ↑                   │
-                                                  ├── 重写/打磨 ◄──────┘
-                                                  │
-                                           Architect 展开下一弧/卷
-                                          （参考前文摘要+角色快照）
-```
-
-Writer 按固定顺序完成每章（写作内容完全自主，工具调用顺序严格）：
-
-1. `novel_context` — 加载上下文（前情摘要、伏笔、角色状态、风格规则、相关章节推荐）
-2. `read_chapter` — 回读前文找回语气和节奏
-3. `plan_chapter` — 构思本章目标、冲突、情绪弧线
-4. `draft_chapter` — 写入整章正文
-5. `check_consistency` — 对照状态数据检查一致性（必须在 draft 之后）
-6. `commit_chapter` — 提交终稿，返回事实字段（`arc_end_reached` / `next_chapter` 等），下一步由 Reminder 驱动
-
-### 状态迁移规则
-
-系统内部把运行状态拆成两层：
-
-- **Phase** — 大阶段，表示作品目前处于设定期、写作期还是已完成
-- **Flow** — 当前活跃流程，表示系统此刻是在正常写作、审阅、重写、打磨还是处理用户干预
-
-#### Phase
-
-`Phase` 采用“只前进不回退”的规则：
+## 多智能体工作流
 
 ```text
-init -> premise -> outline -> writing -> complete
-  \-------> outline ------^
-  \--------------> writing
+创作需求
+   |
+   v
+Coordinator
+   |-- Architect: 前提、大纲、角色、世界观、滚动规划
+   |-- Writer: 章节计划、草稿、一致性检查、终稿提交
+   `-- Editor: 弧级与卷级评审、摘要、修改建议
+   |
+   v
+Store: 正文、元数据、摘要、状态与 checkpoints
 ```
 
-含义：
+Host 负责启动、恢复、事件观察和干预注入。Coordinator 负责决策，三个子智能体通过持久化工件协作。
 
-- `init` — 任务已创建，尚未形成稳定设定
-- `premise` — 已保存故事前提
-- `outline` — 已保存大纲，可以进入正式写作
-- `writing` — 已进入章节创作期
-- `complete` — 全书流程结束
+Writer 的标准章节循环为：加载上下文、回读前文、规划章节、写入草稿、一致性检查、提交终稿。弧或卷到达边界后，Editor 评审，Architect 再展开下一阶段。
 
-规则说明：
+## 快速安装
 
-- 允许同态更新，例如 `writing -> writing`
-- 允许前进，例如 `outline -> writing`
-- 不允许回退，例如 `writing -> premise`、`complete -> writing`
-
-#### Flow
-
-`Flow` 只描述写作期内的活跃流程，允许在几个工作流之间切换：
-
-```text
-writing   -> reviewing / rewriting / polishing / steering / writing
-reviewing -> writing / rewriting / polishing / steering / reviewing
-rewriting -> writing / steering / rewriting
-polishing -> writing / steering / polishing
-steering  -> writing / reviewing / rewriting / polishing / steering
-```
-
-含义：
-
-- `writing` — 正常推进下一章
-- `reviewing` — Editor 正在评审
-- `rewriting` — 处理必须重写的章节
-- `polishing` — 处理只需打磨的章节
-- `steering` — 正在评估并处理用户干预
-
-规则说明：
-
-- 允许 `writing -> reviewing`，例如章节提交后触发评审
-- 允许 `reviewing -> rewriting/polishing/writing`，由评审结果决定
-- 允许 `steering -> writing/reviewing/rewriting/polishing`，由干预影响范围决定
-- 不允许明显反常的跳转，例如 `rewriting -> reviewing`
-
-这些规则现在由代码中的轻量校验统一约束，避免状态回退或跳到不合理的流程分支。
-
-### 长篇滚动规划
-
-传统方案一次规划所有章节，300+ 章时大纲空洞、节奏像赶进度。本系统采用**指南针 + 视野滚动规划**，模拟网文作者的真实创作流程：
-
-```
-初始规划                     弧结束时                      卷结束时
-┌────────────────────┐    ┌─────────────────────┐    ┌─────────────────────┐
-│ 终局方向（指南针）    │    │ Editor 弧级评审      │    │ Editor 卷级评审       │
-│ 起步 2 卷，后续按需   │    │ 弧摘要 + 角色快照     │    │ 卷摘要               │
-│ 第1弧详细章节        │ →  │ Architect 展开下一弧  │ →  │ Architect 自主创建   │
-│ 角色 + 世界观        │    │ Writer 继续写作      │    │ 下一卷 + 更新指南针    │
-└────────────────────┘    └─────────────────────┘    └─────────────────────┘
-```
-
-- **指南针（Compass）** — 终局方向 + 活跃长线 + 规模估计，每次卷边界由 Architect 更新，故事方向可随创作演化
-- **按需生成** — 当前卷写完后，Architect 根据已写内容自主创建下一卷。初始规划生成 2 卷作为起步，后续卷按需生成
-- **骨架弧** — 只有 goal + 预估章数，到达时再展开详细章节
-- **渐进细化** — 每次展开都参考前文摘要、角色快照、风格规则，越往后写越精确
-- **通用节奏模板** — 成长突破弧 / 竞技对抗弧 / 探索发现弧 / 恩怨冲突弧 / 日常过渡弧，每种弧型有参考密度和适用题材映射
-
-### 长篇上下文管理
-
-500+ 章小说采用三级摘要 + 四级压缩管线 + 智能推荐：
-
-```
-卷（Volume）→ 卷摘要
-└── 弧（Arc）→ 弧摘要 + 角色快照 + 风格规则
-    └── 章（Chapter）→ 章摘要（滑窗最近3章）
-```
-
-- **分层摘要** — 近处用章摘要，中距离用弧摘要，远处用卷摘要，层层压缩不丢信息
-- **相关章节推荐** — 每章写作时从伏笔、角色出场、状态变化、关系四个维度反查历史章节，推荐 Writer 按需回读
-- **下一章预告** — 加载下一章大纲，帮 Writer 设计章末钩子和伏笔衔接
-- **弧边界检测** — 自动识别弧/卷结束，触发评审、摘要生成和下一弧/卷展开
-
-#### 上下文压缩管线
-
-当对话超出模型上下文窗口时，按代价从低到高逐级压缩：
-
-```
-ToolResultMicrocompact → LightTrim → StoreSummaryCompact → FullSummary
-     清理旧工具结果        截断长文本      store 零 LLM 压缩      LLM 摘要兜底
-```
-
-- **StoreSummaryCompact** — Writer 专用，用 store 中已有的章节摘要、角色快照、伏笔台账直接替换旧消息，零 LLM 开销
-- **FullSummary 小说定制** — Writer 使用面向叙事连续性的摘要提示词，明确要求保留角色状态、伏笔线索、审稿待修项、风格锚点
-- **压缩后恢复包** — FullSummary 后自动注入当前章节计划、大纲和角色快照，防止 Writer 压缩后"失忆"
-- **熔断器** — 压缩连续失败时自动跳过并显式告警，采用半开模式，下轮自动重试
-- **CJK Token 估算** — 中文 `runes × 1.5`，不会因为 `bytes/4` 低估而导致压缩触发滞后
-- **TUI 健康度渐变** — 上下文占用绿(<70%)→黄(70-85%)→红(>85%)实时展示
-
-## 快速开始
+macOS 和 Linux 可使用安装脚本：
 
 ```bash
-# 一键安装（macOS / Linux，无需 Go）
 curl -fsSL https://raw.githubusercontent.com/one-ea/SynChronicle/main/scripts/install.sh | sh
+```
 
-# 安装指定版本
+安装指定版本：
+
+```bash
 curl -fsSL https://raw.githubusercontent.com/one-ea/SynChronicle/main/scripts/install.sh | sh -s -- v1.2.3
+```
 
-# 或通过 Go 安装
+已有 Go 1.25.5 或更高版本时，可直接安装：
+
+```bash
 go install github.com/one-ea/SynChronicle/cmd/synchronicle@latest
+```
 
-# 查看版本 / 更新到最新版本
+Windows 用户可从 [GitHub Releases](https://github.com/one-ea/SynChronicle/releases/latest) 下载对应归档包。
+
+检查安装结果：
+
+```bash
 synchronicle --version
-synchronicle update
+synchronicle --help
+```
 
-# 首次运行，自动进入引导流程（选择 Provider → 输入 API Key → Base URL → 模型名）
+## 最小配置
+
+首次运行会引导创建 `~/.synchronicle/config.json`。也可以手动创建以下 JSONC 配置：
+
+```jsonc
+{
+  "provider": "openrouter",
+  "model": "google/gemini-2.5-flash",
+  "providers": {
+    "openrouter": {
+      "type": "openai",
+      "api_key": "your-api-key",
+      "base_url": "https://openrouter.ai/api/v1"
+    }
+  }
+}
+```
+
+配置按以下优先级加载：
+
+1. `~/.synchronicle/config.json`：用户全局配置。
+2. `./.synchronicle/config.json`：当前作品的项目级覆盖。
+3. `--config path/to/config.json`：命令行指定文件。
+
+项目级配置会与全局配置合并，适合为某本作品指定模型、代理地址或角色设置。
+
+## 启动与常用命令
+
+在计划存放作品的目录中启动交互式 TUI：
+
+```bash
+mkdir my-novel
+cd my-novel
 synchronicle
 ```
 
-> Windows 或手动安装：前往 [Releases](https://github.com/one-ea/SynChronicle/releases/latest) 下载对应平台的包。
-
-### Docker
-
-Docker 镜像适合在服务器/NAS 上运行 headless 长任务，也可以用 `-it` 进入 TUI。配置和作品目录建议挂载到宿主机：
+携带一句需求启动无界面创作：
 
 ```bash
-mkdir -p config workspace
-
-# TUI
-docker run --rm -it \
-  -v "$PWD/config:/root/.synchronicle" \
-  -v "$PWD/workspace:/workspace" \
-  ghcr.io/one-ea/synchronicle:latest
-
-# Headless
-docker run --rm \
-  -v "$PWD/config:/root/.synchronicle" \
-  -v "$PWD/workspace:/workspace" \
-  ghcr.io/one-ea/synchronicle:latest \
-  --headless --prompt "写一本东方玄幻长篇，主角从边陲小城起步"
+synchronicle --headless --prompt "写一本发生在海上空间站的悬疑长篇"
 ```
 
-也可以用 Compose：
+从文件读取需求：
+
+```bash
+synchronicle --headless --prompt-file prompt.txt
+```
+
+指定配置文件：
+
+```bash
+synchronicle --config ./config.json
+```
+
+查看版本并更新：
+
+```bash
+synchronicle --version
+synchronicle update
+```
+
+每本小说绑定启动目录。回到同一目录再次运行时，系统会读取最近 checkpoint 并继续推进。
+
+## 作品输出
+
+创作数据默认写入当前目录的 `output/novel/`：
+
+```text
+output/novel/
+|-- chapters/          章节正文
+|-- drafts/            写作草稿
+|-- outline/           大纲与卷弧规划
+|-- characters/        角色档案与状态
+|-- reviews/           Editor 评审结果
+|-- summaries/         章、弧、卷摘要
+`-- meta/              运行状态与 checkpoints
+```
+
+产物采用可直接阅读和检查的本地文件保存。备份整个作品目录即可保留正文、规划和恢复状态。
+
+移除 `output/` 会清除当前目录下的创作进度，请在操作前完成备份。
+
+## 架构概览
+
+SynChronicle 遵循“LLM 驱动，Host 服务”的运行模型：
+
+- `cmd/synchronicle` 提供 CLI、TUI 和 headless 入口。
+- `internal/host` 管理启动、恢复、事件与运行生命周期。
+- `internal/agents` 构建 Coordinator、Architect、Writer 和 Editor。
+- `internal/tools` 提供原子化创作工具及 checkpoint 边界。
+- Store 持久化正文、摘要、状态、评审和上下文工件。
+
+深入设计文档：
+
+- [运行时架构](docs/architecture.md)
+- [上下文管理](docs/context-management.md)
+- [可观测性](docs/observability.md)
+- [评测体系](docs/evaluation-system.md)
+- [用户规则运行时](docs/user-rules-runtime.md)
+- [提示词缓存设计](docs/prompt-cache-design.md)
+
+## Docker
+
+直接运行镜像：
+
+```bash
+docker run --rm -it \
+  -v "$HOME/.synchronicle:/root/.synchronicle" \
+  -v "$PWD:/workspace" \
+  -w /workspace \
+  ghcr.io/one-ea/synchronicle:latest
+```
+
+使用仓库中的 Compose 配置：
 
 ```bash
 docker compose run --rm synchronicle
+```
+
+Headless 模式：
+
+```bash
 docker compose run --rm synchronicle --headless --prompt "写一本悬疑短篇"
 ```
 
-进入 TUI 后，启动阶段支持两种前置交互：
+容器中的配置目录映射到主机 `~/.synchronicle`，作品数据映射到当前工作目录。
 
-- `快速开始`：一句话直接进入创作
-- `共创规划`：与 AI 多轮对话澄清需求，**右侧实时同步整理出的创作指令草稿**；AI 每轮主动提供 1-3 条引导建议，按数字键一键填入输入框，按 `Ctrl+S` 进入正式创作
+## 本地开发
 
-两种模式最终都会收敛为同一份创作指令，再进入同一套创作引擎。
+克隆仓库并运行：
 
-### 管理多本小说
-
-每本小说绑定到启动目录，产物落在 `{cwd}/output/novel/`。换目录启动 = 换一本，`cd` 回去启动 = 自动从最近 checkpoint 恢复。配置 `~/.synchronicle/config.json` 全局共享，无需复制。
-
-### 配置文件
-
-首次运行时自动引导生成配置文件 `~/.synchronicle/config.json`，后续可直接编辑该文件调整设置。删除配置文件后重新运行会再次进入引导流程。
-
-
-也可以手动创建配置文件，参考仓库根目录的 `config.example.jsonc`。首次引导也会复制一份到 `~/.synchronicle/config.example.jsonc`，方便本机离线查看。
-
-```jsonc
-{
-  "provider": "openrouter",
-  "model": "google/gemini-2.5-flash",
-  "reasoning_effort": "medium",
-  "providers": {
-    "openrouter": {
-      "api_key": "sk-or-v1-xxx",
-      "base_url": "https://openrouter.ai/api/v1",
-      "models": ["google/gemini-2.5-flash", "google/gemini-2.5-pro"],
-      "extra": {
-        "user_agent": "my-client/1.0",
-        "headers": { "X-Custom-Client": "my-client" }
-      }
-    }
-  },
-  "style": "default"
-}
+```bash
+git clone https://github.com/one-ea/SynChronicle.git
+cd SynChronicle
+go run ./cmd/synchronicle
 ```
 
-#### 配置文件查找顺序（后者覆盖前者）
+执行项目验证：
 
-1. `~/.synchronicle/config.json` — 全局配置
-2. `./.synchronicle/config.json` — 项目级覆盖（可选）
-3. `--config path/to/config.json` — 命令行指定
-
-> 项目级 `.synchronicle/` 是全局 `~/.synchronicle/` 的镜像：同样的结构、只是根目录从家目录换成当前项目。配置放 `./.synchronicle/config.json`，写作规则放 `./.synchronicle/rules/*.md`（详见下文「去 AI 味与自定义规则」）。该目录含密钥，已默认加入 `.gitignore`。
-
-覆盖规则说明：
-
-- 标量字段按后者覆盖前者，例如 `provider`、`model`、`reasoning_effort`、`style`
-- `providers` 和 `roles` 按 key 合并，同名项内部按字段覆盖
-- 未填写的字段会继承上层配置，例如项目级配置只写 `base_url` 时会保留全局配置中的 `api_key`
-- 当前不支持用空字符串显式清空上层已有值；如需清空，请直接编辑更高优先级的配置文件
-
-> ⚠️ `provider`（以及 `roles.*.provider`）的值是 `providers` 里的 **key 名**——一根指针，不是协议名。项目级若把 `provider` 切到一个全局 `providers` 里不存在的账号，必须在项目级同时补上该账号的凭证（`api_key` / `base_url`），否则启动会报“未配置凭证”。
-
-`providers.<name>.models` 为可选字段，用于声明该 provider 下允许在 TUI `/model` 面板中切换的模型列表；如果未配置，系统会回退为当前配置文件里已经出现过的该 provider 模型。
-
-`reasoning_effort` 为默认推理强度，可选值为 `off` / `low` / `medium` / `high` / `xhigh` / `max`；省略或空字符串表示沿用模型/provider 默认。`roles.<role>.reasoning_effort` 可按角色覆盖，未配置时继承顶层 `reasoning_effort`。TUI `/model` 面板切换 provider、model 或推理强度后，会写回全局配置 `~/.synchronicle/config.json`。
-
-`providers.<name>.api` 仅对 `type: "openai"` 或内置 `openai` 生效，用于选择 OpenAI 协议 endpoint：`chat`（默认，`/v1/chat/completions`）或 `responses`（`/v1/responses`）。Codex 类代理通常需要配置为 `responses`。
-
-`providers.<name>.extra` 为 provider 级配置，会传给底层 HTTP 客户端，适合配置 `user_agent`、`headers`、`anthropic_beta` 等代理识别字段；`providers.<name>.extra_body` 才是请求体扩展参数，两者不要混用。
-
-## 诊断报告
-
-在 TUI 中输入 `/diag` 可对当前小说的 output 产物进行诊断分析，产出可执行的发现和改进建议。
-
-诊断覆盖四个维度：
-
-- **流程** — 改写循环卡顿、未消费的转向指令、阶段/流程状态异常、章节跳号
-- **质量** — 评审维度持续低分、合同履约率、改写率、章节字数异常
-- **规划** — 伏笔停滞、指南针过时、大纲耗尽、摘要缺失
-- **上下文** — 角色消失、时间线缺口、关系数据停滞
-
-每条发现包含：问题描述、数据证据、改进建议（指向具体的 prompt/flow/config）。
-
-`/diag` 同时会写出一份**已脱敏**的 `meta/diag-export.md`（移除小说正文，仅保留工具调用、错误串、重复次数等行为骨架）。遇到死循环 / 中断类问题，把它贴到 GitHub issue 即可，方便维护者在拿不到本地数据的情况下定位。
-
-## 仿写画像
-
-把参考文章放到当前启动目录的 `simulate/` 文件夹中，然后在 TUI 输入 `/simulate`。系统会递归读取 `.txt`、`.md`、`.markdown` 文件，用 architect 模型分析语料，并写入：
-
-```text
-output/novel/meta/simulation_profile.json
+```bash
+go test ./...
+go vet ./...
+go build ./cmd/synchronicle
+sh -n scripts/install.sh
 ```
 
-再次运行 `/simulate` 时，会按 `relative_path + sha256` 跳过未变化文件；如果没有新增或变更内容，会提示“画像已是最新”并且不会调用 LLM。若已有画像且 `simulate/` 中出现新增或修改文章，系统会在原画像基础上继续合成。
+发布配置采用 GoReleaser v2，归档包含可执行文件、`README.md`、`LICENSE` 和 `NOTICE`。
 
-也可以导入之前生成的画像，避免重复分析同一批文章：
+## 数据与密钥安全
 
-```text
-/simulate
-/importsim ./profile.json
-```
+- API Key 只应写入本地配置文件，示例值始终使用占位符。
+- `~/.synchronicle` 和项目级 `./.synchronicle` 应限制为当前用户访问。
+- 请勿提交包含真实凭据的配置文件、日志或诊断输出。
+- 使用第三方模型服务时，请确认其数据处理与保留策略符合你的要求。
+- 作品正文和运行状态保存在本地 `output/`，备份与清理由用户控制。
+- 共享问题报告前，请检查配置、提示词和正文中是否含敏感信息。
 
-`/importsim` 只接受本功能生成的 `simulation_profile.v1` JSON，并按语料指纹合并，重复来源会跳过。只导入可信来源的画像文件；导入内容会成为后续 Agent 的上下文参考。画像会以 compact 形式注入 `novel_context`，Coordinator、Architect、Writer、Editor 都能读取；各 Agent 只借鉴结构、节奏、钩子和吸引读者手法，不复制原文表达或专有设定。
+## 许可证
 
-## 导入
+SynChronicle 使用 Apache License 2.0 发布。
 
-在 TUI 中输入 `/import <文件路径>` 可把一本已有的小说反推导入：先按章切分，再用 LLM 反推出前提 / 角色 / 世界观 / 分层大纲 / 指南针，逐章落盘。原文作为第一卷落成可续写的连载，导入完成后会**自动接力续写**——Coordinator 在第一卷末做评审/摘要、追加新卷，从下一章继续。
+Copyright 2026 one-ea
 
-```
-/import ~/我的小说.txt              # 从头导入并反推 foundation
-/import ~/我的小说.txt from=50      # 从第 50 章接着导入（跳过反推）
-```
-
-**章节切分规则**：自动识别这些标题格式（行首，可带 `#`/`##` Markdown 前缀、`【】`/`〖〗` 包裹、全角空格，兼容 GBK/BOM 编码）：
-
-- 中文编号：`第一章` `第3回` `第十话` `第二卷` `第五节` `第二幕`、独立 `卷一`，数字支持大写（`第壹章`），可带副标题（`第三章：决战`）
-- 中文特殊单元：`序章` `楔子` `引子` `前言` `尾声` `终章` `后记` `番外` `外传`
-- 英文：`Chapter 1` `Chapter II`、`Prologue` `Epilogue`，可带副标题（`Chapter 1: The Beginning`）
-
-若提示**"未识别到任何章节"**，请确认文件确为分章小说文本（章节标题独占一行、位于行首）。
-
-> 导入是确定性回放，不经过 Coordinator；原文会逐字落盘为已完成章节，因此适合"续写同一本书"。如果只想借鉴设定做全新创作，请用普通方式起一本新书、在需求里描述想要的风格设定。
-
-## 导出
-
-在 TUI 中输入 `/export` 可把已完成的章节合并导出，默认 TXT，写到 `{novelDir}/{NovelName}.txt`。导出是只读操作，写作中途也可以随时拿"现阶段成品"，不影响 Coordinator 运行。
-
-格式由**输出路径后缀**决定（`.txt` / `.epub`）：
-
-```text
-/export                            # 默认 TXT，{novelDir}/{NovelName}.txt
-/export ~/光斑.txt                  # 后缀 .txt → TXT
-/export ~/光斑.epub                 # 后缀 .epub → EPUB（Apple Books / 微信读书 / Kindle 转换器可读）
-/export from=10 to=30 --overwrite  # 章节区间 + 覆盖
-/export from=10 ~/x.epub --overwrite
-```
-
-- **TXT** — `《书名》` → 卷分隔 → 章节正文（长篇分层模式自动加卷分隔）。两类内部数据**不进导出**：premise（创作蓝图，含目标读者 / 写作禁区等后台信息，写给作者与引擎看的）、弧分隔（读者视角下弧是过细的内部结构）。导出器统一生成"第 N 章 标题"，正文里 writer 自带的重复标题（`# 第N章…` 或 `# 章节名`）会被剥掉。
-- **EPUB** — EPUB 3 标准容器，含封面页、目录、按章拆分的 XHTML，标识符基于内容稳定派生（重导出同一本书阅读器识别为更新版本）。不带封面图。
-
-范围内未完成的章节会跳过并显示在结果里，不算错误。
-
-#### 按角色使用不同模型
-
-通过 `roles` 字段为不同智能体分配不同的模型，未配置的角色使用默认模型：
-
-```jsonc
-{
-  "provider": "openrouter",
-  "model": "google/gemini-2.5-flash",
-  "reasoning_effort": "medium",
-  "providers": {
-    "openrouter": { "api_key": "sk-or-v1-xxx", "base_url": "https://openrouter.ai/api/v1" },
-    "anthropic": { "api_key": "sk-ant-xxx" }
-  },
-  "roles": {
-    "writer": { "provider": "anthropic", "model": "claude-sonnet-4", "reasoning_effort": "high" },
-    "architect": { "provider": "openrouter", "model": "google/gemini-2.5-pro", "reasoning_effort": "low" }
-  }
-}
-```
-
-可配置的角色：`coordinator` / `architect` / `writer` / `editor`
-
-#### 自定义代理
-
-选择任意 Provider 后填写代理地址即可，或使用 Custom Proxy 并指定 API 协议类型。自定义代理的 `api_key` 可选；如果你的代理不需要认证，可以省略：
-
-```jsonc
-{
-  "provider": "my-proxy",
-  "model": "gpt-4o",
-  "providers": {
-    "my-proxy": {
-      "type": "openai",
-      "base_url": "https://proxy.example.com/v1",
-      "extra": {
-        "user_agent": "my-client/1.0",
-        "headers": { "X-Custom-Client": "my-client" }
-      }
-    }
-  }
-}
-```
-
-支持的 Provider：`openrouter` / `anthropic` / `gemini` / `openai` / `deepseek` / `qwen` / `glm` / `grok` / `ollama` / `bedrock` 及任意自定义代理。
-
-如果代理是 Anthropic 协议，并限制只能由 Claude Code 客户端访问，`type` 应设为 `anthropic`，`anthropic_beta` 放在 `extra` 顶层，Stainless 等 HTTP 头放在 `extra.headers` 中：
-
-```jsonc
-{
-  "provider": "claude-code-proxy",
-  "model": "claude-sonnet-4-6",
-  "providers": {
-    "claude-code-proxy": {
-      "type": "anthropic",
-      "api_key": "sk-xxx",
-      "base_url": "https://proxy.example.com",
-      "extra": {
-        "user_agent": "claude-code/2.1.183",
-        "anthropic_beta": "claude-code-20250219",
-        "headers": {
-          "X-Stainless-Lang": "js",
-          "X-Stainless-Package-Version": "0.94.0",
-          "X-Stainless-Runtime": "node"
-        }
-      }
-    }
-  }
-}
-```
-
-如果代理是 OpenAI/NewAPI 协议，并限制只能由 Codex 客户端访问，`type` 应设为 `openai`，用 `extra.user_agent` 覆盖默认 `litellm-go/0.1`，并在 `extra.headers` 里透传 Codex 识别头。示例里的 `Session_id` 和 `X-Codex-Turn-Metadata` 应换成稳定的随机值；它们同时兼容 New API 的 Codex 透传模板和 sub2api 的 `x-codex-*` 指纹检查：
-
-```jsonc
-{
-  "provider": "codex-proxy",
-  "model": "gpt-5.4",
-  "providers": {
-    "codex-proxy": {
-      "type": "openai",
-      "api_key": "sk-xxx",
-      "base_url": "https://proxy.example.com/v1",
-      "models": ["gpt-5.4", "gpt-5.4-mini", "MiniMax-M3"],
-      "api": "responses",
-      "extra": {
-        "user_agent": "codex-tui/0.142.3 (Mac OS 26.5.1; arm64) Apple_Terminal/470.2 (codex-tui; 0.142.3)",
-        "headers": {
-          "Originator": "codex-tui",
-          "Session_id": "replace-with-random-session-id",
-          "X-Codex-Turn-Metadata": "replace-with-random-turn-metadata"
-        }
-      }
-    }
-  }
-}
-```
-
-关于 `api_key`：
-
-- `openrouter` / `anthropic` / `gemini` / `openai` / `deepseek` / `qwen` / `glm` / `grok` 这类托管接口通常需要填写 `api_key`
-- `ollama` 和 `bedrock` 允许不填 `api_key`；Bedrock 需在 `extra` 中配置 `region`、`access_key_id`、`secret_access_key`（可选 `session_token`）
-- 显式指定了 `type` 的自定义代理允许不填 `api_key`
-
-例如本地 `ollama` 配置：
-
-```jsonc
-{
-  "provider": "ollama",
-  "model": "qwen3:latest",
-  "providers": {
-    "ollama": {
-      "base_url": "http://localhost:11434/v1"
-    }
-  }
-}
-```
-
-### 写作风格
-
-通过配置文件的 `style` 字段切换：
-
-- `default` — 通用风格
-- `suspense` — 悬疑推理
-- `fantasy` — 奇幻仙侠
-- `romance` — 言情
-
-### 去 AI 味与自定义规则
-
-内置一份去 AI 味基线（出厂默认）：机械黑名单（套句 / 疲劳词，代码内置 `rules.SystemDefaults()`，commit 时确定性检查）+ 语义判据 `assets/references/anti-ai-tone.md`（注入 writer / editor 规避与举证）。
-
-想叠加自己的偏好**无需改源码**：在 `~/.synchronicle/rules/` 目录（全局，放任意 `.md`，按文件名字典序合并）或 `./.synchronicle/rules/` 目录（本书，同样放任意 `.md`，与全局同形态）里，**用大白话写偏好即可**（如「主角别写成圣母」「多用身体感知」「每章 3000 字左右」「不要出现『某种程度上』」）——零格式、零 YAML。系统会用模型把这些自然语言要求归一化成本书规则快照（字数范围 / 禁用词 / 疲劳词阈值等结构化约束 + 风格偏好），写作时自动遵循、提交时自动机械自检；常见 AI 套句与疲劳词的机械基线已内置，不写也能用，就近覆盖、与内置基线叠加生效。
-
-## 输出结构
-
-所有创作数据（章节、大纲、角色、进度等）保存在output目录中。中断后重新运行会自动从上次进度续写。删除output目录将重新开始创作。
-
-```
-output/{novel_name}/
-├── chapters/           # 终稿（Markdown）
-│   ├── 01.md
-│   └── ...
-├── summaries/          # 章节摘要（JSON）
-├── drafts/             # 章节草稿
-├── reviews/            # 评审报告
-├── meta/
-│   ├── premise.md      # 故事前提
-│   ├── outline.json    # 扁平章节大纲（仅含已展开的章节）
-│   ├── layered_outline.json # 分层大纲（当前卷 + 预览卷，长篇模式）
-│   ├── compass.json   # 终局方向指南针（长篇模式）
-│   ├── characters.json # 角色档案
-│   ├── world_rules.json# 世界规则
-│   ├── progress.json   # 进度状态
-│   ├── timeline.json   # 时间线
-│   ├── foreshadow.json # 伏笔台账
-│   ├── state_changes.json # 角色状态变化记录
-│   ├── style_rules.json# 写作风格规则（弧边界时提炼）
-│   ├── snapshots/      # 角色状态快照（长篇）
-│   ├── checkpoints.jsonl # Step 级 checkpoint（每个工具成功后追加）
-│   ├── characters.md   # 角色档案（可读版）
-│   └── world_rules.md  # 世界规则（可读版）
-```
-
-## 断点恢复
-
-写一部长篇小说可能需要数小时甚至数天，中途崩溃、断网、Ctrl+C 都是常见情况。系统在**同一目录再次运行时自动恢复**，无需手动操作。
-
-### 恢复场景
-
-| 中断时机 | 恢复行为 |
-|---|---|
-| 规划阶段（正在构建世界观/大纲） | 检查已保存的设定，自动补全缺失项 |
-| 某章正在写作（有草稿未提交） | 从该章续写，读取已有草稿继续 |
-| 审阅进行中 | 重新触发 Editor 评审 |
-| 重写/打磨队列未清空 | 继续处理待重写的章节 |
-| 弧/卷展开中断（评审完但下一弧未展开） | 自动检测骨架弧/卷，触发 Architect 展开 |
-| 用户干预未完成 | 重新注入上次的干预指令 |
-| 正常写作中断 | 从下一章继续 |
-
-### 工作原理
-
-所有创作产物持久化在 `output/` 目录。每个工具执行成功后写入 checkpoint (`meta/checkpoints.jsonl`)。重启时：
-
-1. 读取 `progress.json` + 最近 checkpoint + 待处理信号
-2. 精确到 step 级生成恢复指令（如"第 7 章 draft 已落盘，请继续 check_consistency"）
-3. 一次 `Prompt` 启动 Coordinator，进入长循环继续创作
-
-> 文件写入使用 temp + fsync + rename 原子操作，即使在写入过程中断电也不会损坏已有数据。
-
-## 实时干预（Steer）
-
-创作过程中可以随时通过输入框注入修改意见，**不需要暂停或重启**。
-
-### TUI 模式
-
-创作启动后，底部输入框自动切换为干预模式：
-
-```
-❯ 把感情线提前到第4章，增加男女主的对手戏
-```
-
-输入后按 Enter，系统自动：
-1. 记录干预指令到 `run.json`（崩溃恢复用）
-2. 注入到正在运行的 Coordinator
-3. Coordinator 评估影响范围，决定是修改设定、重写已有章节，还是在后续章节调整
-
-### 干预示例
-
-| 干预指令 | 系统可能的响应 |
-|---|---|
-| "主角改成女性" | 修改角色设定，评估已写章节是否需要重写 |
-| "把感情线提前到第4章" | 调整大纲，可能重写第4章及后续 |
-| "加入一个反派角色" | 更新角色档案和世界规则，在后续章节引入 |
-| "节奏太慢了，加快推进" | 调整后续章节的大纲密度 |
-
-## 设计理念
-
-> **把复杂度从代码搬到模型里。** 代码越少，能坏的地方越少。决策权交给更擅长做决策的角色。
-
-### LLM 驱动，越简单越稳定
-
-- **决策权归 LLM** — 流程决策全部由 Coordinator 自主判断，Host 不介入。工具失败时返回结构化错误，由 LLM 自行决定重试或调整策略
-- **工具只返事实** — 原子 IO + checkpoint 写入，返回值是 JSON 事实字段（`final_verdict` / `pending_rewrites` / `arc_end_reached`），不夹带任何指令字符串
-- **Reminder 驱动每轮** — Host 在每轮 LLM 调用前读事实层，运行纯函数 generator 生成 `<system-reminder>` 注入，指令不进持久历史、每轮从事实重算
-- **StopGuard 物理守门** — `Phase ≠ Complete` 时 Coordinator 物理上不可 `end_turn`，连续阻拦超限才升级终止
-- **拒绝复杂编排** — 没有 task queue、没有 scheduler、没有 policy engine。Coordinator 的一次 Run 就是唯一的控制流
-- **模型越强收益越大** — 架构把决策权留在 prompt 和工具语义里，模型升级后直接吃到收益，Host 一行不用改
-
-### 全自动闭环
-
-一句话输入，完整小说输出：
-
-```
-“写一部悬疑小说” → 构建世界观 → 设计角色 → 规划大纲
-                → 逐章写作 → 质量评审 → 自动重写
-                → 弧级摘要 → 角色快照 → 完整成书
-```
-
-- **Coordinator 自主调度** — 在一次长循环里读事实层 + Reminder 决定下一步，无需 Host 干预
-- **Writer 自主创作** — 每章独立完成 plan → draft → check → commit 的完整闭环
-- **Editor 自主评审** — 跨章节分析结构问题，输出裁定及影响范围
-- **Architect 自主构建** — 从一句话需求推导出完整设定，弧/卷边界时自主展开后续规划
-- **自动伏笔管理** — 埋设、推进、回收全程由 Agent 自行追踪
-- **自动节奏调控** — 追踪叙事线和钩子类型历史，避免连续章节结构雷同
-
-### 事实与指令解耦
-
-工具只返事实，指令由 Reminder 每轮从事实层重算：
-
-- `commit_chapter` / `save_review` 返回结构化事实（`final_verdict` / `pending_rewrites` / `arc_end_reached` / `next_chapter`），不夹带任何 `[系统]` 字符串
-- `internal/host/reminder/` 下的纯函数 generator 读 `Progress` + `Outline`，每轮 pre-turn 生成 `<system-reminder>`：`flow`（当前该做什么 / 弧末刹车）/ `queue_guard`（队列未清禁止新章）/ `book_complete`（全书完成才放行）。物理兜底由 `StopGuard` 在 `phase≠Complete` 时拒绝 `end_turn` 承担
-- Reminder 只存活一轮，不进历史、不参与压缩；规则有单元测试，退化可被回归捕获
-
-这样指令不会被链式调用吞掉，也不会在工具产物里漂移。改 bug 只需加一个 generator + 一个测试。
-
-## 技术栈
-
-- **Go 1.25** — 主语言
-- **[agentcore](https://github.com/voocel/agentcore)** — 极简 Agent 内核（tool-calling + streaming）
-- **[litellm](https://github.com/voocel/litellm)** — 统一 LLM 接口适配
-- **[Bubble Tea](https://github.com/charmbracelet/bubbletea)** — 终端 TUI 框架
-
-## License
-
-MIT
-
-本项目积极参与并认可 [linux.do 社区](https://linux.do/)。
+完整条款见 [LICENSE](LICENSE)，版权与归属声明见 [NOTICE](NOTICE)。

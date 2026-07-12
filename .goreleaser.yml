@@ -37,6 +37,7 @@ archives:
     files:
       - README.md
       - LICENSE
+      - NOTICE
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_
       {{- title .Os }}_
