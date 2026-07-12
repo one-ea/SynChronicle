@@ -64,7 +64,6 @@ Windows 用户可从 [GitHub Releases](https://github.com/one-ea/SynChronicle/re
 
 ```bash
 synchronicle --version
-synchronicle --help
 ```
 
 ## 最小配置
@@ -136,13 +135,16 @@ synchronicle update
 
 ```text
 output/novel/
-|-- chapters/          章节正文
-|-- drafts/            写作草稿
-|-- outline/           大纲与卷弧规划
-|-- characters/        角色档案与状态
-|-- reviews/           Editor 评审结果
-|-- summaries/         章、弧、卷摘要
-`-- meta/              运行状态与 checkpoints
+|-- premise.md             故事前提
+|-- outline.json           扁平章节大纲
+|-- layered_outline.json   分层卷弧大纲
+|-- characters.json        角色档案与状态
+|-- world_rules.json       世界规则
+|-- chapters/              章节正文
+|-- summaries/             章、弧、卷摘要
+|-- drafts/                章节计划与写作草稿
+|-- reviews/               Editor 评审结果
+`-- meta/                  运行状态、checkpoints 与运行工件
 ```
 
 产物采用可直接阅读和检查的本地文件保存。备份整个作品目录即可保留正文、规划和恢复状态。

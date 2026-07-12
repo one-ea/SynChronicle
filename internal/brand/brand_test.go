@@ -1,6 +1,8 @@
 package brand
 
 import (
+	"bufio"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"os"
@@ -136,13 +138,22 @@ func TestDocumentationBrandContract(t *testing.T) {
 		"## 许可证",
 		"go install github.com/one-ea/SynChronicle/cmd/synchronicle@latest",
 		"synchronicle --version",
-		"synchronicle --help",
 		"ghcr.io/one-ea/synchronicle:latest",
 		"~/.synchronicle",
 		"./.synchronicle",
 		`"api_key": "your-api-key"`,
 		"Apache License 2.0",
 		"Copyright 2026 one-ea",
+		"|-- premise.md",
+		"|-- outline.json",
+		"|-- layered_outline.json",
+		"|-- characters.json",
+		"|-- world_rules.json",
+		"|-- chapters/",
+		"|-- summaries/",
+		"|-- drafts/",
+		"|-- reviews/",
+		"`-- meta/",
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("README does not contain %q", want)
@@ -151,6 +162,9 @@ func TestDocumentationBrandContract(t *testing.T) {
 
 	legacyExecutable := "ai" + "novel-cli"
 	for _, unwanted := range []string{
+		"synchronicle --help",
+		"|-- outline/",
+		"|-- characters/",
 		"scripts/sample.gif",
 		"scripts/novel.png",
 		"MIT License",
@@ -171,15 +185,10 @@ func TestLicenseContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read LICENSE: %v", err)
 	}
-	licenseText := string(license)
-	for _, want := range []string{
-		"Apache License",
-		"Version 2.0, January 2004",
-		"http://www.apache.org/licenses/",
-	} {
-		if !strings.Contains(licenseText, want) {
-			t.Errorf("LICENSE does not contain %q", want)
-		}
+	wantLicenseHash := "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+	gotLicenseHash := fmt.Sprintf("%x", sha256.Sum256(license))
+	if gotLicenseHash != wantLicenseHash {
+		t.Errorf("LICENSE SHA-256 = %s, want standard Apache-2.0 hash %s", gotLicenseHash, wantLicenseHash)
 	}
 
 	notice, err := os.ReadFile(filepath.Join(root, "NOTICE"))
@@ -195,9 +204,13 @@ func TestLicenseContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read GoReleaser config: %v", err)
 	}
-	for _, want := range []string{"      - README.md", "      - LICENSE", "      - NOTICE"} {
-		if !strings.Contains(string(release), want) {
-			t.Errorf(".goreleaser.yml does not contain %q", want)
+	archiveFiles, err := yamlSequenceValues(release, "archives", "files")
+	if err != nil {
+		t.Fatalf("parse GoReleaser archive files: %v", err)
+	}
+	for _, want := range []string{"README.md", "LICENSE", "NOTICE"} {
+		if !archiveFiles[want] {
+			t.Errorf("GoReleaser archive files do not contain %q", want)
 		}
 	}
 
@@ -206,6 +219,48 @@ func TestLicenseContract(t *testing.T) {
 			t.Errorf("deleted visual resource still exists: %s", path)
 		}
 	}
+}
+
+func yamlSequenceValues(data []byte, parent, key string) (map[string]bool, error) {
+	values := make(map[string]bool)
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	parentIndent, keyIndent := -1, -1
+	for scanner.Scan() {
+		raw := scanner.Text()
+		trimmed := strings.TrimSpace(strings.SplitN(raw, "#", 2)[0])
+		if trimmed == "" {
+			continue
+		}
+		indent := len(raw) - len(strings.TrimLeft(raw, " \t"))
+		if trimmed == parent+":" {
+			parentIndent, keyIndent = indent, -1
+			continue
+		}
+		if parentIndent >= 0 && indent <= parentIndent {
+			parentIndent, keyIndent = -1, -1
+		}
+		if parentIndent >= 0 && strings.TrimPrefix(trimmed, "- ") == key+":" {
+			keyIndent = indent
+			continue
+		}
+		if keyIndent >= 0 {
+			if indent <= keyIndent {
+				keyIndent = -1
+				continue
+			}
+			if strings.HasPrefix(trimmed, "- ") {
+				value := strings.Trim(strings.TrimSpace(strings.TrimPrefix(trimmed, "- ")), `"'`)
+				values[value] = true
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	if parentIndent < 0 && len(values) == 0 {
+		return nil, fmt.Errorf("missing %s.%s sequence", parent, key)
+	}
+	return values, nil
 }
 
 func TestNoUnexpectedLegacyBrandReferences(t *testing.T) {
