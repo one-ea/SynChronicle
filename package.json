@@ -8,7 +8,7 @@
   },
   "files": [
     "dist",
-    "assets",
+    "assets/**/*.md",
     "README.md",
     "LICENSE",
     "NOTICE"

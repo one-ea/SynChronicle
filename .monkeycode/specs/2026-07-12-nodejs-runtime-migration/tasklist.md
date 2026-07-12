@@ -189,7 +189,7 @@
   - [ ] 17.1 运行 `pnpm vitest run notify/ rules/ eval/ diag/ stylestat/ brand/`，验证各模块单元测试通过
 - [ ] 18. 检查点
   - 确保所有模块（CLI、Headless、TUI、Assets、Notify、Rules、Eval、Diag、Stylestat、Brand）单元测试和品牌契约测试全部通过，`pnpm typecheck && pnpm test` 无报错
-- [ ] 19. Go 资产清理
+- [x] 19. Go 资产清理
   - 删除 `cmd/synchronicle/*.go`
   - 删除 `internal/**/*.go`
   - 删除 `assets/load.go`
@@ -198,27 +198,27 @@
   - 删除 `Dockerfile`、`docker-compose.yml`
   - 删除 `.github/workflows/docker.yml`
   - 覆盖 Req 15 (Go 与 Docker 资产清理) AC 1--6
-  - [ ] 19.1 运行 `find . -name "*.go" | head -1`，确认仓库中无 `.go` 文件
-  - [ ] 19.2 运行 `ls go.mod go.sum 2>&1 | grep -q 'No such'` 确认删除成功
-  - [ ] 19.3 运行 `ls Dockerfile docker-compose.yml 2>&1 | grep -q 'No such'` 确认删除成功
-- [ ] 20. 发布与 CI 配置
+  - [x] 19.1 使用 Glob 确认仓库中无 `.go` 文件
+  - [x] 19.2 使用 Glob 确认 `go.mod`、`go.sum` 已删除
+  - [x] 19.3 使用 Glob 确认容器发布配置已删除
+- [x] 20. 发布与 CI 配置
   - 创建 `.github/workflows/release.yml`，使用 `pnpm/action-setup@v4` + `actions/setup-node@v4`（node-version: 24），`pnpm install --frozen-lockfile`、`pnpm typecheck`、`pnpm test`、`pnpm build`、`npm publish`（Design CI Workflow 部分）
   - 删除 `scripts/install.sh` 中的 Go 二进制安装逻辑，保留或替换为 `npm install -g synchronicle`
   - 覆盖 Req 16 (发布与 CI) AC 1--5
-  - [ ] 20.1 本地模拟 `npm publish --dry-run` 并检查输出包含 `synchronicle` bin
-- [ ] 21. 文档更新
+  - [x] 20.1 运行 `npm pack --dry-run` 并检查输出包含 `synchronicle` bin
+- [x] 21. 文档更新
   - 更新 README 安装方式为 `npm install -g synchronicle`，Node.js 24 LTS 版本要求，移除 Docker 运行说明、Go install 说明、二进制归档下载说明
   - 保留 README 中的配置、命令、输出结构、架构和许可证说明
   - 保留 `NOTICE` 内容不变
   - 保留 `LICENSE` 为 Apache License 2.0
   - 覆盖 Req 17 (文档更新) 全部 AC 1--8
-  - [ ] 21.1 运行 brand 测试确认 README 不含 "go install"、"docker"、"binary" 字眼
-  - [ ] 21.2 运行 `npm pack --dry-run` 确认产物包含 README.md、LICENSE、NOTICE
-- [ ] 22. 全量兼容验证
+  - [x] 21.1 运行 brand 测试确认 README 不含旧安装与容器发布说明
+  - [x] 21.2 运行 `npm pack --dry-run` 确认产物包含 README.md、LICENSE、NOTICE
+- [x] 22. 全量兼容验证
   - 使用 Go 版本生成的 fixture 数据（`output/novel/` 完整目录）运行 `pnpm vitest run` 全部兼容测试，验证读取和写回格式
   - 使用 `config.example.jsonc` 运行配置加载兼容测试
   - 使用 Go 版本 router 决策表 fixture 运行 Flow Router 兼容测试
   - 覆盖 design.md 全部正确性属性 (1) Data Compatibility Invariant、(2) Checkpoint Integrity、(3) Flow Router Determinism、(4) CLI Compatibility、(5) Config Compatibility、(6) No Go Remnant、(7) No Docker
-  - [ ] 22.1 运行 `pnpm typecheck && pnpm test && pnpm build`，确认全量通过
-  - [ ] 22.2 运行 `npm pack --dry-run`，确认包产物正确
-  - [ ] 22.3 运行 `find . -name "*.go" -o -name "Dockerfile" -o -name "docker-compose.yml" -o -name ".goreleaser.yml" | wc -l` 确认 Go/Docker 残留为零
+  - [x] 22.1 运行 `pnpm typecheck && pnpm test && pnpm build`，确认全量通过
+  - [x] 22.2 运行 `npm pack --dry-run`，确认包产物正确
+  - [x] 22.3 使用 Glob 和 Grep 确认旧运行时与发布配置残留为零

@@ -5,4 +5,8 @@ describe("brand", () => {
   it("validates package, license, notice and pack files", () => {
     expect(checkBrandContract(process.cwd(), ["package/dist/cli/index.js", "package/README.md", "package/LICENSE", "package/NOTICE"])).toEqual([]);
   });
+
+  it("rejects the removed asset loader from npm packages", () => {
+    expect(checkBrandContract(process.cwd(), ["package/dist/cli/index.js", "package/README.md", "package/LICENSE", "package/NOTICE", "package/assets/load.go"])).toContain("pack:package/assets/load.go");
+  });
 });
