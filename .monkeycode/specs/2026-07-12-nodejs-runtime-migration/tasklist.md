@@ -1,6 +1,6 @@
 # 需求实施计划
 
-- [ ] 1. 基础设施搭建
+- [x] 1. 基础设施搭建
   - 创建 `package.json`，声明 `engines.node >= 24`、`type: "module"`、`bin: { "synchronicle": "./dist/cli/index.js" }`，以 pnpm 10 管理依赖
   - 创建 `tsconfig.json`，启用 strict、ESM、target ES2024
   - 创建 `tsup.config.ts`，声明 `entry: ["src/cli/index.ts"]`、`format: ["esm"]`、`dts: false`、`shims: true`、`external: ["ink", "react"]`
@@ -8,13 +8,13 @@
   - 安装全部生产依赖：`ai`、`@ai-sdk/openai`、`@ai-sdk/anthropic`、`@ai-sdk/google`、`ink`、`react`、`zod`、`gpt-tokenizer`
   - 安装全部开发依赖：`typescript`、`tsup`、`vitest`、`@types/node`、`@types/react`、`ink-testing-library`
   - 覆盖 Req 1 (Node.js 24 LTS 运行时)、Req 16 (发布与 CI)
-  - [ ] 1.1 验证基础设施
+  - [x] 1.1 验证基础设施
     - 运行 `pnpm typecheck`，预期通过（无有效源文件）
     - 运行 `pnpm build`，预期 `dist` 目录生成
     - `npm pack --dry-run`，预期 `dist/cli/index.js` 和 `package.json`、`README.md`、`LICENSE`、`NOTICE` 被包含
-- [ ] 2. 检查点
+- [x] 2. 检查点
   - 确保基础设施构建无报错，`pnpm typecheck && pnpm build && npm pack --dry-run` 全部通过
-- [ ] 3. Domain 类型和 Zod Schema 实现
+- [x] 3. Domain 类型和 Zod Schema 实现
   - R: `src/domain/index.ts`，导出 `Novel`、`Chapter`、`OutlineEntry`、`Scene`、`Character`、`WorldRule`、`StoryCompass`、`VolumeOutline`、`ArcOutline`、`SceneBeat` 的 TypeScript interface 和 Zod schema
   - R: `src/domain/runtime.ts`，导出 `Progress`、`Phase`、`FlowState`、`PlanningTier`、`TurnMeta`、`Transport`、`StrandPlan`、`WindBack`、`WindBackReason`、`DraftTier` 的 TypeScript interface 和 Zod schema
   - R: `src/domain/checkpoint.ts`，导出 `Checkpoint`、`Scope`、`ScopeKind`、`PendingSteer`、`SteerKind` 的 TypeScript interface 和 Zod schema
@@ -30,9 +30,9 @@
   - R: `src/domain/alias.ts`，导出 `AliasModel`、`AliasSpec`、`AliasEntry` 的 TypeScript interface 和 Zod schema
   - 将 `internal/domain/` 中所有 Go struct 从 `.go` 文件中对照提取，生成 Go fixture（JSON dump），用作兼容测试基准
   - 覆盖 Req 7 (作品存储兼容) 的 Zod 校验部分、Req 8 (TUI 交互) 的领域事件部分
-  - [ ] 3.1 运行 `pnpm vitest run --reporter=verbose`，确认 Zod 对合法 fixture 解析通过
-  - [ ] 3.2 对每个 schema 注入非法 fixture，确认 Zod 报告准确错误路径
-- [ ] 4. 配置加载和校验实现
+  - [x] 3.1 运行 `pnpm vitest run --reporter=verbose`，确认 Zod 对合法 fixture 解析通过
+  - [x] 3.2 对每个 schema 注入非法 fixture，确认 Zod 报告准确错误路径
+- [x] 4. 配置加载和校验实现
   - R: `src/config/schemas.ts`，Zod `ProviderConfigSchema`、`RoleConfigSchema`、`BudgetConfigSchema`、`NotifyConfigSchema`、`ConfigSchema`（Design Dependencies 部分）
   - R: `src/config/load.ts`，`loadConfig(flagPath?: string): Promise<Config>`，优先级：`--config` > `./.synchronicle/config.json` > `~/.synchronicle/config.json`；JSONC 解析、合并、`fillDefaults`
   - R: `src/config/validate.ts`，`validateConfig(cfg: Config): void`，校验 provider/model/providers/roles/budget/notify
@@ -41,10 +41,10 @@
   - R: `src/config/imports.ts`，`ResolveImportPath(p: string): string`（解析 `~/` 相对路径）
   - 使用 `config.example.jsonc` 作为 fixture
   - 覆盖 Req 3 (配置加载与合并) 全部 AC 1--18
-  - [ ] 4.1 对 `config.example.jsonc` 运行 `pnpm vitest run config/`，验证加载、合并、校验全部通过
-  - [ ] 4.2 对非法配置（缺必填字段、provider 无凭证）运行校验，确认抛出明确错误
-  - [ ] 4.3 对 `ollama` / `bedrock` 不加 `api_key` 的配置运行校验，确认通过
-- [ ] 5. Store 实现
+  - [x] 4.1 对 `config.example.jsonc` 运行 `pnpm vitest run config/`，验证加载、合并、校验全部通过
+  - [x] 4.2 对非法配置（缺必填字段、provider 无凭证）运行校验，确认抛出明确错误
+  - [x] 4.3 对 `ollama` / `bedrock` 不加 `api_key` 的配置运行校验，确认通过
+- [x] 5. Store 实现
   - R: `src/store/index.ts`，`Store` 组合根、`init()` 创建目录、`checkConsistency()`、`foundationMissing()`
   - R: `src/store/progress.ts`，读写 `meta/progress.json`，原子写入
   - R: `src/store/outline.ts`，读写 `outline.json`、`layered_outline.json`
@@ -64,10 +64,10 @@
   - R: `src/store/io.ts`，`atomicWrite` 实用函数（write-temp-then-rename）、JSON/JSONL 解析
   - 使用 Go 版本生成的 fixture 数据构建测试数据
   - 覆盖 Req 7 (作品存储兼容) 全部 AC 1--12
-  - [ ] 5.1 运行 `pnpm vitest run store/`，验证 16 个子存储的读写和原子写入覆盖
-- [ ] 6. 检查点
+  - [x] 5.1 运行 `pnpm vitest run store/`，验证 16 个子存储的读写和原子写入覆盖
+- [x] 6. 检查点
   - 确保 Config + Store + Domain 全部单元测试通过，`pnpm typecheck && pnpm test` 无报错
-- [ ] 7. Provider Adapter 实现
+- [x] 7. Provider Adapter 实现
   - R: `src/providers/adapter.ts`，`createProvider(name: string, pc: ProviderConfig): LanguageModel`
   - R: `src/providers/modelset.ts`，`ModelSet` 类，`forRole`、`forRoleWithFailover`、`swap`、`currentSelection`
   - R: `src/providers/failover.ts`，`failoverModel` 包装器，按 `fallbacks` 列表自动切换，含 `report` 回调
@@ -78,7 +78,7 @@
   - `extra_body` 通过 `providerOptions` 或自定义 fetch wrapper 注入
   - `extra` 通过自定义 fetch wrapper 注入 headers
   - 覆盖 Req 4 (LLM Provider Adapter) 全部 AC 1--12
-  - [ ] 7.1 运行 `pnpm vitest run providers/`，使用 mock provider 验证 Failover 切换、模型热切换和 `extra_body`/`extra` 透传
+  - [x] 7.1 运行 `pnpm vitest run providers/`，使用 mock provider 验证 Failover 切换、模型热切换和 `extra_body`/`extra` 透传
 - [x] 8. Tools 实现
   - R: `src/tools/novel_context.ts`，按角色返回不同上下文（Req 5 AC 9）
   - R: `src/tools/save_foundation.ts`，保存前提/大纲/角色/世界规则
@@ -100,7 +100,7 @@
   - 覆盖 Req 5 AC 9、Req 6 AC 1--2 (Checkpoint 写入)、Req 7 AC 1--12 (Store 写入)
   - [x] 8.1 运行 `pnpm vitest run tools/`，验证 15 个工具的参数校验和业务逻辑
   - [x] 8.2 验证每个工具在成功完成后向 Store 追加了 checkpoint
-- [ ] 9. Agents 实现
+- [x] 9. Agents 实现
   - R: `src/agents/build.ts`，`buildCoordinator(cfg, store, models, bundle, recordUsage, onFlowBoundary, onGuardBlock)`，构建 Coordinator 和子代理
   - R: `src/agents/coordinator.ts`，Coordinator 系统提示词和工具注册
   - R: `src/agents/architect.ts`，Architect（short/long）系统提示词和工具注册
@@ -110,12 +110,12 @@
   - R: `src/agents/ctxpack/`，`packCoordinator`、`packArchitect`、`packWriter`、`packEditor` 上下文打包函数
   - 上下文压缩阈值：`window * 0.85`，最小保留：`max(8000, window * 0.15)`
   - 覆盖 Req 5 (多智能体协作) 全部 AC 1--9
-  - [ ] 9.1 运行 `pnpm vitest run agents/`，验证 Agent 构建、工具注册和 Context Manager 压缩策略
-- [ ] 10. Flow Router 实现
+  - [x] 9.1 运行 `pnpm vitest run agents/`，验证 Agent 构建、工具注册和 Context Manager 压缩策略
+- [x] 10. Flow Router 实现
   - R: `src/runtime/flow/router.ts`，`route(state: FlowRouterState): Instruction | null`，纯函数实现
   - 从 Go 版本 `internal/host/flow/router.go` 复制决策表和所有路由逻辑，包括 Strand、WindBack、Draft tier 判断
   - 覆盖 design.md 正确性属性 (3) Flow Router Determinism：给定相同 State 输入，返回与 Go 版本完全相同的 Instruction
-  - [ ] 10.1 使用 Go 版本 router 的决策表输入输出构建 fixture，运行兼容测试，确认 Node.js 版本返回完全相同的 Instruction
+  - [x] 10.1 使用 Go 版本 router 的决策表输入输出构建 fixture，运行兼容测试，确认 Node.js 版本返回完全相同的 Instruction
 - [x] 11. Host 运行时实现
   - R: `src/runtime/host.ts`，`Host.new(cfg, bundle): Promise<Host>`、`startPrepared(prompt)`、`resume()`、`continue(prompt)`、`abort(reason, level)`、`close()`、`events().subscribe()`
   - R: `src/runtime/observer.ts`，Agent 事件到 Host 事件的投影
@@ -133,9 +133,9 @@
   - 覆盖 Req 5 AC 1--8、Req 6 AC 1--7、Req 11 (通知告警) AC 1--6
   - [x] 11.1 运行 `pnpm vitest run runtime/`，覆盖 Host 生命周期、Budget/Pause Sentinel、事件投影、恢复和通知集成
   - [x] 11.2 使用 mock provider 运行端到端 Host `startPrepared` → `resume` → `continue` 流程
-- [ ] 12. 检查点
+- [x] 12. 检查点
   - 确保 Provider + Tools + Agents + Flow Router + Host 全部单元和集成测试通过，`pnpm typecheck && pnpm test` 无报错
-- [ ] 13. CLI 入口实现
+- [x] 13. CLI 入口实现
   - R: `src/cli/index.ts`，`#!/usr/bin/env node` shebang，手动解析 `--config`、`--headless`、`--prompt`、`--prompt-file`、`--version`/`-v`/`version`、`update [version]`、`eval` 子命令，校验互斥规则（`--prompt` + `--prompt-file` 互斥，`--prompt`/`--prompt-file` 只能在 headless 下使用，`version`/`update` 和启动参数互斥）
   - R: `src/cli/dispatch.ts`，按解析结果分发到 headless / TUI / setup / version / update / eval
   - R: `src/cli/eval.ts`，`evalCommand(argv: string[]): number`，加载评测用例并运行
@@ -143,13 +143,13 @@
   - R: `src/cli/version.ts`，`printVersion()`，输出版本信息
   - CLI 参数解析使用自定义解析器，保持与 Go 版本 flag 解析行为完全一致
   - 覆盖 Req 2 (CLI 参数兼容) 全部 AC 1--9、Req 10 (自更新) 全部 AC 1--4
-  - [ ] 13.1 运行 `pnpm vitest run cli/`，覆盖参数解析、互斥规则校验和子命令分发
-  - [ ] 13.2 验证 `pnpm build` 后 `dist/cli/index.js` 的 shebang 可执行
-- [ ] 14. Headless 实现
+  - [x] 13.1 运行 `pnpm vitest run cli/`，覆盖参数解析、互斥规则校验和子命令分发
+  - [x] 13.2 验证 `pnpm build` 后 `dist/cli/index.js` 的 shebang 可执行
+- [x] 14. Headless 实现
   - R: `src/headless/run.ts`，`run(cfg: Config, bundle: Bundle, opts: Options): Promise<void>`，消费 Host 事件流，stdout 流式输出，stderr 进度和错误
   - R: `src/headless/ask_user.ts`，headless 模式下的 AskUser 实现，通过 stdin/stderr 交互
   - 覆盖 Req 9 (Headless 模式) 全部 AC 1--6
-  - [ ] 14.1 运行 `pnpm vitest run headless/`，使用 mock Host 验证 stdout/stderr 输出和 AskUser 交互
+  - [x] 14.1 运行 `pnpm vitest run headless/`，使用 mock Host 验证 stdout/stderr 输出和 AskUser 交互
 - [x] 15. TUI 实现
   - R: `src/tui/app.tsx`，Ink 根组件，管理页面路由
   - R: `src/tui/startup.tsx`，欢迎页和启动模式选择
@@ -170,13 +170,13 @@
   - 使用 React Context（`createContext`/`useContext`）管理 TUI 状态，通过 Host 事件流驱动更新
   - 覆盖 Req 8 (TUI 交互) 全部 AC 1--13
   - [x] 15.1 运行 `pnpm vitest run tui/`，使用 `ink-testing-library` 渲染关键组件并验证状态更新
-- [ ] 16. Assets 加载实现
+- [x] 16. Assets 加载实现
   - R: `src/assets/load.ts`，使用 `fs.readFileSync` 从 `assets/` 目录加载 Markdown 提示词、参考文档和风格模板，运行时缓存
   - `assets/` 目录内容不变：`assets/prompts/`（coordinator/architect-short/architect-long/writer/editor/simulation-source/simulation-merge/import-foundation/import-chapter-analyzer）、`assets/references/`（全部参考文档）、`assets/styles/`（风格模板）
   - 删除 `assets/load.go`（Go embed 加载器）
   - 覆盖 Req 13 (资产与提示词) 全部 AC 1--5
-  - [ ] 16.1 运行 `pnpm vitest run assets/`，验证所有 Markdown 资产正确加载和缓存
-- [ ] 17. 其他运行时模块实现
+  - [x] 16.1 运行 `pnpm vitest run assets/`，验证所有 Markdown 资产正确加载和缓存
+- [x] 17. 其他运行时模块实现
   - R: `src/models/`，模型注册表、定价、模型查找（对应 `internal/models/`）
   - R: `src/notify/`，`Notifier.new(command: string, events: string[]): Notifier`、`Notifier.send(notification: Notification): void`（对应 `internal/notify/`）
   - R: `src/rules/`，用户规则加载、归一化、快照、lint 校验（对应 `internal/rules/`、`internal/userrules/`）
@@ -186,8 +186,8 @@
   - R: `src/logger/`，日志工具（对应 `internal/logger/`）
   - R: `src/brand/`，品牌契约校验：README 不引用 Go/Docker、LICENSE 为 Apache 2.0、NOTICE 不变、npm pack 包含正确文件
   - 覆盖 Req 11 (通知告警) AC 1--6、Req 12 (用户规则运行时) AC 1--5、Req 14 (评测体系) AC 1--3
-  - [ ] 17.1 运行 `pnpm vitest run notify/ rules/ eval/ diag/ stylestat/ brand/`，验证各模块单元测试通过
-- [ ] 18. 检查点
+  - [x] 17.1 运行 `pnpm vitest run notify/ rules/ eval/ diag/ stylestat/ brand/`，验证各模块单元测试通过
+- [x] 18. 检查点
   - 确保所有模块（CLI、Headless、TUI、Assets、Notify、Rules、Eval、Diag、Stylestat、Brand）单元测试和品牌契约测试全部通过，`pnpm typecheck && pnpm test` 无报错
 - [x] 19. Go 资产清理
   - 删除 `cmd/synchronicle/*.go`
