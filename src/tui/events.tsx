@@ -46,7 +46,7 @@ export function reduceTuiState(state: TuiState, action: TuiAction): TuiState {
   switch (action.type) {
     case "event": return { ...state, snapshot: withReflection(state.snapshot, action.event), events: [...state.events.slice(-499), action.event], error: action.event.type === "error" ? action.event.message : state.error };
     case "stream": return { ...state, stream: (state.stream + action.delta).slice(-64_000) };
-    case "snapshot": return { ...state, snapshot: action.snapshot };
+    case "snapshot": return { ...state, snapshot: { ...action.snapshot, reflection: action.snapshot.reflection ?? state.snapshot.reflection } };
     case "error": return { ...state, error: action.error };
   }
 }

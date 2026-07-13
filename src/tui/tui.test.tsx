@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { App } from "./app.js";
 import { parseCommand } from "./commands.js";
 import { AskUser } from "./ask_user.js";
-import type { TuiHost } from "./events.js";
+import { reduceTuiState, type TuiHost, type TuiState } from "./events.js";
 
 async function* sequence<T>(items: T[]): AsyncIterable<T> {
   for (const item of items) yield item;
@@ -65,6 +65,12 @@ describe("TUI", () => {
 
     await vi.waitFor(() => expect(view.lastFrame()?.replace(/\s/g, "")).toContain("反思第2/3轮·90分"));
     expect(view.lastFrame()?.replace(/\s/g, "")).toContain("·通过");
+  });
+
+  it("preserves reflection state when a refreshed snapshot omits it", () => {
+    const initial: TuiState = { snapshot: { runtimeState: "running", recoveryLabel: null, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, costUSD: 0 }, reflection: { round: 2, maxRounds: 3, score: 90, passed: true } }, events: [], stream: "" };
+    const next = reduceTuiState(initial, { type: "snapshot", snapshot: { runtimeState: "running", recoveryLabel: null, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, costUSD: 0 } } });
+    expect(next.snapshot.reflection).toEqual(initial.snapshot.reflection);
   });
 
   it("parses model, diag, export and import commands", () => {

@@ -56,6 +56,22 @@ describe("headless run", () => {
 
     expect(errors).toContain("[12:34:56] [REFLECTION] Writer · 第 2 轮评审 · 90 分 · 通过\n");
   });
+
+  it("falls back to the queue summary for an invalid persisted reflection payload", async () => {
+    const errors: string[] = [];
+    const host = {
+      store: { dir: "/book" }, events: () => iterable([]), stream: () => iterable([]), startPrepared: vi.fn(), close: vi.fn(async () => {}),
+      replayQueue: vi.fn(async () => [{ seq: 1, time: "2026-01-01T12:34:56Z", kind: "ui_event", priority: "background", category: "REFLECTION", summary: "review.completed", payload: { type: "reflection", message: "review.completed", payload: { phase: "review_completed", round: "bad" } } }]),
+      resume: vi.fn(async () => ({ label: "checkpoint #1" })),
+    };
+    await run({} as never, {} as never, {
+      hostFactory: async () => host as never,
+      stdout: { write: () => true } as never,
+      stderr: { write: (text: string) => { errors.push(text); return true; } } as never,
+    });
+    expect(errors).toContain("[12:34:56] [REFLECTION] review.completed\n");
+    expect(errors.join("")).not.toContain("undefined");
+  });
 });
 
 async function* iterable<T>(items: T[]): AsyncIterable<T> { for (const item of items) yield item; }

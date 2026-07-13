@@ -24,10 +24,22 @@ async function host(outputs: string[] = []) {
 }
 
 describe("Host", () => {
+  it("registers an injected agent observer once across multiple runs", async () => {
+    const setObserver = vi.fn();
+    const runtimeAgent = { ...agent(), setObserver };
+    const dir = await mkdtemp(join(tmpdir(), "runtime-host-observer-"));
+    const value = await Host.new({ provider: "mock", model: "mock", providers: { mock: { api_key: "test" } }, roles: {}, output_dir: dir }, {}, { agent: runtimeAgent });
+
+    await value.startPrepared("first");
+    await value.continue("second");
+
+    expect(setObserver).toHaveBeenCalledOnce();
+  });
+
   it("publishes reflection events in order and records reviewer usage", async () => {
     let observer: RuntimeObserver | undefined;
     const runtimeAgent: RuntimeAgent = {
-      observe: (value) => { observer = value; },
+      setObserver: (value) => { observer = value; },
       run: vi.fn(async function* () {
         observer?.reflection({ type: "reflection.started", maxRounds: 2, agent: "writer" });
         observer?.reflection({ type: "review.completed", round: 1, score: 60, passed: false, agent: "writer" });
@@ -63,6 +75,42 @@ describe("Host", () => {
       "completed",
     ]);
     expect(value.usage.snapshot().per_agent.reviewer?.input).toBeGreaterThan(0);
+    expect(value.snapshot().reflection).toEqual({ round: 2, maxRounds: 2, score: 90, passed: true });
+  });
+
+  it("waits for queued event persistence before closing and preserves order", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "runtime-host-close-"));
+    const store = new Store(dir);
+    await store.init();
+    const original = store.runtime.appendQueue.bind(store.runtime);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    vi.spyOn(store.runtime, "appendQueue").mockImplementation(async (item) => { await gate; return original(item); });
+    const value = await Host.new({ provider: "mock", model: "mock", providers: { mock: { api_key: "test" } }, roles: {}, output_dir: dir }, {}, { agent: agent(), store });
+
+    await value.startPrepared("write");
+    let closed = false;
+    const closing = value.close().then(() => { closed = true; });
+    await Promise.resolve();
+    expect(closed).toBe(false);
+    release();
+    await closing;
+
+    expect((await store.runtime.loadQueue()).filter((item) => item.kind === "ui_event").map((item) => item.summary)).toEqual(["启动创作", "运行完成"]);
+  });
+
+  it("closes resources and reports queued persistence failures", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "runtime-host-close-error-"));
+    const store = new Store(dir);
+    await store.init();
+    vi.spyOn(store.runtime, "appendQueue").mockRejectedValue(new Error("queue write failed"));
+    const runtimeAgent = agent();
+    const value = await Host.new({ provider: "mock", model: "mock", providers: { mock: { api_key: "test" } }, roles: {}, output_dir: dir }, {}, { agent: runtimeAgent, store });
+    await value.startPrepared("write");
+
+    await expect(value.close()).rejects.toThrow("queue write failed");
+    expect(runtimeAgent.close).toHaveBeenCalled();
+    expect(value.snapshot().runtimeState).toBe("closed");
   });
 
   it("resumes reflection from round two and keeps the first candidate staged", async () => {
@@ -88,7 +136,7 @@ describe("Host", () => {
     const execute = vi.fn(async ({ round }: { round: number }) => ({ output: `round-${round}`, reviewContent: `round-${round}`, stagedArtifactIds: [] }));
     let observer: RuntimeObserver | undefined;
     const runtimeAgent: RuntimeAgent = {
-      observe: (value) => { observer = value; },
+      setObserver: (value) => { observer = value; },
       run: vi.fn(async function* () {
         await new ReflectiveExecutor({
           executionId: "exec-resume",
