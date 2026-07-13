@@ -247,7 +247,7 @@ git commit -m "feat: add independent reviewer agent"
 - Produces: `ReflectiveExecutor.execute<T>(task, signal?): Promise<ReflectiveResult<T>>`。
 - Execution Adapter: `(context: ExecutionContext) => Promise<ExecutionCandidate<T>>`。
 
-- [ ] **Step 1: 编写失败的闭环测试**
+- [x] **Step 1: 编写失败的闭环测试**
 
 ```ts
 it("returns the newest highest-scoring candidate after three rounds", async () => {
@@ -268,13 +268,13 @@ it("returns the newest highest-scoring candidate after three rounds", async () =
 });
 ```
 
-- [ ] **Step 2: 运行测试并确认失败**
+- [x] **Step 2: 运行测试并确认失败**
 
 Run: `pnpm vitest run src/agents/reflection/executor.test.ts`
 
 Expected: FAIL，提示 Executor 尚未定义。
 
-- [ ] **Step 3: 实现三轮状态机**
+- [x] **Step 3: 实现三轮状态机**
 
 ```ts
 for (let round = 1; round <= maxRounds; round++) {
@@ -292,13 +292,13 @@ return finalize(selectBestCandidate(candidates), candidates, "quality_threshold_
 
 实现预算耗尽分支、AbortSignal、首轮前事件和最终事件。Reviewer 故障耗尽时保留当前执行错误供 Host 处理，防止无评分候选参与最佳候选选择。
 
-- [ ] **Step 4: 运行测试并确认通过**
+- [x] **Step 4: 运行测试并确认通过**
 
 Run: `pnpm vitest run src/agents/reflection/executor.test.ts`
 
 Expected: PASS，覆盖首轮通过、后续通过、三轮上限、同分选择、预算耗尽和中止。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add src/agents/reflection
