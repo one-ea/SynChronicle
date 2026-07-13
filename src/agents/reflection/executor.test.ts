@@ -104,6 +104,81 @@ describe("ReflectiveExecutor", () => {
     }));
   });
 
+  it("emits revision.started with the next round and issue summary", async () => {
+    const events: ReflectionEvent[] = [];
+    const firstReview = reviewResult(60);
+    await createExecutor({
+      execute: vi.fn().mockResolvedValueOnce(candidate("v1")).mockResolvedValueOnce(candidate("v2")),
+      reviewer: { review: vi.fn().mockResolvedValueOnce(firstReview).mockResolvedValueOnce(reviewResult(90, true)) },
+      onEvent: (event) => events.push(event),
+    }).execute(task);
+
+    expect(events).toContainEqual({ type: "revision.started", round: 2, issues: ["quality: revise"] });
+  });
+
+  it("resumes from a persisted reviewed candidate without rerunning the first round", async () => {
+    let state: import("./executor.js").ReflectionExecutionState<string> = {
+      executionId: "exec-1",
+      status: "running",
+      task,
+      nextRound: 2,
+      candidates: [{ round: 1, output: "v1", review: reviewResult(60), stagedArtifactIds: ["artifact-v1"] }],
+      revisionInstructions: ["Improve 60"],
+      priorIssues: reviewResult(60).issues,
+    };
+    const execute = vi.fn().mockResolvedValue(candidate("v2"));
+    const stateStore = { load: vi.fn(async () => state), save: vi.fn(async (next) => { state = next; }) };
+
+    const result = await createExecutor({ executionId: "exec-1", execute, reviewer: { review: vi.fn().mockResolvedValue(reviewResult(90, true)) }, stateStore }).execute(task);
+
+    expect(result.output).toBe("v2");
+    expect(execute).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledWith(expect.objectContaining({ round: 2 }));
+  });
+
+  it("resumes a persisted unreviewed candidate at the review step", async () => {
+    const state: import("./executor.js").ReflectionExecutionState<string> = {
+      executionId: "exec-pending",
+      status: "running",
+      task,
+      nextRound: 1,
+      candidates: [],
+      revisionInstructions: [],
+      priorIssues: [],
+      pendingCandidate: { round: 1, execution: candidate("pending") },
+    };
+    const execute = vi.fn();
+    const review = vi.fn().mockResolvedValue(reviewResult(90, true));
+
+    const result = await createExecutor({ executionId: "exec-pending", execute, reviewer: { review }, stateStore: { load: async () => state, save: async () => {} } }).execute(task);
+
+    expect(result.output).toBe("pending");
+    expect(execute).not.toHaveBeenCalled();
+    expect(review).toHaveBeenCalledOnce();
+  });
+
+  it("returns a persisted selected result without regenerating or rereviewing", async () => {
+    const selectedResult = { executionId: "exec-selected", output: "selected", rounds: 2, finalReview: reviewResult(90, true), stagedArtifactIds: ["artifact-selected"] };
+    const state: import("./executor.js").ReflectionExecutionState<string> = {
+      executionId: "exec-selected",
+      status: "selected",
+      task,
+      nextRound: 3,
+      candidates: [{ round: 2, output: "selected", review: reviewResult(90, true), stagedArtifactIds: ["artifact-selected"] }],
+      revisionInstructions: [],
+      priorIssues: [],
+      selectedResult,
+    };
+    const execute = vi.fn();
+    const review = vi.fn();
+
+    const result = await createExecutor({ executionId: "exec-selected", execute, reviewer: { review }, stateStore: { load: async () => state, save: async () => {} } }).execute(task);
+
+    expect(result).toEqual(selectedResult);
+    expect(execute).not.toHaveBeenCalled();
+    expect(review).not.toHaveBeenCalled();
+  });
+
   it("returns the best scored candidate with a budget risk when budget is exhausted", async () => {
     const execute = vi.fn()
       .mockResolvedValueOnce(candidate("v1"))

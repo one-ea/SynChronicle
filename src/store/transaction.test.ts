@@ -62,4 +62,20 @@ describe("RecordingTransaction", () => {
     expect(await store.checkpoints.latestByStep({ kind: "chapter", chapter: 1 }, "draft")).not.toBeNull();
     expect(await staging.loadState()).toEqual({ phase: "completed", candidateIds: ids });
   });
+
+  it("stages multiple tool business artifacts before the checkpoint artifact", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "synchronicle-transaction-order-"));
+    const store = new Store(dir);
+    await store.init();
+    await store.progress.init("Book", 1);
+    const transaction = store.recordingTransaction();
+    const tools = createToolRegistry({ store: transaction.store });
+    await tools.plan_chapter.execute({ chapter: 1, title: "One", goal: "g", conflict: "c", hook: "h" });
+    await tools.draft_chapter.execute({ chapter: 1, content: "draft", mode: "write" });
+
+    const targets = transaction.artifacts().map((artifact) => artifact.target);
+
+    expect(targets.at(-1)).toBe("meta/checkpoints.jsonl");
+    expect(targets.slice(0, -1)).toEqual(expect.arrayContaining(["drafts/01.plan.json", "drafts/01.draft.md", "meta/progress.json"]));
+  });
 });

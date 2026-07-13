@@ -31,7 +31,11 @@ export class RecordingTransaction {
   private readonly io: RecordingFileIO;
   constructor(dir: string, base: FileIO) { this.io = new RecordingFileIO(base); this.store = new Store(dir, this.io); }
   artifacts() { return this.io.artifacts(); }
-  async stage(staging: StagingSession, round: number) { return Promise.all(this.artifacts().map(async (artifact) => (await staging.stage(round, artifact)).id)); }
+  async stage(staging: StagingSession, round: number) {
+    const ids: string[] = [];
+    for (const artifact of this.artifacts()) ids.push((await staging.stage(round, artifact)).id);
+    return ids;
+  }
 }
 
 export class StoreScope {

@@ -39,7 +39,7 @@ export class RecordingFileIO extends FileIO {
   override async writeFile(rel: string, data: string | Uint8Array) { this.removed.delete(rel); this.writes.set(rel, Buffer.from(data)); }
   override async appendJSONLine(rel: string, value: unknown) { await this.writeFile(rel, `${await this.readText(rel)}${JSON.stringify(value)}\n`); }
   override async remove(rel: string) { this.writes.delete(rel); this.removed.add(rel); }
-  artifacts() { return [...this.writes.entries()].map(([target, content]) => ({ target, content: Buffer.from(content) })); }
+  artifacts() { return [...this.writes.entries()].map(([target, content]) => ({ target, content: Buffer.from(content) })).sort((a, b) => Number(a.target === "meta/checkpoints.jsonl") - Number(b.target === "meta/checkpoints.jsonl")); }
 }
 
 export async function atomicWrite(path: string, data: string | Uint8Array) {

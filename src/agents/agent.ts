@@ -3,13 +3,13 @@ import type { RegisteredTool } from "../tools/registry.js";
 import { ContextManager } from "./context.js";
 
 type LanguageModelInstance = Exclude<LanguageModel, string>;
-type GenerateResult = Awaited<ReturnType<typeof generateText>>;
+export type GenerateResult = Awaited<ReturnType<typeof generateText>>;
 
 export interface AgentExecutor {
   execute(
     task: { objective: string; constraints: string[] },
     generate: (prompt: string) => Promise<GenerateResult>,
-  ): Promise<{ output: GenerateResult; qualityRisk?: unknown; finalReview?: unknown; rounds?: number }>;
+  ): Promise<{ executionId?: string; output: GenerateResult; qualityRisk?: unknown; finalReview?: unknown; rounds?: number; stagedArtifactIds?: string[] }>;
 }
 
 export interface AgentOptions {
@@ -32,7 +32,7 @@ export class Agent {
   private readonly maxSteps: number;
   private readonly onUsage?: AgentOptions["onUsage"];
   private readonly executor?: AgentExecutor;
-  private lastReflection: { qualityRisk?: unknown; finalReview?: unknown; rounds?: number } | null = null;
+  private lastReflection: { executionId?: string; status: "running" | "completed" | "failed"; qualityRisk?: unknown; finalReview?: unknown; rounds?: number } | null = null;
   private history: ModelMessage[] = [];
 
   constructor({ name, model, system, tools = {}, context = new ContextManager({ window: 200000 }), maxSteps = 20, onUsage, executor }: AgentOptions) {
@@ -71,6 +71,7 @@ export class Agent {
   async generate(prompt: string) {
     if (!this.executor) return this.generateDirect(prompt);
     const baseline = structuredClone(this.history);
+    this.lastReflection = { executionId: crypto.randomUUID(), status: "running" };
     let result: Awaited<ReturnType<AgentExecutor["execute"]>>;
     try {
       result = await this.executor.execute(
@@ -82,10 +83,11 @@ export class Agent {
       );
     } catch (error) {
       this.history = baseline;
+      this.lastReflection = { executionId: this.lastReflection.executionId, status: "failed" };
       throw error;
     }
     this.history = [...baseline, { role: "user", content: prompt }, { role: "assistant", content: result.output.text }];
-    this.lastReflection = { qualityRisk: result.qualityRisk, finalReview: result.finalReview, rounds: result.rounds };
+    this.lastReflection = { executionId: result.executionId ?? this.lastReflection.executionId, status: "completed", qualityRisk: result.qualityRisk, finalReview: result.finalReview, rounds: result.rounds };
     return result.output;
   }
 

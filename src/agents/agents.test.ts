@@ -137,7 +137,7 @@ describe("Agent", () => {
     const result = await agent.generate("objective");
 
     expect(result.text).toBe("candidate");
-    expect(agent.reflectionMetadata()).toEqual({ qualityRisk: risk, rounds: 1 });
+    expect(agent.reflectionMetadata()).toMatchObject({ status: "completed", qualityRisk: risk, rounds: 1 });
   });
 
   it("restores the history snapshot when reflected execution fails", async () => {
@@ -148,6 +148,20 @@ describe("Agent", () => {
     await expect(agent.generate("objective")).rejects.toThrow("review failed");
 
     expect(agent.messages()).toEqual([]);
+  });
+
+  it("clears stale reflection metadata when a new execution starts and records failure status", async () => {
+    const model = mockModel({ generate: async () => generated("candidate") });
+    let fail = false;
+    const executor = { execute: async (_task: unknown, generate: (prompt: string) => Promise<ReturnType<typeof generated>>) => { if (fail) throw new Error("failed"); return { output: await generate("round"), rounds: 1 }; } };
+    const agent = createAgent({ name: "writer", model, system: "system", executor: executor as never });
+    await agent.generate("first");
+    fail = true;
+
+    await expect(agent.generate("second")).rejects.toThrow("failed");
+
+    expect(agent.reflectionMetadata()).toMatchObject({ status: "failed" });
+    expect(agent.reflectionMetadata()).not.toHaveProperty("rounds");
   });
 });
 
@@ -251,6 +265,25 @@ describe("buildCoordinator", () => {
 
     expect(await store.drafts.loadDraft(1)).toBe("recovered");
     expect(await staging.loadState()).toEqual({ phase: "completed", candidateIds: ids, completion });
+    expect(events).toEqual([{ ...completion, agent: "writer" }]);
+  });
+
+  it("isolates completion observer failures and retries pending event delivery idempotently", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "synchronicle-reflection-event-retry-"));
+    const store = new Store(dir);
+    await store.init();
+    const transaction = store.recordingTransaction();
+    await transaction.store.drafts.saveDraft(1, "committed");
+    const staging = await store.staging.createSession("event-retry");
+    const ids = await transaction.stage(staging, 1);
+    const completion = { type: "reflection.completed" as const, rounds: 1, score: 90, passed: true };
+
+    await expect(commitReflectionCandidate(store, staging, "writer", ids, completion, () => { throw new Error("observer down"); })).resolves.toBeUndefined();
+    const events: unknown[] = [];
+    await recoverReflectionCommit(store, staging, "writer", (event) => events.push(event));
+    await recoverReflectionCommit(store, staging, "writer", (event) => events.push(event));
+
+    expect(await store.drafts.loadDraft(1)).toBe("committed");
     expect(events).toEqual([{ ...completion, agent: "writer" }]);
   });
 

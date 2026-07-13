@@ -19,8 +19,10 @@ export interface QualityRisk {
 }
 
 export interface ReflectiveResult<T> {
+  executionId?: string;
   output: T;
   rounds: number;
   finalReview: ReviewResult;
+  stagedArtifactIds?: string[];
   qualityRisk?: QualityRisk;
 }
