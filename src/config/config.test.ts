@@ -2,6 +2,7 @@ import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { expectTypeOf } from "vitest";
 import {
   ConfigSchema,
   fillDefaults,
@@ -15,6 +16,7 @@ import {
   saveConfig,
   validateConfig,
 } from "./index.js";
+import type { Config, ResolvedConfig } from "./index.js";
 
 const originalCwd = process.cwd();
 const originalHome = process.env.HOME;
@@ -41,6 +43,18 @@ const baseConfig = {
 };
 
 describe("config schemas and validation", () => {
+  it("keeps config input compatible while exposing normalized reflection", () => {
+    const compatibleConfig: Config = baseConfig;
+    expect(compatibleConfig.reflection).toBeUndefined();
+    expectTypeOf<ResolvedConfig["reflection"]>().toEqualTypeOf<{
+      enabled: boolean;
+      max_rounds: number;
+      pass_threshold: number;
+      review_retry_limit: number;
+      reviewer_model?: string;
+    }>();
+  });
+
   it("applies reflection defaults and validates max rounds", () => {
     expect(ConfigSchema.parse(baseConfig).reflection).toEqual({
       enabled: true,
@@ -60,7 +74,7 @@ describe("config schemas and validation", () => {
       extra_body: { temperature: 0.8, min_p: 0.05 },
       extra: { user_agent: "my-client/1.0" },
     });
-    expect(cfg.providers["codex-proxy"]).toMatchObject({ api: "responses", type: "openai" });
+    expect(ConfigSchema.parse(cfg).providers["codex-proxy"]).toMatchObject({ api: "responses", type: "openai" });
   });
 
   it.each(["ollama", "bedrock"])("allows %s without api_key", (provider) => {

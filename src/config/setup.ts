@@ -1,10 +1,10 @@
 import { createInterface } from "node:readline/promises";
 import { stdin, stderr } from "node:process";
 import { defaultConfigPath, fillDefaults, saveConfig } from "./load.js";
-import type { Config } from "./schemas.js";
+import type { ResolvedConfig } from "./schemas.js";
 import { validateConfig } from "./validate.js";
 
-export async function runSetup(): Promise<Config> {
+export async function runSetup(): Promise<ResolvedConfig> {
   const input = createInterface({ input: stdin, output: stderr });
   try {
     const provider = (await input.question("Provider: ")).trim();

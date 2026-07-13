@@ -1,7 +1,7 @@
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { ConfigSchema, ProviderConfigSchema, RoleConfigSchema, BudgetConfigSchema, NotifyConfigSchema, type Config, type ConfigInput, type PartialConfig, type ProviderConfig, type RoleConfig } from "./schemas.js";
+import { ConfigSchema, ProviderConfigSchema, RoleConfigSchema, BudgetConfigSchema, NotifyConfigSchema, type ConfigInput, type PartialConfig, type ProviderConfig, type ResolvedConfig, type RoleConfig } from "./schemas.js";
 import { z } from "zod";
 
 const ConfigFileSchema = z.object({
@@ -63,16 +63,16 @@ function stripJsonComments(input: string): string {
   return output;
 }
 
-export async function loadConfigFile(path: string): Promise<Config> {
+export async function loadConfigFile(path: string): Promise<PartialConfig> {
   const data = await readFile(path, "utf8");
   try {
-    return ConfigFileSchema.parse(JSON.parse(stripJsonComments(data))) as Config;
+    return ConfigFileSchema.parse(JSON.parse(stripJsonComments(data)));
   } catch (error) {
     throw new Error(`parse ${path}: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
-async function loadOptional(path: string): Promise<Config | undefined> {
+async function loadOptional(path: string): Promise<PartialConfig | undefined> {
   try {
     return await loadConfigFile(path);
   } catch (error) {
@@ -103,7 +103,7 @@ function mergeRole(base: Partial<RoleConfig> = {}, overlay: Partial<RoleConfig>)
   };
 }
 
-export function mergeConfig(base: PartialConfig, overlay: PartialConfig): Config {
+export function mergeConfig(base: PartialConfig, overlay: PartialConfig): ResolvedConfig {
   const result: PartialConfig = { ...base };
   for (const key of ["provider", "model", "reasoning_effort", "style"] as const) {
     if (overlay[key]) result[key] = overlay[key];
@@ -122,7 +122,7 @@ export function mergeConfig(base: PartialConfig, overlay: PartialConfig): Config
   return ConfigSchema.parse(result);
 }
 
-export function fillDefaults(input: ConfigInput): Config {
+export function fillDefaults(input: ConfigInput): ResolvedConfig {
   const parsed = ConfigSchema.parse(input);
   return {
     ...parsed,
@@ -142,8 +142,8 @@ export function fillDefaults(input: ConfigInput): Config {
   };
 }
 
-export async function loadConfig(flagPath?: string): Promise<Config> {
-  let cfg: ConfigInput = { provider: "", model: "", providers: {}, roles: {} };
+export async function loadConfig(flagPath?: string): Promise<ResolvedConfig> {
+  let cfg: PartialConfig = { provider: "", model: "", providers: {}, roles: {} };
   try {
     const global = await loadOptional(defaultConfigPath());
     if (global) cfg = global;
@@ -157,7 +157,7 @@ export async function loadConfig(flagPath?: string): Promise<Config> {
     throw new Error(`项目级配置 ./.synchronicle/config.json 解析失败（请检查 JSON 语法）: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (flagPath) cfg = mergeConfig(cfg, await loadConfigFile(flagPath));
-  return fillDefaults(cfg);
+  return fillDefaults(ConfigSchema.parse(cfg));
 }
 
 export async function needsSetup(flagPath?: string): Promise<boolean> {
@@ -173,7 +173,7 @@ export async function needsSetup(flagPath?: string): Promise<boolean> {
   return true;
 }
 
-export async function saveConfig(path: string, cfg: Config): Promise<void> {
+export async function saveConfig(path: string, cfg: ResolvedConfig): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const { output_dir: _outputDir, ...serializable } = cfg;
   await writeFile(path, `${JSON.stringify(serializable, null, 2)}\n`, "utf8");

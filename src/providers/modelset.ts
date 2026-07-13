@@ -1,5 +1,5 @@
 import type { LanguageModel } from "ai";
-import type { Config } from "../config/schemas.js";
+import { ConfigSchema, type Config, type ResolvedConfig } from "../config/schemas.js";
 type LanguageModelInstance = Exclude<LanguageModel, string>;
 import { createProvider } from "./adapter.js";
 import { failoverModel, type FailoverReporter, type ModelTarget } from "./failover.js";
@@ -10,10 +10,14 @@ export class ModelSet {
   private defaultTarget: ModelTarget;
   private readonly roles = new Map<string, ModelTarget>();
   private readonly fallbacks = new Map<string, ModelTarget[]>();
+  private readonly config: ResolvedConfig;
+  private readonly factory: ModelFactory;
 
-  constructor(private readonly config: Config, private readonly factory: ModelFactory = (provider, model) => createProvider(provider, config.providers[provider] ?? {}, model)) {
-    this.defaultTarget = this.target(config.provider, config.model);
-    for (const [role, roleConfig] of Object.entries(config.roles)) {
+  constructor(config: Config, factory?: ModelFactory) {
+    this.config = ConfigSchema.parse(config);
+    this.factory = factory ?? ((provider, model) => createProvider(provider, this.config.providers[provider] ?? {}, model));
+    this.defaultTarget = this.target(this.config.provider, this.config.model);
+    for (const [role, roleConfig] of Object.entries(this.config.roles)) {
       this.roles.set(role, this.target(roleConfig.provider, roleConfig.model));
       this.fallbacks.set(role, (roleConfig.fallbacks ?? []).map(ref => this.target(ref.provider, ref.model)));
     }

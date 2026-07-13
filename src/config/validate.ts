@@ -1,4 +1,4 @@
-import { ConfigSchema, type Config, type PartialConfig } from "./schemas.js";
+import { ConfigSchema, type PartialConfig, type ResolvedConfig } from "./schemas.js";
 
 const knownRoles = new Set(["coordinator", "architect", "writer", "editor"]);
 const knownProviders = new Set(["openai", "anthropic", "gemini", "openrouter", "deepseek", "qwen", "glm", "grok", "mimo", "ollama", "bedrock"]);
@@ -20,7 +20,7 @@ function providerType(name: string, type?: string): string {
   throw new Error(`provider ${JSON.stringify(name)} 缺少 type，且不在已知 provider 列表中`);
 }
 
-function validateProvider(name: string, owner: string, cfg: Config): void {
+function validateProvider(name: string, owner: string, cfg: ResolvedConfig): void {
   const provider = cfg.providers[name];
   if (!provider) throw new Error(`${owner} references provider ${JSON.stringify(name)} which is not configured`);
   if (requiresApiKey(name, provider.type) && !provider.api_key) {
@@ -40,7 +40,7 @@ function validateProvider(name: string, owner: string, cfg: Config): void {
 }
 
 export function validateConfig(input: PartialConfig): void {
-  const cfg: Config = ConfigSchema.parse({ providers: {}, roles: {}, ...input });
+  const cfg: ResolvedConfig = ConfigSchema.parse({ providers: {}, roles: {}, ...input });
   validateText("provider", cfg.provider);
   validateText("model", cfg.model);
   if (!cfg.provider) throw new Error("provider is required");

@@ -56,8 +56,9 @@ export type ModelRef = z.infer<typeof ModelRefSchema>;
 export type RoleConfig = z.infer<typeof RoleConfigSchema>;
 export type BudgetConfig = z.infer<typeof BudgetConfigSchema>;
 export type NotifyConfig = z.infer<typeof NotifyConfigSchema>;
-export type Config = z.infer<typeof ConfigSchema>;
+export type ResolvedConfig = z.output<typeof ConfigSchema>;
 export type ConfigInput = z.input<typeof ConfigSchema>;
+export type Config = ConfigInput;
 export type PartialConfig = Omit<Partial<ConfigInput>, "providers" | "roles"> & {
   providers?: Record<string, ProviderConfig>;
   roles?: Record<string, Partial<RoleConfig>>;

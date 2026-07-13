@@ -1,22 +1,37 @@
 import { describe, expect, it } from "vitest";
-import { ReviewResultSchema } from "./schemas.js";
+import { ReflectionConfigSchema, ReviewResultSchema } from "./schemas.js";
+
+const reviewResult = (score: number) => ({
+  score,
+  passed: false,
+  summary: "ready",
+  issues: [],
+  revisionInstructions: [],
+});
 
 describe("reflection schemas", () => {
-  it("validates review scores", () => {
-    expect(ReviewResultSchema.parse({
-      score: 85,
-      passed: false,
-      summary: "ready",
-      issues: [],
-      revisionInstructions: [],
-    }).score).toBe(85);
+  it.each([0, 85, 100])("accepts review score %s", (score) => {
+    expect(ReviewResultSchema.parse(reviewResult(score)).score).toBe(score);
+  });
 
-    expect(() => ReviewResultSchema.parse({
-      score: 101,
-      passed: false,
-      summary: "too high",
-      issues: [],
-      revisionInstructions: [],
-    })).toThrow();
+  it.each([-1, 101])("rejects review score %s", (score) => {
+    expect(() => ReviewResultSchema.parse(reviewResult(score))).toThrow();
+  });
+
+  it("rejects unknown review fields", () => {
+    expect(() => ReviewResultSchema.parse({ ...reviewResult(85), unknown: true })).toThrow();
+  });
+
+  it.each([
+    { max_rounds: 0 },
+    { max_rounds: 1.5 },
+    { max_rounds: 4 },
+    { pass_threshold: -1 },
+    { pass_threshold: 101 },
+    { review_retry_limit: -1 },
+    { review_retry_limit: 4 },
+    { reviewer_model: "" },
+  ])("rejects invalid reflection config $%s", (config) => {
+    expect(() => ReflectionConfigSchema.parse(config)).toThrow();
   });
 });
