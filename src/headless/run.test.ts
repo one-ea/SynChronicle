@@ -21,6 +21,41 @@ describe("headless run", () => {
     expect(calls.join("|")).toContain("[12:34:56] [SYSTEM] 启动");
     expect(host.close).toHaveBeenCalled();
   });
+
+  it("prints reflection round and score as one progress line", async () => {
+    const errors: string[] = [];
+    const host = {
+      store: { dir: "/book" },
+      events: () => iterable([{ type: "reflection", time: "2026-01-01T12:34:56Z", agent: "writer", message: "review.completed", payload: { phase: "review_completed", round: 2, score: 90, passed: true } }]),
+      stream: () => iterable([]),
+      startPrepared: vi.fn(async () => {}), resume: vi.fn(), replayQueue: vi.fn(async () => []), close: vi.fn(async () => {}),
+    };
+
+    await run({} as never, {} as never, {
+      prompt: "write", hostFactory: async () => host as never,
+      stdout: { write: () => true } as never,
+      stderr: { write: (text: string) => { errors.push(text); return true; } } as never,
+    });
+
+    expect(errors).toContain("[12:34:56] [REFLECTION] Writer · 第 2 轮评审 · 90 分 · 通过\n");
+  });
+
+  it("formats persisted reflection progress during recovery replay", async () => {
+    const errors: string[] = [];
+    const host = {
+      store: { dir: "/book" }, events: () => iterable([]), stream: () => iterable([]), startPrepared: vi.fn(), close: vi.fn(async () => {}),
+      replayQueue: vi.fn(async () => [{ seq: 1, time: "2026-01-01T12:34:56Z", kind: "ui_event", priority: "background", category: "REFLECTION", summary: "review.completed", payload: { type: "reflection", agent: "writer", message: "review.completed", payload: { phase: "review_completed", round: 2, score: 90, passed: true } } }]),
+      resume: vi.fn(async () => ({ label: "checkpoint #1" })),
+    };
+
+    await run({} as never, {} as never, {
+      hostFactory: async () => host as never,
+      stdout: { write: () => true } as never,
+      stderr: { write: (text: string) => { errors.push(text); return true; } } as never,
+    });
+
+    expect(errors).toContain("[12:34:56] [REFLECTION] Writer · 第 2 轮评审 · 90 分 · 通过\n");
+  });
 });
 
 async function* iterable<T>(items: T[]): AsyncIterable<T> { for (const item of items) yield item; }

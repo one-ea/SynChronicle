@@ -7,14 +7,16 @@ import { buildCoordinator } from "../agents/build.js";
 import { AsyncQueue } from "./asyncQueue.js";
 import { RuntimeStream } from "./stream.js";
 import { buildResumePrompt } from "./resume.js";
-import { errorEvent, systemEvent } from "./observer.js";
+import { errorEvent, reflectionEvent, systemEvent } from "./observer.js";
 import { importTextFile } from "./imp/index.js";
 import { exportNovel, type ExportOptions } from "./exp/index.js";
 import { simulateSources } from "./sim/index.js";
 import { UsageTracker } from "./usage.js";
 import type { AskUserHandler } from "../tools/registry.js";
+import type { ReflectionEvent } from "../agents/reflection/index.js";
 
-export interface RuntimeAgent { run(prompt: string): AsyncIterable<string>; abort(reason: string): void; close(): void | Promise<void>; }
+export interface RuntimeObserver { reflection(event: ReflectionEvent & { agent: string }): void; usage(agent: string, usage: unknown): void; }
+export interface RuntimeAgent { run(prompt: string): AsyncIterable<string>; observe?(observer: RuntimeObserver): void; abort(reason: string): void; close(): void | Promise<void>; }
 export interface HostDependencies { agent?: RuntimeAgent; store?: Store; askUser?: AskUserHandler }
 type RuntimeState = "idle" | "running" | "paused" | "completed" | "closed";
 
@@ -27,7 +29,7 @@ export class Host {
   private output = new RuntimeStream();
   private constructor(private readonly config: Config, private readonly agent: RuntimeAgent, store: Store) { this.store = store; this.usage = new UsageTracker((state) => this.store.usage.save(state)); }
 
-  static async new(config: Config, bundle: Bundle, dependencies: HostDependencies = {}): Promise<Host> { const cfg = ConfigSchema.parse(config); const store = dependencies.store ?? new Store(cfg.output_dir ?? "output/novel"); await store.init(); let runtimeAgent = dependencies.agent; let host: Host | undefined; if (!runtimeAgent) { const built = buildCoordinator(cfg, store, createModelSet(cfg), bundle, undefined, undefined, undefined, dependencies.askUser, (event) => host?.emit({ type: "system", time: new Date().toISOString(), message: event.type, payload: event })); runtimeAgent = { run(prompt) { const stream = built.coordinator.stream(prompt); return stream.textStream; }, abort() { built.coordinator.clear(); }, close() { built.coordinator.clear(); } }; } host = new Host(cfg, runtimeAgent, store); host.usage.load(await store.usage.load()); return host; }
+  static async new(config: Config, bundle: Bundle, dependencies: HostDependencies = {}): Promise<Host> { const cfg = ConfigSchema.parse(config); const store = dependencies.store ?? new Store(cfg.output_dir ?? "output/novel"); await store.init(); let runtimeAgent = dependencies.agent; let host: Host | undefined; if (!runtimeAgent) { const built = buildCoordinator(cfg, store, createModelSet(cfg), bundle, (agent, usage) => host?.usage.record(agent, usage), undefined, undefined, dependencies.askUser, (event) => host?.observeReflection(event)); runtimeAgent = { run(prompt) { const stream = built.coordinator.stream(prompt); return stream.textStream; }, abort() { built.coordinator.clear(); }, close() { built.coordinator.clear(); } }; } host = new Host(cfg, runtimeAgent, store); host.usage.load(await store.usage.load()); return host; }
 
   async startPrepared(prompt: string): Promise<void> { if (!prompt.trim()) throw new Error("prompt is empty"); await this.run(prompt, "启动创作"); }
   async resume(): Promise<{ label: string | null; error?: Error }> { const data = buildResumePrompt(await this.store.progress.load(), await this.store.runMeta.load()); this.recoveryLabel = data.label; if (!data.label) return { label: null }; try { await this.run(data.prompt, data.label); return { label: data.label }; } catch (error) { return { label: data.label, error: error instanceof Error ? error : new Error(String(error)) }; } }
@@ -42,6 +44,7 @@ export class Host {
   export(options: ExportOptions) { return exportNovel(this.store, options); }
   simulate(options: { sources: string[] }) { return simulateSources(options.sources); }
 
-  private async run(prompt: string, label: string): Promise<void> { if (this.state === "running" || this.state === "closed") throw new Error(`host is ${this.state}`); this.state = "running"; this.emit(systemEvent(label)); try { for await (const delta of this.agent.run(prompt)) { this.output.write(delta); await this.store.runtime.appendQueue({ seq: 0, time: new Date().toISOString(), kind: "stream_delta", priority: "background", payload: { delta } }); } this.state = "completed"; this.emit(systemEvent("运行完成", "success")); } catch (error) { this.state = "paused"; this.emit(errorEvent(error)); throw error; } finally { this.output.end(); } }
+  private async run(prompt: string, label: string): Promise<void> { if (this.state === "running" || this.state === "closed") throw new Error(`host is ${this.state}`); this.state = "running"; this.emit(systemEvent(label)); this.agent.observe?.({ reflection: (event) => this.observeReflection(event), usage: (agent, usage) => this.usage.record(agent, usage) }); try { for await (const delta of this.agent.run(prompt)) { this.output.write(delta); await this.store.runtime.appendQueue({ seq: 0, time: new Date().toISOString(), kind: "stream_delta", priority: "background", payload: { delta } }); } this.state = "completed"; this.emit(systemEvent("运行完成", "success")); } catch (error) { this.state = "paused"; this.emit(errorEvent(error)); throw error; } finally { this.output.end(); } }
+  private observeReflection(event: ReflectionEvent & { agent: string }): void { this.emit(reflectionEvent(event)); }
   private emit(event: RuntimeEvent): void { this.eventQueue.push(event); void this.store.runtime.appendQueue({ seq: 0, time: event.time ?? new Date().toISOString(), kind: "ui_event", priority: event.type === "error" ? "control" : "background", category: event.type.toUpperCase(), summary: event.message, payload: event }); }
 }

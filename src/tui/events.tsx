@@ -13,6 +13,7 @@ export interface TuiSnapshot {
   outline?: Array<{ chapter: number; title: string }>;
   agents?: Array<{ name: string; state: string; summary?: string }>;
   pendingSteer?: string;
+  reflection?: { round?: number; maxRounds?: number; score?: number; passed?: boolean };
 }
 
 export interface TuiHost {
@@ -43,9 +44,19 @@ export type TuiAction =
 
 export function reduceTuiState(state: TuiState, action: TuiAction): TuiState {
   switch (action.type) {
-    case "event": return { ...state, events: [...state.events.slice(-499), action.event], error: action.event.type === "error" ? action.event.message : state.error };
+    case "event": return { ...state, snapshot: withReflection(state.snapshot, action.event), events: [...state.events.slice(-499), action.event], error: action.event.type === "error" ? action.event.message : state.error };
     case "stream": return { ...state, stream: (state.stream + action.delta).slice(-64_000) };
     case "snapshot": return { ...state, snapshot: action.snapshot };
     case "error": return { ...state, error: action.error };
   }
+}
+
+function withReflection(snapshot: TuiSnapshot, event: RuntimeEvent): TuiSnapshot {
+  if (event.type !== "reflection" || !event.payload || typeof event.payload !== "object") return snapshot;
+  const payload = event.payload as { phase?: string; round?: number; rounds?: number; maxRounds?: number; score?: number; passed?: boolean };
+  if (payload.phase === "started") return { ...snapshot, reflection: { maxRounds: payload.maxRounds } };
+  if (payload.phase === "revision_started") return { ...snapshot, reflection: { ...snapshot.reflection, round: payload.round } };
+  if (payload.phase === "review_completed") return { ...snapshot, reflection: { ...snapshot.reflection, round: payload.round, score: payload.score, passed: payload.passed } };
+  if (payload.phase === "completed") return { ...snapshot, reflection: { ...snapshot.reflection, round: payload.rounds, score: payload.score, passed: payload.passed } };
+  return snapshot;
 }

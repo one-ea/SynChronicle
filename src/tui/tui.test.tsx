@@ -54,6 +54,19 @@ describe("TUI", () => {
     expect(frame).toContain("从 checkpoint #11 恢复");
   });
 
+  it("shows the current reflection round and review score in the sidebar", async () => {
+    const runtime = host({
+      events: () => sequence([
+        { type: "reflection", time: "2026-07-12T10:00:00Z", agent: "writer", message: "reflection.started", payload: { phase: "started", maxRounds: 3 } },
+        { type: "reflection", time: "2026-07-12T10:00:01Z", agent: "writer", message: "review.completed", payload: { phase: "review_completed", round: 2, score: 90, passed: true } },
+      ]),
+    });
+    const view = render(<App host={runtime} initialPage="workbench" />);
+
+    await vi.waitFor(() => expect(view.lastFrame()?.replace(/\s/g, "")).toContain("反思第2/3轮·90分"));
+    expect(view.lastFrame()?.replace(/\s/g, "")).toContain("·通过");
+  });
+
   it("parses model, diag, export and import commands", () => {
     expect(parseCommand("/model writer openrouter gpt-4.1")).toMatchObject({ name: "model", args: ["writer", "openrouter", "gpt-4.1"] });
     expect(parseCommand("/diag")).toMatchObject({ name: "diag" });
