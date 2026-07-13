@@ -34,7 +34,7 @@
 - Produces: `ReviewResultSchema`、`ReflectionConfigSchema`。
 - Produces: `Config["reflection"]`，字段为 `enabled`、`max_rounds`、`pass_threshold`、`review_retry_limit`、`reviewer_model`。
 
-- [ ] **Step 1: 编写失败的 Schema 测试**
+- [x] **Step 1: 编写失败的 Schema 测试**
 
 ```ts
 it("validates review scores and reflection defaults", () => {
@@ -59,13 +59,13 @@ it("validates review scores and reflection defaults", () => {
 });
 ```
 
-- [ ] **Step 2: 运行测试并确认失败**
+- [x] **Step 2: 运行测试并确认失败**
 
 Run: `pnpm vitest run src/agents/reflection/schemas.test.ts src/config/config.test.ts`
 
 Expected: FAIL，提示 reflection 模块或配置字段尚未定义。
 
-- [ ] **Step 3: 实现最小类型与 Schema**
+- [x] **Step 3: 实现最小类型与 Schema**
 
 ```ts
 export const ReviewIssueSchema = z.object({
@@ -94,13 +94,13 @@ export const ReflectionConfigSchema = z.object({
 
 在 `ConfigSchema` 中增加 `reflection: ReflectionConfigSchema`，并从 Zod 推导所有公共类型。
 
-- [ ] **Step 4: 运行测试并确认通过**
+- [x] **Step 4: 运行测试并确认通过**
 
 Run: `pnpm vitest run src/agents/reflection/schemas.test.ts src/config/config.test.ts`
 
 Expected: PASS。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add src/agents/reflection src/config/schemas.ts src/config/config.test.ts
