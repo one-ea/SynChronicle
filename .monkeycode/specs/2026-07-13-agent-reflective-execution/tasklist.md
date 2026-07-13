@@ -117,7 +117,7 @@ git commit -m "feat: add reflection schemas and config"
 - Consumes: `AgentRole` from `src/agents/reflection/types.ts`。
 - Produces: `ReviewRubric` 和 `getReviewRubric(role, threshold)`。
 
-- [ ] **Step 1: 编写失败的量表映射测试**
+- [x] **Step 1: 编写失败的量表映射测试**
 
 ```ts
 it.each([
@@ -131,13 +131,13 @@ it.each([
 });
 ```
 
-- [ ] **Step 2: 运行测试并确认失败**
+- [x] **Step 2: 运行测试并确认失败**
 
 Run: `pnpm vitest run src/agents/reflection/rubrics.test.ts`
 
 Expected: FAIL，提示 `getReviewRubric` 尚未定义。
 
-- [ ] **Step 3: 实现不可变评分量表**
+- [x] **Step 3: 实现不可变评分量表**
 
 ```ts
 export interface ReviewRubric {
@@ -153,13 +153,13 @@ export function getReviewRubric(role: AgentRole, threshold = 85): ReviewRubric {
 
 权重总和固定为 100，并在测试中逐个验证。
 
-- [ ] **Step 4: 运行测试并确认通过**
+- [x] **Step 4: 运行测试并确认通过**
 
 Run: `pnpm vitest run src/agents/reflection/rubrics.test.ts`
 
 Expected: PASS。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add src/agents/reflection/rubrics.ts src/agents/reflection/rubrics.test.ts
