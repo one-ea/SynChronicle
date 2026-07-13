@@ -42,6 +42,18 @@ describe("Reviewer", () => {
     expect(onUsage).toHaveBeenCalledWith("reviewer", { inputTokens: 12, outputTokens: 8 });
   });
 
+  it("forwards AbortSignal to generation while preserving signal-free calls", async () => {
+    const controller = new AbortController();
+    const generate = vi.fn().mockResolvedValue({ text: JSON.stringify(validReview()), usage: {} });
+    const reviewer = new Reviewer({ model, generate });
+
+    await reviewer.review(request, controller.signal);
+    await reviewer.review(request);
+
+    expect(generate).toHaveBeenNthCalledWith(1, expect.objectContaining({ abortSignal: controller.signal }));
+    expect(generate.mock.calls[1]?.[0]).not.toHaveProperty("abortSignal");
+  });
+
   it("retries invalid JSON and records usage for every completed generation", async () => {
     const generate = vi.fn()
       .mockResolvedValueOnce({ text: "invalid", usage: { totalTokens: 3 } })

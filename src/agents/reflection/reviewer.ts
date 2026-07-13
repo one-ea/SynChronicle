@@ -47,13 +47,17 @@ export class Reviewer {
     this.onUsageError = onUsageError;
   }
 
-  async review(request: ReviewRequest): Promise<ReviewResult> {
+  async review(request: ReviewRequest, signal?: AbortSignal): Promise<ReviewResult> {
     let lastError: unknown;
 
     for (let attempt = 0; attempt <= this.retryLimit; attempt++) {
       let raw: Awaited<ReturnType<Generate>>;
       try {
-        raw = await this.generate({ model: this.model, prompt: buildReviewPrompt(request) });
+        raw = await this.generate({
+          model: this.model,
+          prompt: buildReviewPrompt(request),
+          ...(signal ? { abortSignal: signal } : {}),
+        });
       } catch (error) {
         lastError = error;
         continue;

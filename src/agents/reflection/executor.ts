@@ -27,7 +27,7 @@ export type ReflectionEvent =
   | { type: "reflection.completed"; rounds: number; score: number; passed: boolean };
 
 interface ReviewerLike {
-  review(request: ReviewRequest): Promise<ReviewResult>;
+  review(request: ReviewRequest, signal?: AbortSignal): Promise<ReviewResult>;
 }
 
 export interface ReflectiveExecutorOptions<T> {
@@ -38,6 +38,7 @@ export interface ReflectiveExecutorOptions<T> {
   passThreshold?: number;
   hasBudget?: () => boolean;
   onEvent?: (event: ReflectionEvent) => void;
+  onEventError?: (error: unknown) => void;
 }
 
 export class ReflectiveExecutor<T> {
@@ -48,6 +49,7 @@ export class ReflectiveExecutor<T> {
   private readonly passThreshold: number;
   private readonly hasBudget: () => boolean;
   private readonly onEvent?: ReflectiveExecutorOptions<T>["onEvent"];
+  private readonly onEventError?: ReflectiveExecutorOptions<T>["onEventError"];
 
   constructor({
     execute,
@@ -57,9 +59,13 @@ export class ReflectiveExecutor<T> {
     passThreshold = 85,
     hasBudget = () => true,
     onEvent,
+    onEventError,
   }: ReflectiveExecutorOptions<T>) {
     if (!Number.isInteger(maxRounds) || maxRounds < 1 || maxRounds > 3) {
       throw new RangeError("maxRounds must be an integer between 1 and 3");
+    }
+    if (!Number.isFinite(passThreshold) || passThreshold < 0 || passThreshold > 100) {
+      throw new RangeError("passThreshold must be a finite number between 0 and 100");
     }
     this.executeCandidate = execute;
     this.reviewer = reviewer;
@@ -68,6 +74,7 @@ export class ReflectiveExecutor<T> {
     this.passThreshold = passThreshold;
     this.hasBudget = hasBudget;
     this.onEvent = onEvent;
+    this.onEventError = onEventError;
   }
 
   async execute(task: ReflectionTask, signal?: AbortSignal): Promise<ReflectiveResult<T>> {
@@ -87,14 +94,15 @@ export class ReflectiveExecutor<T> {
 
       const execution = await this.executeCandidate({ task, round, revisionInstructions, priorIssues, signal });
       signal?.throwIfAborted();
-      const review = await this.reviewer.review({
+      const rawReview = await waitForAbort(this.reviewer.review({
         objective: task.objective,
         constraints: task.constraints,
         candidate: execution.reviewContent,
         rubric,
         priorIssues: priorIssues.map((issue) => issue.recommendation),
-      });
+      }, signal), signal);
       signal?.throwIfAborted();
+      const review = { ...rawReview, passed: rawReview.score >= rubric.threshold };
       const candidate: ReflectionCandidate<T> = {
         round,
         output: execution.output,
@@ -149,6 +157,24 @@ export class ReflectiveExecutor<T> {
   }
 
   private emit(event: ReflectionEvent): void {
-    this.onEvent?.(event);
+    try {
+      this.onEvent?.(event);
+    } catch (error) {
+      try {
+        this.onEventError?.(error);
+      } catch {
+        // Observation failures must not affect reflective execution.
+      }
+    }
   }
+}
+
+function waitForAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  signal.throwIfAborted();
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason ?? new DOMException("The operation was aborted", "AbortError"));
+    signal.addEventListener("abort", abort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
 }

@@ -61,6 +61,29 @@ describe("ReflectiveExecutor", () => {
     expect(execute).toHaveBeenCalledOnce();
   });
 
+  it("recomputes passed from the rubric threshold when reviewer flags conflict", async () => {
+    const execute = vi.fn().mockResolvedValue(candidate("high-score"));
+    const highScoreReview = reviewResult(90, false);
+    const highResult = await createExecutor({
+      execute,
+      reviewer: { review: vi.fn().mockResolvedValue(highScoreReview) },
+      maxRounds: 1,
+    }).execute(task);
+
+    expect(highResult.rounds).toBe(1);
+    expect(highResult.finalReview.passed).toBe(true);
+
+    const lowScoreReview = reviewResult(70, true);
+    const lowResult = await createExecutor({
+      execute: vi.fn().mockResolvedValue(candidate("low-score")),
+      reviewer: { review: vi.fn().mockResolvedValue(lowScoreReview) },
+      maxRounds: 1,
+    }).execute(task);
+
+    expect(lowResult.finalReview.passed).toBe(false);
+    expect(lowResult.qualityRisk?.code).toBe("quality_threshold_unmet");
+  });
+
   it("passes prior issues and revision instructions into a later successful round", async () => {
     const execute = vi.fn()
       .mockResolvedValueOnce(candidate("draft"))
@@ -101,9 +124,15 @@ describe("ReflectiveExecutor", () => {
   });
 
   it("throws when budget is exhausted before any candidate is scored", async () => {
-    const executor = createExecutor({ hasBudget: () => false });
+    const events: ReflectionEvent[] = [];
+    const execute = vi.fn();
+    const review = vi.fn();
+    const executor = createExecutor({ hasBudget: () => false, execute, reviewer: { review }, onEvent: (event) => events.push(event) });
 
     await expect(executor.execute(task)).rejects.toThrow(/before any candidate was reviewed/);
+    expect(execute).not.toHaveBeenCalled();
+    expect(review).not.toHaveBeenCalled();
+    expect(events).toEqual([{ type: "reflection.started", maxRounds: 3 }]);
   });
 
   it("honors an AbortSignal before and between rounds", async () => {
@@ -124,6 +153,19 @@ describe("ReflectiveExecutor", () => {
     expect(execute).toHaveBeenCalledOnce();
   });
 
+  it("actively rejects when an in-flight reviewer remains pending", async () => {
+    const controller = new AbortController();
+    const review = vi.fn(() => new Promise<ReviewResult>(() => {}));
+    const executor = createExecutor({ reviewer: { review } });
+    const pending = executor.execute(task, controller.signal);
+
+    await vi.waitFor(() => expect(review).toHaveBeenCalledOnce());
+    controller.abort(new Error("review cancelled"));
+
+    await expect(pending).rejects.toThrow("review cancelled");
+    expect(review).toHaveBeenCalledWith(expect.any(Object), controller.signal);
+  });
+
   it("emits start, review, and final events in order", async () => {
     const events: ReflectionEvent[] = [];
     const executor = createExecutor({
@@ -138,6 +180,32 @@ describe("ReflectiveExecutor", () => {
       { type: "review.completed", round: 1, score: 90, passed: true },
       { type: "reflection.completed", rounds: 1, score: 90, passed: true },
     ]);
+  });
+
+  it("isolates event callback failures from execution", async () => {
+    const eventFailure = new Error("observer unavailable");
+    const onEventError = vi.fn();
+    const executor = createExecutor({
+      reviewer: { review: vi.fn().mockResolvedValue(reviewResult(90, false)) },
+      onEvent: vi.fn(() => { throw eventFailure; }),
+      onEventError,
+    });
+
+    await expect(executor.execute(task)).resolves.toMatchObject({ rounds: 1, finalReview: { passed: true } });
+    expect(onEventError).toHaveBeenCalledTimes(3);
+    expect(onEventError).toHaveBeenCalledWith(eventFailure);
+  });
+
+  it("emits only the start event when the first review fails", async () => {
+    const failure = new Error("review unavailable");
+    const events: ReflectionEvent[] = [];
+    const executor = createExecutor({
+      reviewer: { review: vi.fn().mockRejectedValue(failure) },
+      onEvent: (event) => events.push(event),
+    });
+
+    await expect(executor.execute(task)).rejects.toBe(failure);
+    expect(events).toEqual([{ type: "reflection.started", maxRounds: 3 }]);
   });
 
   it("rethrows reviewer failure without admitting the unscored candidate", async () => {
@@ -158,5 +226,9 @@ describe("ReflectiveExecutor", () => {
 
   it.each([0, 4, 1.5])("rejects maxRounds %s outside the supported range", (maxRounds) => {
     expect(() => createExecutor({ maxRounds })).toThrow(/maxRounds/);
+  });
+
+  it.each([-1, 101, Number.NaN, Number.POSITIVE_INFINITY])("rejects invalid passThreshold %s", (passThreshold) => {
+    expect(() => createExecutor({ passThreshold })).toThrow(/passThreshold/);
   });
 });
