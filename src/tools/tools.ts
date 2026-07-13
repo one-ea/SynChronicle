@@ -1,4 +1,3 @@
-import { join } from "node:path";
 import { z } from "zod";
 import type { OutlineEntry, Progress, ReviewEntry, RunMeta, VolumeOutline } from "../domain/index.js";
 import type { RegisteredTool, ToolRegistryOptions } from "./registry.js";
@@ -104,12 +103,12 @@ export function createTools({ store, askUser }: ToolRegistryOptions) {
       const affected = verdict === "accept" ? [] : input.affected_chapters?.length ? input.affected_chapters : [input.chapter];
       if (affected.length) await store.progress.setPendingRewrites(affected, input.summary);
       await store.progress.setFlow(verdict === "rewrite" ? "rewriting" : verdict === "polish" ? "polishing" : "writing");
-      const review: ReviewEntry = { ...input, dimensions, affected_chapters: affected }; await writeJSON(store.dir, `reviews/${pad(input.chapter)}${input.scope === "global" ? "-global" : ""}.json`, review);
+      const review: ReviewEntry = { ...input, dimensions, affected_chapters: affected }; await store.writeArtifact(`reviews/${pad(input.chapter)}${input.scope === "global" ? "-global" : ""}.json`, review);
       await store.checkpoints.appendArtifact(chapterScope(input.chapter), "review", `reviews/${pad(input.chapter)}${input.scope === "global" ? "-global" : ""}.json`); return { saved: true, chapter: input.chapter, final_verdict: verdict, affected_chapters: affected };
     }),
     save_arc_summary: registered("保存弧级摘要和角色快照", saveArcSummarySchema, async ({ character_snapshots, style_rules, ...summary }) => {
       await store.summaries.saveArcSummary(summary); if (character_snapshots.length) await store.characters.saveSnapshots(summary.volume, summary.arc, character_snapshots.map((item) => ({ ...item, volume: summary.volume, arc: summary.arc })));
-      if (style_rules) await writeJSON(store.dir, "meta/style_rules.json", { volume: summary.volume, arc: summary.arc, ...style_rules, taboos: style_rules.taboos ?? [], updated_at: new Date().toISOString() });
+      if (style_rules) await store.writeArtifact("meta/style_rules.json", { volume: summary.volume, arc: summary.arc, ...style_rules, taboos: style_rules.taboos ?? [], updated_at: new Date().toISOString() });
       await store.checkpoints.appendArtifact({ kind: "arc", volume: summary.volume, arc: summary.arc }, "arc_summary", `summaries/arc-v${pad(summary.volume)}a${pad(summary.arc)}.json`); return { saved: true, type: "arc_summary", volume: summary.volume, arc: summary.arc };
     }),
     save_volume_summary: registered("保存卷级摘要", saveVolumeSummarySchema, async (summary) => { await store.summaries.saveVolumeSummary(summary); await store.checkpoints.appendArtifact({ kind: "volume", volume: summary.volume }, "volume_summary", `summaries/vol-v${pad(summary.volume)}.json`); return { saved: true, type: "volume_summary", volume: summary.volume }; }),
@@ -134,4 +133,3 @@ function progressStatus(progress: Progress | null) { return progress ? { phase: 
 async function foundation(store: ToolRegistryOptions["store"]) { return { premise: await store.outline.loadPremise(), outline: await store.outline.loadOutline(), characters: await store.characters.load(), world_rules: await store.world.loadWorldRules() }; }
 function defaultRunMeta(): RunMeta { return { started_at: new Date().toISOString(), provider: "", style: "", model: "", planning_tier: "mid", steer_history: [], pending_steer: "", pause_point: null }; }
 async function saveRunMeta(store: ToolRegistryOptions["store"], patch: Partial<RunMeta>) { const current = await store.runMeta.load() as RunMeta | null; await store.runMeta.save({ ...defaultRunMeta(), ...current, ...patch }); }
-async function writeJSON(dir: string, path: string, value: unknown) { const { atomicWrite } = await import("../store/io.js"); await atomicWrite(join(dir, path), JSON.stringify(value, null, 2)); }

@@ -99,4 +99,26 @@ describe("ModelSet", () => {
 
     expect(set.forReviewer()).toBe(primary);
   });
+
+  it("resolves provider/model reviewer references with reviewer failover", async () => {
+    const primary = mockModel("anthropic", "reviewer");
+    primary.doGenerate = async () => { throw Object.assign(new Error("busy"), { statusCode: 429 }); };
+    const fallback = mockModel("openai", "fallback");
+    const factory = vi.fn((provider: string, _model: string) => provider === "anthropic" ? primary : fallback);
+    const report = vi.fn();
+    const set = new ModelSet({
+      provider: "openai",
+      model: "default",
+      providers: { openai: {}, anthropic: {} },
+      roles: { reviewer: { provider: "anthropic", model: "reviewer", fallbacks: [{ provider: "openai", model: "fallback" }] } },
+      reflection: { reviewer_model: "anthropic/reviewer" },
+    }, factory);
+
+    const result = await set.forReviewer(report).doGenerate({} as never);
+
+    expect(result).toEqual(expect.objectContaining({ content: expect.any(Array) }));
+    expect(factory).toHaveBeenCalledWith("anthropic", "reviewer");
+    expect(factory).toHaveBeenCalledWith("openai", "fallback");
+    expect(report).toHaveBeenCalledWith(expect.objectContaining({ role: "reviewer", reason: "rate_limit", fromProvider: "anthropic", toProvider: "openai" }));
+  });
 });

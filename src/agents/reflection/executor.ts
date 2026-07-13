@@ -39,6 +39,7 @@ export interface ReflectiveExecutorOptions<T> {
   hasBudget?: () => boolean;
   onEvent?: (event: ReflectionEvent) => void;
   onEventError?: (error: unknown) => void;
+  emitCompleted?: boolean;
 }
 
 export class ReflectiveExecutor<T> {
@@ -50,6 +51,7 @@ export class ReflectiveExecutor<T> {
   private readonly hasBudget: () => boolean;
   private readonly onEvent?: ReflectiveExecutorOptions<T>["onEvent"];
   private readonly onEventError?: ReflectiveExecutorOptions<T>["onEventError"];
+  private readonly emitCompleted: boolean;
 
   constructor({
     execute,
@@ -60,6 +62,7 @@ export class ReflectiveExecutor<T> {
     hasBudget = () => true,
     onEvent,
     onEventError,
+    emitCompleted = true,
   }: ReflectiveExecutorOptions<T>) {
     if (!Number.isInteger(maxRounds) || maxRounds < 1 || maxRounds > 3) {
       throw new RangeError("maxRounds must be an integer between 1 and 3");
@@ -75,6 +78,7 @@ export class ReflectiveExecutor<T> {
     this.hasBudget = hasBudget;
     this.onEvent = onEvent;
     this.onEventError = onEventError;
+    this.emitCompleted = emitCompleted;
   }
 
   async execute(task: ReflectionTask, signal?: AbortSignal): Promise<ReflectiveResult<T>> {
@@ -147,12 +151,7 @@ export class ReflectiveExecutor<T> {
         ? { qualityRisk: { code: riskCode, score: candidate.review.score, unresolvedIssues: candidate.review.issues } }
         : {}),
     };
-    this.emit({
-      type: "reflection.completed",
-      rounds,
-      score: candidate.review.score,
-      passed: candidate.review.passed,
-    });
+    if (this.emitCompleted) this.emit({ type: "reflection.completed", rounds, score: candidate.review.score, passed: candidate.review.passed });
     return result;
   }
 

@@ -9,7 +9,7 @@ export interface AgentExecutor {
   execute(
     task: { objective: string; constraints: string[] },
     generate: (prompt: string) => Promise<GenerateResult>,
-  ): Promise<{ output: GenerateResult }>;
+  ): Promise<{ output: GenerateResult; qualityRisk?: unknown; finalReview?: unknown; rounds?: number }>;
 }
 
 export interface AgentOptions {
@@ -32,6 +32,7 @@ export class Agent {
   private readonly maxSteps: number;
   private readonly onUsage?: AgentOptions["onUsage"];
   private readonly executor?: AgentExecutor;
+  private lastReflection: { qualityRisk?: unknown; finalReview?: unknown; rounds?: number } | null = null;
   private history: ModelMessage[] = [];
 
   constructor({ name, model, system, tools = {}, context = new ContextManager({ window: 200000 }), maxSteps = 20, onUsage, executor }: AgentOptions) {
@@ -65,12 +66,26 @@ export class Agent {
     return this.executor !== undefined;
   }
 
+  reflectionMetadata() { return structuredClone(this.lastReflection); }
+
   async generate(prompt: string) {
     if (!this.executor) return this.generateDirect(prompt);
-    const result = await this.executor.execute(
-      { objective: prompt, constraints: [] },
-      (revisionPrompt) => this.generateDirect(revisionPrompt),
-    );
+    const baseline = structuredClone(this.history);
+    let result: Awaited<ReturnType<AgentExecutor["execute"]>>;
+    try {
+      result = await this.executor.execute(
+        { objective: prompt, constraints: [] },
+        async (revisionPrompt) => {
+          this.history = structuredClone(baseline);
+          return this.generateDirect(revisionPrompt);
+        },
+      );
+    } catch (error) {
+      this.history = baseline;
+      throw error;
+    }
+    this.history = [...baseline, { role: "user", content: prompt }, { role: "assistant", content: result.output.text }];
+    this.lastReflection = { qualityRisk: result.qualityRisk, finalReview: result.finalReview, rounds: result.rounds };
     return result.output;
   }
 

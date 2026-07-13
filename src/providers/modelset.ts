@@ -13,23 +13,31 @@ export class ModelSet {
   private readonly config: ResolvedConfig;
   private readonly factory: ModelFactory;
   private readonly reviewerTarget?: ModelTarget;
+  private reviewerFallbacks: ModelTarget[] = [];
 
   constructor(config: Config, factory?: ModelFactory) {
     this.config = ConfigSchema.parse(config);
     this.factory = factory ?? ((provider, model) => createProvider(provider, this.config.providers[provider] ?? {}, model));
     this.defaultTarget = this.target(this.config.provider, this.config.model);
     if (this.config.reflection.reviewer_model) {
-      this.reviewerTarget = this.target(this.config.provider, this.config.reflection.reviewer_model);
+      const separator = this.config.reflection.reviewer_model.indexOf("/");
+      const provider = separator > 0 ? this.config.reflection.reviewer_model.slice(0, separator) : this.config.provider;
+      const model = separator > 0 ? this.config.reflection.reviewer_model.slice(separator + 1) : this.config.reflection.reviewer_model;
+      this.reviewerTarget = this.target(provider, model);
     }
     for (const [role, roleConfig] of Object.entries(this.config.roles)) {
       this.roles.set(role, this.target(roleConfig.provider, roleConfig.model));
       this.fallbacks.set(role, (roleConfig.fallbacks ?? []).map(ref => this.target(ref.provider, ref.model)));
+      if (role === "reviewer") this.reviewerFallbacks = (roleConfig.fallbacks ?? []).map(ref => this.target(ref.provider, ref.model));
     }
   }
 
   private target(provider: string, model: string): ModelTarget { return { provider, model, instance: this.factory(provider, model) }; }
   forRole(role: string): LanguageModelInstance { return (this.roles.get(role) ?? this.defaultTarget).instance; }
-  forReviewer(): LanguageModelInstance { return (this.reviewerTarget ?? this.defaultTarget).instance; }
+  forReviewer(report?: FailoverReporter): LanguageModelInstance {
+    const primary = this.reviewerTarget ?? this.roles.get("reviewer") ?? this.defaultTarget;
+    return this.reviewerFallbacks.length ? failoverModel("reviewer", primary, this.reviewerFallbacks, report) : primary.instance;
+  }
   forRoleWithFailover(role: string, report?: FailoverReporter): LanguageModelInstance {
     const primary = this.roles.get(role);
     const fallbacks = this.fallbacks.get(role) ?? [];

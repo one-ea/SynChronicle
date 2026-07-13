@@ -29,6 +29,19 @@ export class FileIO {
   async remove(rel: string) { await rm(this.path(rel), { force: true, recursive: true }); }
 }
 
+export class RecordingFileIO extends FileIO {
+  private readonly writes = new Map<string, Uint8Array>();
+  private readonly removed = new Set<string>();
+  constructor(private readonly base: FileIO) { super(base.dir); }
+  override async readFile(rel: string) { if (this.removed.has(rel)) throw Object.assign(new Error(`ENOENT: ${rel}`), { code: "ENOENT" }); const value = this.writes.get(rel); return value ? Buffer.from(value) : this.base.readFile(rel); }
+  override async readText(rel: string) { try { return (await this.readFile(rel)).toString("utf8"); } catch (error) { if (isMissing(error)) return ""; throw error; } }
+  override async readJSON<T>(rel: string, schema?: z.ZodType<T>): Promise<T | null> { const text = await this.readText(rel); if (!text) return null; const value: unknown = JSON.parse(text); return schema ? schema.parse(value) : value as T; }
+  override async writeFile(rel: string, data: string | Uint8Array) { this.removed.delete(rel); this.writes.set(rel, Buffer.from(data)); }
+  override async appendJSONLine(rel: string, value: unknown) { await this.writeFile(rel, `${await this.readText(rel)}${JSON.stringify(value)}\n`); }
+  override async remove(rel: string) { this.writes.delete(rel); this.removed.add(rel); }
+  artifacts() { return [...this.writes.entries()].map(([target, content]) => ({ target, content: Buffer.from(content) })); }
+}
+
 export async function atomicWrite(path: string, data: string | Uint8Array) {
   await mkdir(dirname(path), { recursive: true });
   const temp = join(dirname(path), `${path.split("/").at(-1)}.tmp-${randomUUID()}`);

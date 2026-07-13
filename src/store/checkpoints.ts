@@ -19,5 +19,6 @@ export class CheckpointStore {
   async reset() { await this.ready; await this.io.remove(file); this.cache = []; }
   async listSince(seq: number) { return (await this.all()).filter((cp) => cp.seq >= seq); }
   async clearFrom(seq: number) { await this.ready; const kept = this.cache.filter((cp) => cp.seq < seq); await this.io.writeFile(file, kept.map((cp) => JSON.stringify(cp)).join("\n") + (kept.length ? "\n" : "")); this.cache = kept; }
+  async reload() { await this.ready; await this.restore(); }
 }
 function matches(a: Scope, b: Scope) { return a.kind === b.kind && (b.chapter === undefined || a.chapter === b.chapter) && (b.volume === undefined || a.volume === b.volume) && (b.arc === undefined || a.arc === b.arc); }

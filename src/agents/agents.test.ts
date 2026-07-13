@@ -7,7 +7,7 @@ import type { Config } from "../config/index.js";
 import type { Bundle } from "../domain/index.js";
 import { ModelSet } from "../providers/index.js";
 import { Store } from "../store/index.js";
-import { buildCoordinator } from "./build.js";
+import { buildCoordinator, commitReflectionCandidate, recoverReflectionCommit } from "./build.js";
 import { ContextManager } from "./context.js";
 import { createAgent } from "./agent.js";
 import { packArchitect, packCoordinator, packEditor, packWriter } from "./ctxpack/index.js";
@@ -105,6 +105,50 @@ describe("Agent", () => {
     expect(executor.execute).toHaveBeenCalledOnce();
     expect(direct).toHaveBeenCalledTimes(2);
   });
+
+  it("merges only the selected reflected candidate into public history", async () => {
+    const model = mockModel({
+      generate: vi.fn()
+        .mockResolvedValueOnce(generated("discarded"))
+        .mockResolvedValueOnce(generated("selected")),
+    });
+    const executor = {
+      execute: async (_task: unknown, generate: (prompt: string) => Promise<ReturnType<typeof generated>>) => {
+        await generate("round one");
+        return { output: await generate("round two") };
+      },
+    };
+    const agent = createAgent({ name: "writer", model, system: "system", executor: executor as never });
+
+    await agent.generate("objective");
+
+    expect(agent.messages()).toEqual([
+      { role: "user", content: "objective" },
+      { role: "assistant", content: "selected" },
+    ]);
+  });
+
+  it("preserves quality risk as side-channel metadata without changing generate output", async () => {
+    const model = mockModel({ generate: async () => generated("candidate") });
+    const risk = { code: "quality_threshold_unmet", score: 70, unresolvedIssues: [] };
+    const executor = { execute: async (_task: unknown, generate: (prompt: string) => Promise<ReturnType<typeof generated>>) => ({ output: await generate("round"), rounds: 1, qualityRisk: risk }) };
+    const agent = createAgent({ name: "writer", model, system: "system", executor: executor as never });
+
+    const result = await agent.generate("objective");
+
+    expect(result.text).toBe("candidate");
+    expect(agent.reflectionMetadata()).toEqual({ qualityRisk: risk, rounds: 1 });
+  });
+
+  it("restores the history snapshot when reflected execution fails", async () => {
+    const model = mockModel({ generate: async () => generated("discarded") });
+    const executor = { execute: async (_task: unknown, generate: (prompt: string) => Promise<ReturnType<typeof generated>>) => { await generate("round"); throw new Error("review failed"); } };
+    const agent = createAgent({ name: "writer", model, system: "system", executor: executor as never });
+
+    await expect(agent.generate("objective")).rejects.toThrow("review failed");
+
+    expect(agent.messages()).toEqual([]);
+  });
 });
 
 describe("ContextManager", () => {
@@ -172,6 +216,42 @@ describe("buildCoordinator", () => {
     await built.coordinator.generate("start");
     expect(recordUsage).toHaveBeenCalledOnce();
     expect(built.coordinatorCtxMgr.reserve).toBe(8000);
+  });
+
+  it("persists commit state and emits completion only after business artifacts are durable", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "synchronicle-reflection-protocol-"));
+    const store = new Store(dir);
+    await store.init();
+    const transaction = store.recordingTransaction();
+    await transaction.store.drafts.saveDraft(1, "durable");
+    const staging = await store.staging.createSession("protocol");
+    const ids = await transaction.stage(staging, 1);
+    const events: unknown[] = [];
+    const completion = { type: "reflection.completed" as const, rounds: 1, score: 90, passed: true };
+
+    await commitReflectionCandidate(store, staging, "writer", ids, completion, (event) => events.push(event));
+
+    expect(await staging.loadState()).toEqual({ phase: "completed", candidateIds: ids, completion });
+    expect(events).toEqual([{ ...completion, agent: "writer" }]);
+  });
+
+  it("recovers a persisted in-flight reflection commit before emitting completion", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "synchronicle-reflection-recovery-"));
+    const store = new Store(dir);
+    await store.init();
+    const transaction = store.recordingTransaction();
+    await transaction.store.drafts.saveDraft(1, "recovered");
+    const staging = await store.staging.createSession("recovery");
+    const ids = await transaction.stage(staging, 1);
+    const completion = { type: "reflection.completed" as const, rounds: 2, score: 88, passed: true };
+    await staging.saveState({ phase: "committing", candidateIds: ids, completion });
+    const events: unknown[] = [];
+
+    await recoverReflectionCommit(store, staging, "writer", (event) => events.push(event));
+
+    expect(await store.drafts.loadDraft(1)).toBe("recovered");
+    expect(await staging.loadState()).toEqual({ phase: "completed", candidateIds: ids, completion });
+    expect(events).toEqual([{ ...completion, agent: "writer" }]);
   });
 
   it("wraps specialist agents and keeps coordinator direct", async () => {
