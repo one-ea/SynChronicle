@@ -91,4 +91,12 @@ describe("UsageTracker", () => {
     expect(tracker.snapshot().per_model?.["custom/unknown"]).toMatchObject({ input: 12, output: 4, cost_usd: 0 });
     expect(tracker.snapshot().unknown_cost_models).toEqual(["custom/unknown"]);
   });
+
+  it("does not apply known model pricing to an unknown provider with the same model name", () => {
+    const tracker = new UsageTracker();
+    tracker.record("writer", normalizeUsage({ inputTokens: 1_000_000 }, { provider: "proxy", model: "gpt-5-mini" }));
+
+    expect(tracker.snapshot().overall.cost_usd).toBe(0);
+    expect(tracker.snapshot().unknown_cost_models).toEqual(["proxy/gpt-5-mini"]);
+  });
 });

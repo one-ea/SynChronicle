@@ -2,6 +2,7 @@ import { generateText, type LanguageModel } from "ai";
 import { ReviewResultSchema } from "./schemas.js";
 import type { ReviewResult } from "./types.js";
 import type { ReviewRubric } from "./rubrics.js";
+import { usageModelIdentity } from "../../providers/failover.js";
 
 type LanguageModelInstance = Exclude<LanguageModel, string>;
 type Generate = typeof generateText;
@@ -88,7 +89,7 @@ export class Reviewer {
 
   private reportUsage(usage: unknown): void {
     try {
-      this.onUsage?.("reviewer", usage, this.model.provider && this.model.modelId ? { provider: this.model.provider, model: this.model.modelId } : undefined);
+      this.onUsage?.("reviewer", usage, usageModelIdentity(usage) ?? (this.model.provider && this.model.modelId ? { provider: this.model.provider, model: this.model.modelId } : undefined));
     } catch (error) {
       try {
         this.onUsageError?.(error);

@@ -1,6 +1,7 @@
 import { generateText, stepCountIs, streamText, tool, type LanguageModel, type ModelMessage, type ToolSet } from "ai";
 import type { RegisteredTool } from "../tools/registry.js";
 import { ContextManager } from "./context.js";
+import { usageModelIdentity } from "../providers/failover.js";
 
 type LanguageModelInstance = Exclude<LanguageModel, string>;
 export type GenerateResult = Awaited<ReturnType<typeof generateText>>;
@@ -107,7 +108,7 @@ export class Agent {
     const result = await generateText({ model: this.model, system: this.system, messages, tools: this.tools, stopWhen: stepCountIs(this.maxSteps), ...(signal ? { abortSignal: signal } : {}) });
     signal?.throwIfAborted();
     this.history.push({ role: "assistant", content: result.text });
-    this.onUsage?.(this.name, result.usage, modelIdentity(this.model));
+    this.onUsage?.(this.name, result.usage, usageModelIdentity(result.usage) ?? modelIdentity(this.model));
     return result;
   }
 
@@ -129,7 +130,8 @@ export class Agent {
     const completed = resultPromise.then(async (result) => {
       const text = await result.text;
       this.history.push({ role: "assistant", content: text });
-      this.onUsage?.(this.name, await result.usage, modelIdentity(this.model));
+      const usage = await result.usage;
+      this.onUsage?.(this.name, usage, usageModelIdentity(usage) ?? modelIdentity(this.model));
       return result;
     });
     return { textStream, completed };

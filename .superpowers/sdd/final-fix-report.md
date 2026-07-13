@@ -50,6 +50,10 @@ Final review fixes for reflective agent execution, covering all Critical and Imp
    - Execution and Reviewer usage records include Provider/model identity and aggregate into `overall`, `per_agent`, and `per_model`.
    - Registry pricing calculates uncached input, cached input, and output cost from standard AI SDK token fields. Explicit Provider `totalCost` remains supported.
    - Unknown model pricing preserves token and latency accounting with zero calculated cost and records the model in optional `unknown_cost_models` for compatibility and diagnostics.
+   - `failoverModel` attaches internal Symbol metadata to successful generation usage and stream finish usage, preserving AI SDK public result types while identifying the target that actually responded.
+   - Agent and Reviewer prefer the response-level actual identity over the wrapper's primary identity, so fallback tokens and cost are attributed to the fallback Provider/model.
+   - Qualified registry lookups are Provider-strict after supported alias normalization (`google` to `gemini`); an unknown Provider using a known model name remains unpriced and is added to `unknown_cost_models`.
+   - Integration tests cover Agent and Reviewer fallback responses in `per_model`, fallback pricing, streaming identity propagation, and unknown-Provider same-name models.
 
 9. Same-Agent concurrency
    - Agent generation uses a serial promise mutex, preventing concurrent reflected executions from sharing state keys or history snapshots.
@@ -66,7 +70,7 @@ Final review fixes for reflective agent execution, covering all Critical and Imp
 ## Verification
 
 - `pnpm typecheck`: PASS
-- `pnpm test`: PASS, 38 files and 272 tests
+- `pnpm test`: PASS, 38 files and 277 tests
 - `pnpm build`: PASS, tsup ESM build
 - `pnpm pack --dry-run`: PASS
 - `git diff --check`: PASS

@@ -5,6 +5,11 @@ import { createProvider } from "./adapter.js";
 import { knownProviderType } from "./mapping.js";
 import { ModelSet } from "./modelset.js";
 import { withExtra } from "./extra.js";
+import { createAgent } from "../agents/agent.js";
+import { Reviewer } from "../agents/reflection/reviewer.js";
+import { getReviewRubric } from "../agents/reflection/rubrics.js";
+import { normalizeUsage, UsageTracker } from "../runtime/usage.js";
+import { failoverModel, usageModelIdentity } from "./failover.js";
 
 const result = (text: string) => ({
   content: [{ type: "text" as const, text }],
@@ -120,5 +125,51 @@ describe("ModelSet", () => {
     expect(factory).toHaveBeenCalledWith("anthropic", "reviewer");
     expect(factory).toHaveBeenCalledWith("openai", "fallback");
     expect(report).toHaveBeenCalledWith(expect.objectContaining({ role: "reviewer", reason: "rate_limit", fromProvider: "anthropic", toProvider: "openai" }));
+  });
+
+  it("records the actual fallback model and price for Agent execution", async () => {
+    const primary = mockModel("openai", "gpt-5-mini", vi.fn().mockRejectedValue(Object.assign(new Error("busy"), { statusCode: 429 })));
+    const fallback = mockModel("anthropic", "claude-sonnet-4", vi.fn(async () => ({ ...result("fallback"), usage: { inputTokens: 1_000_000, outputTokens: 0, totalTokens: 1_000_000 } })));
+    const set = new ModelSet({ provider: "openai", model: "gpt-5-mini", providers: { openai: {}, anthropic: {} }, roles: { writer: { provider: "openai", model: "gpt-5-mini", fallbacks: [{ provider: "anthropic", model: "claude-sonnet-4" }] } } }, (provider) => provider === "openai" ? primary : fallback);
+    const usage = new UsageTracker();
+    const agent = createAgent({ name: "writer", model: set.forRoleWithFailover("writer"), system: "test", onUsage: (name, value, identity) => usage.record(name, normalizeUsage(value, identity)) });
+
+    await agent.generate("write");
+
+    expect(usage.snapshot().per_model?.["anthropic/claude-sonnet-4"]?.cost_usd).toBeCloseTo(3);
+    expect(usage.snapshot().per_model?.["openai/gpt-5-mini"]).toBeUndefined();
+  });
+
+  it("records the actual fallback model and price for Reviewer execution", async () => {
+    const primary = mockModel("openai", "gpt-5-mini", vi.fn().mockRejectedValue(Object.assign(new Error("busy"), { statusCode: 429 })));
+    const review = JSON.stringify({ score: 90, passed: true, summary: "ok", issues: [], revisionInstructions: [] });
+    const fallback = mockModel("anthropic", "claude-sonnet-4", vi.fn(async () => ({ ...result(review), usage: { inputTokens: 1_000_000, outputTokens: 0, totalTokens: 1_000_000 } })));
+    const set = new ModelSet({ provider: "openai", model: "gpt-5-mini", providers: { openai: {}, anthropic: {} }, roles: { reviewer: { provider: "openai", model: "gpt-5-mini", fallbacks: [{ provider: "anthropic", model: "claude-sonnet-4" }] } } }, (provider) => provider === "openai" ? primary : fallback);
+    const usage = new UsageTracker();
+    const reviewer = new Reviewer({ model: set.forReviewer(), onUsage: (name, value, identity) => usage.record(name, normalizeUsage(value, identity)) });
+
+    await reviewer.review({ objective: "review", constraints: [], candidate: "draft", rubric: getReviewRubric("writer", 85), priorIssues: [] });
+
+    expect(usage.snapshot().per_model?.["anthropic/claude-sonnet-4"]?.cost_usd).toBeCloseTo(3);
+    expect(usage.snapshot().per_agent.reviewer?.cost_usd).toBeCloseTo(3);
+  });
+});
+
+describe("failoverModel usage metadata", () => {
+  it("marks the actual model on fallback stream finish usage", async () => {
+    const primary = mockModel("openai", "gpt-5-mini");
+    primary.doStream = vi.fn().mockRejectedValue(Object.assign(new Error("busy"), { statusCode: 429 }));
+    const fallback = mockModel("anthropic", "claude-sonnet-4");
+    fallback.doStream = vi.fn(async () => ({
+      stream: new ReadableStream({ start(controller) { controller.enqueue({ type: "finish", finishReason: "stop", usage: { inputTokens: 5, outputTokens: 2, totalTokens: 7 } }); controller.close(); } }),
+      rawCall: { rawPrompt: null, rawSettings: {} },
+    })) as never;
+    const wrapped = failoverModel("writer", { provider: "openai", model: "gpt-5-mini", instance: primary }, [{ provider: "anthropic", model: "claude-sonnet-4", instance: fallback }]);
+
+    const response = await wrapped.doStream({} as never);
+    const chunks = [];
+    for await (const chunk of response.stream) chunks.push(chunk);
+
+    expect(usageModelIdentity((chunks[0] as { usage: unknown }).usage)).toEqual({ provider: "anthropic", model: "claude-sonnet-4" });
   });
 });

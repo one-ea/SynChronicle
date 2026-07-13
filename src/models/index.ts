@@ -6,6 +6,7 @@ const baseline: ModelEntry[] = [
   { provider: "deepseek", id: "deepseek-chat", name: "DeepSeek V3", contextWindow: 131072, maxTokens: 16000, inputCostPer1M: .2288, outputCostPer1M: .9144, cacheReadCostPer1M: 0, cacheWriteCostPer1M: 0 },
 ];
 const normalize = (id: string) => id.trim().toLowerCase().replaceAll(".", "-");
+const normalizeProvider = (provider: string) => ({ google: "gemini" } as Record<string, string>)[provider.trim().toLowerCase()] ?? provider.trim().toLowerCase();
 const dated = (suffix: string) => /^-\d{8}$/.test(suffix);
 export function sameModelId(a: string, b: string): boolean { const x = normalize(a), y = normalize(b); return x === y || (x.startsWith(y) && dated(x.slice(y.length))) || (y.startsWith(x) && dated(y.slice(x.length))); }
 export class ModelRegistry {
@@ -14,9 +15,10 @@ export class ModelRegistry {
   resolve(pattern: string): ModelEntry | undefined {
     const input = pattern.trim(); if (!input) return undefined;
     const slash = input.indexOf("/"); const provider = slash > 0 ? input.slice(0, slash) : ""; const id = slash > 0 ? input.slice(slash + 1) : input;
-    const exact = this.models.find(m => (!provider || m.provider.toLowerCase() === provider.toLowerCase()) && sameModelId(m.id, id)) ?? this.models.find(m => sameModelId(m.id, id));
+    const providerMatches = provider ? this.models.filter(m => normalizeProvider(m.provider) === normalizeProvider(provider)) : this.models;
+    const exact = providerMatches.find(m => sameModelId(m.id, id));
     if (exact) return { ...exact };
-    const needle = normalize(input); const candidates = this.models.filter(m => normalize(m.id).includes(needle) || m.name.toLowerCase().includes(input.toLowerCase()));
+    const needle = normalize(id); const candidates = providerMatches.filter(m => normalize(m.id).includes(needle) || m.name.toLowerCase().includes(id.toLowerCase()));
     return candidates.sort((a, b) => Number(/-\d{8}$/.test(a.id)) - Number(/-\d{8}$/.test(b.id)))[0];
   }
   resolveContextWindow(pattern: string): number { return this.resolve(pattern)?.contextWindow ?? 0; }
