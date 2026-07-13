@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { getReviewRubric } from "./rubrics.js";
 import { Reviewer, ReviewerError, type ReviewRequest } from "./reviewer.js";
 
-const model = { modelId: "reviewer-model" } as never;
+const model = { provider: "openai", modelId: "gpt-5-mini" } as never;
 const rubric = getReviewRubric("writer", 85);
 const request: ReviewRequest = {
   objective: "Write a tense confrontation.",
@@ -40,7 +40,7 @@ describe("Reviewer", () => {
     expect(generate).toHaveBeenCalledWith(expect.objectContaining({ model, prompt: expect.any(String) }));
     expect(generate.mock.calls[0]?.[0]).not.toHaveProperty("tools");
     expect(generate.mock.calls[0]?.[0].prompt).toContain(JSON.stringify(rubric));
-    expect(onUsage).toHaveBeenCalledWith("reviewer", { inputTokens: 12, outputTokens: 8, latencyMs: 37 });
+    expect(onUsage).toHaveBeenCalledWith("reviewer", { inputTokens: 12, outputTokens: 8, latencyMs: 37 }, { provider: "openai", model: "gpt-5-mini" });
   });
 
   it("forwards AbortSignal to generation while preserving signal-free calls", async () => {
@@ -79,7 +79,7 @@ describe("Reviewer", () => {
 
     await expect(reviewer.review(request, controller.signal)).rejects.toBe(reason);
     expect(generate).toHaveBeenCalledOnce();
-    expect(onUsage).toHaveBeenCalledWith("reviewer", { latencyMs: 12 });
+    expect(onUsage).toHaveBeenCalledWith("reviewer", { latencyMs: 12 }, { provider: "openai", model: "gpt-5-mini" });
   });
 
   it("retries invalid JSON and records usage for every completed generation", async () => {
@@ -94,8 +94,8 @@ describe("Reviewer", () => {
 
     expect(result.passed).toBe(true);
     expect(generate).toHaveBeenCalledTimes(2);
-    expect(onUsage).toHaveBeenNthCalledWith(1, "reviewer", { totalTokens: 3, latencyMs: 10 });
-    expect(onUsage).toHaveBeenNthCalledWith(2, "reviewer", { totalTokens: 7, latencyMs: 15 });
+    expect(onUsage).toHaveBeenNthCalledWith(1, "reviewer", { totalTokens: 3, latencyMs: 10 }, { provider: "openai", model: "gpt-5-mini" });
+    expect(onUsage).toHaveBeenNthCalledWith(2, "reviewer", { totalTokens: 7, latencyMs: 15 }, { provider: "openai", model: "gpt-5-mini" });
   });
 
   it("checks the budget policy before each reviewer retry", async () => {

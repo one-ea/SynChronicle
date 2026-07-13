@@ -20,7 +20,7 @@ export interface AgentOptions {
   tools?: Record<string, RegisteredTool<any>>;
   context?: ContextManager;
   maxSteps?: number;
-  onUsage?: (name: string, usage: unknown) => void;
+  onUsage?: (name: string, usage: unknown, model?: { provider: string; model: string }) => void;
   executor?: AgentExecutor;
 }
 
@@ -107,7 +107,7 @@ export class Agent {
     const result = await generateText({ model: this.model, system: this.system, messages, tools: this.tools, stopWhen: stepCountIs(this.maxSteps), ...(signal ? { abortSignal: signal } : {}) });
     signal?.throwIfAborted();
     this.history.push({ role: "assistant", content: result.text });
-    this.onUsage?.(this.name, result.usage);
+    this.onUsage?.(this.name, result.usage, modelIdentity(this.model));
     return result;
   }
 
@@ -129,7 +129,7 @@ export class Agent {
     const completed = resultPromise.then(async (result) => {
       const text = await result.text;
       this.history.push({ role: "assistant", content: text });
-      this.onUsage?.(this.name, await result.usage);
+      this.onUsage?.(this.name, await result.usage, modelIdentity(this.model));
       return result;
     });
     return { textStream, completed };
@@ -140,6 +140,10 @@ export class Agent {
     this.history = await this.context.compress(this.history);
     return this.history;
   }
+}
+
+function modelIdentity(model: LanguageModelInstance): { provider: string; model: string } | undefined {
+  return model.provider && model.modelId ? { provider: model.provider, model: model.modelId } : undefined;
 }
 
 export function createAgent(options: AgentOptions): Agent {

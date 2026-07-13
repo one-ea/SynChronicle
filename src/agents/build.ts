@@ -16,7 +16,7 @@ import { ReflectiveExecutor, Reviewer, sameTask, type AgentRole, type Reflection
 import { parseReflectionExecutionState } from "./reflection/schemas.js";
 import { z } from "zod";
 
-export type UsageRecorder = (agentName: string, usage: unknown) => void;
+export type UsageRecorder = (agentName: string, usage: unknown, model?: { provider: string; model: string }) => void;
 export type FlowBoundaryHook = (toolName: string) => void;
 export type GuardBlockHook = (agentName: string, reason: string) => void;
 type IntegratedReflectionEvent = ReflectionEvent & { agent: string };
@@ -44,7 +44,8 @@ export async function recoverReflectionCommit(store: Store, staging: StagingSess
   if (await deliverCompletion(committed, agent, emit)) await staging.saveState({ ...committed, phase: "completed" });
 }
 
-export async function commitReflectionCandidate(store: Store, staging: StagingSession, agent: string, candidateIds: string[], completion: Extract<ReflectionEvent, { type: "reflection.completed" }>, emit?: (event: IntegratedReflectionEvent) => unknown, executionId?: string) {
+export async function commitReflectionCandidate(store: Store, staging: StagingSession, agent: string, candidateIds: string[], completion: Extract<ReflectionEvent, { type: "reflection.completed" }>, emit?: (event: IntegratedReflectionEvent) => unknown, executionId?: string, signal?: AbortSignal) {
+  signal?.throwIfAborted();
   await staging.saveState({ version: 1, phase: "committing", candidateIds, completion, ...(executionId ? { executionId } : {}) });
   await store.commitStaged(staging, candidateIds);
   const committed = { version: 1 as const, phase: "committed" as const, candidateIds, completion, ...(executionId ? { executionId } : {}) };
@@ -147,7 +148,7 @@ export function buildCoordinator(
         signal?.throwIfAborted();
         const candidateIds = result.stagedArtifactIds ?? [];
         const completion: ReflectionEvent = { id: `${executionId}:${result.rounds * 2 + 1}:reflection.completed`, sequence: result.rounds * 2 + 1, type: "reflection.completed", rounds: result.rounds, score: result.finalReview.score, passed: result.finalReview.passed };
-        await commitReflectionCandidate(store, staging, name, candidateIds, completion, onReflectionEvent, executionId);
+        await commitReflectionCandidate(store, staging, name, candidateIds, completion, onReflectionEvent, executionId, signal);
         const rawCompletedState = await store.staging.loadState(stateId);
         const completedState = rawCompletedState === null ? null : parseReflectionExecutionState<GenerateResult>(rawCompletedState);
         if (completedState?.executionId === executionId) await store.staging.saveState(stateId, { ...completedState, status: "completed" });

@@ -69,4 +69,26 @@ describe("UsageTracker", () => {
     expect(save).toHaveBeenCalledTimes(2);
     expect(save.mock.calls[1]![0].overall).toMatchObject({ input: 2, output: 3 });
   });
+
+  it("prices standard AI SDK usage and records model totals", () => {
+    const tracker = new UsageTracker();
+    tracker.record("writer", normalizeUsage(
+      { inputTokens: 1_000_000, outputTokens: 500_000, cachedInputTokens: 200_000 },
+      { provider: "openai", model: "gpt-5-mini" },
+    ));
+
+    expect(tracker.snapshot().overall.cost_usd).toBeCloseTo(1.205);
+    expect(tracker.snapshot().per_agent.writer?.cost_usd).toBeCloseTo(1.205);
+    expect(tracker.snapshot().per_model?.["openai/gpt-5-mini"]).toMatchObject({ input: 1_000_000, output: 500_000, cache_read: 200_000 });
+    expect(tracker.snapshot().per_model?.["openai/gpt-5-mini"]?.cost_usd).toBeCloseTo(1.205);
+  });
+
+  it("marks unknown model pricing while preserving token accounting", () => {
+    const tracker = new UsageTracker();
+    tracker.record("writer", normalizeUsage({ inputTokens: 12, outputTokens: 4 }, { provider: "custom", model: "unknown" }));
+
+    expect(tracker.snapshot().overall).toMatchObject({ input: 12, output: 4, cost_usd: 0 });
+    expect(tracker.snapshot().per_model?.["custom/unknown"]).toMatchObject({ input: 12, output: 4, cost_usd: 0 });
+    expect(tracker.snapshot().unknown_cost_models).toEqual(["custom/unknown"]);
+  });
 });

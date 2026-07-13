@@ -23,7 +23,8 @@ Final review fixes for reflective agent execution, covering all Critical and Imp
 4. Hard-stop budget behavior
    - Budget gates execute only when `budget.hard_stop` is true; the default false policy allows work to continue.
    - Gates run before execution, after candidate execution and before review, after review before revision, and before each Reviewer retry.
-   - Tests cover hard-stop and advisory-budget behavior.
+   - Standard AI SDK token usage is priced through the existing model registry, so hard-stop decisions use real accumulated cost even when the Provider omits a proprietary cost field.
+   - Tests cover hard-stop, advisory-budget behavior, and a standard `openai/gpt-5-mini` usage payload crossing the configured budget.
 
 5. Durable review state before events
    - Initial execution state is saved before `reflection.started`.
@@ -39,12 +40,16 @@ Final review fixes for reflective agent execution, covering all Critical and Imp
 7. AbortSignal propagation
    - Host creates and aborts a per-run controller.
    - Signal flows through RuntimeAgent, Agent stream/generate, AgentExecutor, ReflectiveExecutor, Reviewer, and AI SDK generation.
-   - Abort checks prevent review, retries, staging, and final commit after cancellation.
+   - The durable commit protocol has an explicit cancellation boundary: signal is checked atomically before persisting `phase: committing`; after that phase is durable, cancellation is masked and the implementation completes business artifacts, checkpoints, completion event acknowledgement, and final state.
+   - Integration tests cover cancellation immediately before and immediately after the durable phase boundary.
 
 8. Incremental Usage durability
    - Every usage record queues an immutable snapshot save.
    - Queue ordering preserves token, cost, and latency totals used by budget checks.
    - A failed save records an error while later snapshots continue to persist; `flush` reports the failure.
+   - Execution and Reviewer usage records include Provider/model identity and aggregate into `overall`, `per_agent`, and `per_model`.
+   - Registry pricing calculates uncached input, cached input, and output cost from standard AI SDK token fields. Explicit Provider `totalCost` remains supported.
+   - Unknown model pricing preserves token and latency accounting with zero calculated cost and records the model in optional `unknown_cost_models` for compatibility and diagnostics.
 
 9. Same-Agent concurrency
    - Agent generation uses a serial promise mutex, preventing concurrent reflected executions from sharing state keys or history snapshots.
@@ -61,11 +66,11 @@ Final review fixes for reflective agent execution, covering all Critical and Imp
 ## Verification
 
 - `pnpm typecheck`: PASS
-- `pnpm test`: PASS, 38 files and 267 tests
+- `pnpm test`: PASS, 38 files and 272 tests
 - `pnpm build`: PASS, tsup ESM build
-- `pnpm pack`: PASS, generated `synchronicle-2.0.0.tgz`
+- `pnpm pack --dry-run`: PASS
 - `git diff --check`: PASS
 
 ## Notes
 
-- The generated pack tarball is retained as an untracked verification artifact and excluded from the source commit.
+- Existing unversioned or malformed reflection control state receives an explicit safe schema/version diagnostic; no implicit unsafe migration is performed.

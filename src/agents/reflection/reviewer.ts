@@ -18,7 +18,7 @@ export interface ReviewerOptions {
   model: LanguageModelInstance;
   generate?: Generate;
   retryLimit?: number;
-  onUsage?: (name: string, usage: unknown) => void;
+  onUsage?: (name: string, usage: unknown, model?: { provider: string; model: string }) => void;
   onUsageError?: (error: unknown) => void;
   now?: () => number;
   canContinue?: () => boolean;
@@ -88,7 +88,7 @@ export class Reviewer {
 
   private reportUsage(usage: unknown): void {
     try {
-      this.onUsage?.("reviewer", usage);
+      this.onUsage?.("reviewer", usage, this.model.provider && this.model.modelId ? { provider: this.model.provider, model: this.model.modelId } : undefined);
     } catch (error) {
       try {
         this.onUsageError?.(error);

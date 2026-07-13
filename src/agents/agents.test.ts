@@ -7,6 +7,7 @@ import type { Config } from "../config/index.js";
 import type { Bundle } from "../domain/index.js";
 import { ModelSet } from "../providers/index.js";
 import { Store } from "../store/index.js";
+import { normalizeUsage, UsageTracker } from "../runtime/usage.js";
 import { buildCoordinator, commitReflectionCandidate, coordinateReflectionRecovery, recoverReflectionCommit } from "./build.js";
 import { ContextManager } from "./context.js";
 import { createAgent } from "./agent.js";
@@ -268,6 +269,53 @@ describe("buildCoordinator", () => {
     expect(events).toEqual([{ ...completion, agent: "writer" }]);
   });
 
+  it("writes nothing when aborted before the durable commit phase", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "synchronicle-reflection-abort-before-commit-"));
+    const store = new Store(dir);
+    await store.init();
+    const transaction = store.recordingTransaction();
+    await transaction.store.drafts.saveDraft(1, "must not commit");
+    await transaction.store.checkpoints.appendArtifact({ kind: "chapter", chapter: 1 }, "draft", "drafts/01.draft.md");
+    const staging = await store.staging.createSession("abort-before-commit");
+    const ids = await transaction.stage(staging, 1);
+    const controller = new AbortController();
+    controller.abort(new Error("cancel before durable commit"));
+    const events: unknown[] = [];
+
+    await expect(commitReflectionCandidate(store, staging, "writer", ids, { type: "reflection.completed", rounds: 1, score: 90, passed: true }, (event) => events.push(event), "exec", controller.signal)).rejects.toThrow("cancel before durable commit");
+
+    expect(await staging.loadState()).toBeNull();
+    expect(await store.drafts.loadDraft(1)).toBe("");
+    expect(await store.checkpoints.all()).toEqual([]);
+    expect(events).toEqual([]);
+  });
+
+  it("finishes the durable commit after cancellation arrives past the phase boundary", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "synchronicle-reflection-abort-after-commit-"));
+    const store = new Store(dir);
+    await store.init();
+    const transaction = store.recordingTransaction();
+    await transaction.store.drafts.saveDraft(1, "must finish");
+    await transaction.store.checkpoints.appendArtifact({ kind: "chapter", chapter: 1 }, "draft", "drafts/01.draft.md");
+    const staging = await store.staging.createSession("abort-after-commit");
+    const ids = await transaction.stage(staging, 1);
+    const controller = new AbortController();
+    const originalSaveState = staging.saveState.bind(staging);
+    vi.spyOn(staging, "saveState").mockImplementation(async (state) => {
+      await originalSaveState(state);
+      if ((state as { phase?: string }).phase === "committing") controller.abort(new Error("late cancel"));
+    });
+    const events: unknown[] = [];
+
+    await commitReflectionCandidate(store, staging, "writer", ids, { type: "reflection.completed", rounds: 1, score: 90, passed: true }, (event) => events.push(event), "exec", controller.signal);
+
+    expect(controller.signal.aborted).toBe(true);
+    expect(await store.drafts.loadDraft(1)).toBe("must finish");
+    expect(await store.checkpoints.all()).toHaveLength(1);
+    expect((await staging.loadState<{ phase: string }>())?.phase).toBe("completed");
+    expect(events).toHaveLength(1);
+  });
+
   it("waits for completion persistence acknowledgement before marking the commit completed", async () => {
     const dir = await mkdtemp(join(tmpdir(), "synchronicle-reflection-ack-"));
     const store = new Store(dir);
@@ -412,5 +460,41 @@ describe("buildCoordinator", () => {
     expect(calls).toBe(1);
     expect(built.agents.writer.reflectionMetadata()).toMatchObject({ status: "failed" });
     expect(hasBudget).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses priced standard provider usage to trigger the hard-stop budget", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "synchronicle-reflection-priced-budget-"));
+    const store = new Store(dir);
+    await store.init();
+    const config: Config = {
+      provider: "openai",
+      model: "gpt-5-mini",
+      providers: { openai: { api_key: "test" } },
+      roles: {},
+      budget: { book_usd: 0.1, hard_stop: true },
+      reflection: { enabled: true, max_rounds: 2 },
+    };
+    let calls = 0;
+    const model = { ...mockModel({ generate: async () => { calls++; return { ...generated("candidate"), usage: { inputTokens: 1_000_000, outputTokens: 0, totalTokens: 1_000_000 } }; } }), provider: "openai", modelId: "gpt-5-mini" };
+    const tracker = new UsageTracker();
+    const built = buildCoordinator(
+      config,
+      store,
+      new ModelSet(config, () => model),
+      { prompts: {} },
+      (agent, usage, identity) => tracker.record(agent, normalizeUsage(usage, identity)),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      () => tracker.snapshot().overall.cost_usd < 0.1,
+    );
+
+    await expect(built.agents.writer.generate("write")).rejects.toThrow(/before any candidate was reviewed/);
+
+    expect(calls).toBe(1);
+    expect(tracker.snapshot().overall.cost_usd).toBeCloseTo(0.25);
+    expect(tracker.snapshot().per_agent.writer?.cost_usd).toBeCloseTo(0.25);
+    expect(tracker.snapshot().per_model?.["openai/gpt-5-mini"]?.cost_usd).toBeCloseTo(0.25);
   });
 });
