@@ -76,4 +76,38 @@ describe("Reviewer", () => {
     await expect(reviewer.review(request)).rejects.toBeInstanceOf(ReviewerError);
     expect(generate).toHaveBeenCalledTimes(2);
   });
+
+  it("does not retry or fail when usage reporting throws", async () => {
+    const generate = vi.fn().mockResolvedValue({ text: JSON.stringify(validReview()), usage: { totalTokens: 9 } });
+    const usageError = new Error("usage store unavailable");
+    const onUsageError = vi.fn();
+    const reviewer = new Reviewer({
+      model,
+      generate,
+      onUsage: vi.fn(() => { throw usageError; }),
+      onUsageError,
+    });
+
+    await expect(reviewer.review(request)).resolves.toMatchObject({ score: 90, passed: true });
+    expect(generate).toHaveBeenCalledOnce();
+    expect(onUsageError).toHaveBeenCalledWith(usageError);
+  });
+
+  it.each([-1, 4, 1.5, Number.NaN])("rejects invalid retryLimit %s", (retryLimit) => {
+    expect(() => new Reviewer({ model, retryLimit })).toThrow(/retryLimit/);
+  });
+
+  it("keeps consecutive reviews independent", async () => {
+    const generate = vi.fn().mockResolvedValue({ text: JSON.stringify(validReview()), usage: {} });
+    const reviewer = new Reviewer({ model, generate });
+
+    await reviewer.review({ ...request, candidate: "first candidate" });
+    await reviewer.review({ ...request, candidate: "second candidate" });
+
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(generate.mock.calls[0]?.[0].prompt).toContain("first candidate");
+    expect(generate.mock.calls[0]?.[0].prompt).not.toContain("second candidate");
+    expect(generate.mock.calls[1]?.[0].prompt).toContain("second candidate");
+    expect(generate.mock.calls[1]?.[0].prompt).not.toContain("first candidate");
+  });
 });

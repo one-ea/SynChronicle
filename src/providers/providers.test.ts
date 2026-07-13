@@ -77,4 +77,26 @@ describe("ModelSet", () => {
     expect(set.forRole("editor")).toBe(swapped);
     expect(set.currentSelection("editor")).toEqual({ provider: "openai", model: "swapped", explicit: true });
   });
+
+  it("resolves the independent reviewer model from reflection config", () => {
+    const primary = mockModel("openai", "primary");
+    const reviewer = mockModel("openai", "reviewer");
+    const factory = vi.fn((_provider: string, model: string) => model === "reviewer" ? reviewer : primary);
+    const set = new ModelSet({
+      provider: "openai",
+      model: "primary",
+      providers: { openai: {} },
+      reflection: { reviewer_model: "reviewer" },
+    }, factory);
+
+    expect(set.forReviewer()).toBe(reviewer);
+    expect(factory).toHaveBeenCalledWith("openai", "reviewer");
+  });
+
+  it("uses the default model when reviewer_model is omitted", () => {
+    const primary = mockModel("openai", "primary");
+    const set = new ModelSet({ provider: "openai", model: "primary", providers: { openai: {} } }, () => primary);
+
+    expect(set.forReviewer()).toBe(primary);
+  });
 });

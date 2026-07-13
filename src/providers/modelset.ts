@@ -12,11 +12,15 @@ export class ModelSet {
   private readonly fallbacks = new Map<string, ModelTarget[]>();
   private readonly config: ResolvedConfig;
   private readonly factory: ModelFactory;
+  private readonly reviewerTarget?: ModelTarget;
 
   constructor(config: Config, factory?: ModelFactory) {
     this.config = ConfigSchema.parse(config);
     this.factory = factory ?? ((provider, model) => createProvider(provider, this.config.providers[provider] ?? {}, model));
     this.defaultTarget = this.target(this.config.provider, this.config.model);
+    if (this.config.reflection.reviewer_model) {
+      this.reviewerTarget = this.target(this.config.provider, this.config.reflection.reviewer_model);
+    }
     for (const [role, roleConfig] of Object.entries(this.config.roles)) {
       this.roles.set(role, this.target(roleConfig.provider, roleConfig.model));
       this.fallbacks.set(role, (roleConfig.fallbacks ?? []).map(ref => this.target(ref.provider, ref.model)));
@@ -25,6 +29,7 @@ export class ModelSet {
 
   private target(provider: string, model: string): ModelTarget { return { provider, model, instance: this.factory(provider, model) }; }
   forRole(role: string): LanguageModelInstance { return (this.roles.get(role) ?? this.defaultTarget).instance; }
+  forReviewer(): LanguageModelInstance { return (this.reviewerTarget ?? this.defaultTarget).instance; }
   forRoleWithFailover(role: string, report?: FailoverReporter): LanguageModelInstance {
     const primary = this.roles.get(role);
     const fallbacks = this.fallbacks.get(role) ?? [];
