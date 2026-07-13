@@ -443,7 +443,7 @@ git commit -m "feat: integrate reflection with specialist agents"
 - Produces: 四类 reflection 事件的 RuntimeEvent 投影。
 - Produces: `UsageTracker.record("reviewer", usage)` 独立统计。
 
-- [ ] **Step 1: 编写失败的事件顺序和 Usage 测试**
+- [x] **Step 1: 编写失败的事件顺序和 Usage 测试**
 
 ```ts
 expect(events.map((event) => event.message)).toEqual([
@@ -458,23 +458,23 @@ expect(host.usage.snapshot().per_agent.reviewer.input).toBeGreaterThan(0);
 
 增加恢复测试：checkpoint 位于第一轮评审完成后时，恢复从第二轮开始，且第一轮工件保持暂存状态。
 
-- [ ] **Step 2: 运行测试并确认失败**
+- [x] **Step 2: 运行测试并确认失败**
 
 Run: `pnpm vitest run src/runtime/host.test.ts src/runtime/sentinels.test.ts`
 
 Expected: FAIL，提示 reflection 事件和恢复状态尚未接入。
 
-- [ ] **Step 3: 实现运行时投影**
+- [x] **Step 3: 实现运行时投影**
 
 扩展 `RuntimeEventKind` 支持 `reflection`，payload 使用判别字段 `phase`：`started`、`review_completed`、`revision_started`、`completed`。Host 将 Executor 回调写入现有事件队列和 runtime queue；TUI 显示轮次与评分，Headless 输出单行进度。Usage 继续复用 `per_agent`，Reviewer 统一使用键名 `reviewer`。
 
-- [ ] **Step 4: 运行测试并确认通过**
+- [x] **Step 4: 运行测试并确认通过**
 
 Run: `pnpm vitest run src/runtime src/tui src/headless`
 
 Expected: PASS，事件顺序、Usage 分类和恢复轮次准确。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add src/domain/event.ts src/runtime src/tui src/headless
