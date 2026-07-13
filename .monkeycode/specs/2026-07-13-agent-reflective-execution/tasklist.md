@@ -178,7 +178,7 @@ git commit -m "feat: add role-specific review rubrics"
 - Produces: `Reviewer.review(request): Promise<ReviewResult>`。
 - Produces: `ReviewRequest`，包含 `objective`、`constraints`、`candidate`、`rubric`、`priorIssues`。
 
-- [ ] **Step 1: 编写失败的结构化评审和重试测试**
+- [x] **Step 1: 编写失败的结构化评审和重试测试**
 
 ```ts
 it("retries invalid output and recomputes passed from score", async () => {
@@ -194,13 +194,13 @@ it("retries invalid output and recomputes passed from score", async () => {
 });
 ```
 
-- [ ] **Step 2: 运行测试并确认失败**
+- [x] **Step 2: 运行测试并确认失败**
 
 Run: `pnpm vitest run src/agents/reflection/reviewer.test.ts`
 
 Expected: FAIL，提示 `Reviewer` 尚未定义。
 
-- [ ] **Step 3: 实现 Reviewer**
+- [x] **Step 3: 实现 Reviewer**
 
 ```ts
 export class Reviewer {
@@ -222,13 +222,13 @@ export class Reviewer {
 
 Reviewer 构建时仅接收模型和生成函数，不接收 Tool Registry。通过 `onUsage("reviewer", usage)` 记录用量。
 
-- [ ] **Step 4: 运行测试并确认通过**
+- [x] **Step 4: 运行测试并确认通过**
 
 Run: `pnpm vitest run src/agents/reflection/reviewer.test.ts`
 
 Expected: PASS，覆盖合法结果、非法 JSON、Schema 错误、重试耗尽和 usage 回调。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add src/agents/reflection/reviewer.ts src/agents/reflection/reviewer.test.ts src/providers/index.ts
