@@ -100,7 +100,19 @@
   // },
 
   // 写作风格：default / suspense / fantasy / romance。
-  "style": "default"
+  "style": "default",
+
+  // 可选。Architect、Writer 和 Editor 默认启用独立 Reviewer 驱动的反思执行。
+  // 每轮先执行任务，再由无业务工具的 Reviewer 评分；达到 85 分即通过，最多 3 轮。
+  // reviewer_model 省略时使用默认模型；也可填写 "provider/model" 指向独立评审模型。
+  // 多轮执行和评审会增加模型调用次数、Token 用量与成本。
+  "reflection": {
+    "enabled": true,
+    "max_rounds": 3,
+    "pass_threshold": 85,
+    "review_retry_limit": 2,
+    "reviewer_model": "anthropic/claude-sonnet-4"
+  }
 
   // 可选。显式指定上下文压缩使用的窗口大小。省略 / 0 = 按模型名自动解析
   //（registry 命中用真实窗口，未命中兜底 200k）。配了就优先用：既能给 registry

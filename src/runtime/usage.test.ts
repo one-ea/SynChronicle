@@ -14,4 +14,12 @@ describe("UsageTracker", () => {
     expect(tracker.snapshot().per_agent.reviewer).toBeUndefined();
     expect(tracker.snapshot().missing_assistant_usage).toBe(1);
   });
+
+  it("counts usage objects without known fields as missing", () => {
+    const tracker = new UsageTracker();
+    tracker.record("reviewer", normalizeUsage({}));
+    tracker.record("reviewer", normalizeUsage({ promptTokens: 12 }));
+    expect(tracker.snapshot().per_agent.reviewer).toBeUndefined();
+    expect(tracker.snapshot().missing_assistant_usage).toBe(2);
+  });
 });

@@ -491,29 +491,29 @@ git commit -m "feat: expose reflection runtime events"
 **Interfaces:**
 - Validates all requirements and preserves existing public behavior。
 
-- [ ] **Step 1: 添加配置和使用说明**
+- [x] **Step 1: 添加配置和使用说明**
 
 在 `config.example.jsonc` 增加 `reflection` 示例。README 说明默认三轮、85 分阈值、独立 Reviewer、最佳候选风险返回和成本影响。
 
-- [ ] **Step 2: 运行目标测试**
+- [x] **Step 2: 运行目标测试**
 
 Run: `pnpm vitest run src/agents/reflection src/agents/agents.test.ts src/store/staging.test.ts src/runtime/host.test.ts`
 
 Expected: PASS。
 
-- [ ] **Step 3: 运行全量静态检查和测试**
+- [x] **Step 3: 运行全量静态检查和测试**
 
 Run: `pnpm typecheck && pnpm test && pnpm build`
 
 Expected: typecheck、全部 Vitest 测试和 tsup 构建均成功。
 
-- [ ] **Step 4: 验证打包产物和格式**
+- [x] **Step 4: 验证打包产物和格式**
 
 Run: `npm pack --dry-run && git diff --check`
 
 Expected: npm 包包含运行时构建产物和文档，Git diff 无空白错误。
 
-- [ ] **Step 5: 更新清单并提交**
+- [x] **Step 5: 更新清单并提交**
 
 将本文件中已验证任务更新为 `[x]`，然后执行：
 

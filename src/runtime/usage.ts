@@ -14,13 +14,11 @@ export function normalizeUsage(value: unknown): ModelUsage | undefined {
   if (!value || typeof value !== "object") return undefined;
   const source = value as Record<string, unknown>;
   const result: ModelUsage = {};
-  let supplied = false;
   let accepted = false;
   for (const key of ["inputTokens", "outputTokens", "cachedInputTokens", "totalCost"] as const) {
     if (!(key in source)) continue;
-    supplied = true;
     const field = source[key];
     if (typeof field === "number" && Number.isFinite(field) && field >= 0) { result[key] = field; accepted = true; }
   }
-  return supplied && !accepted ? undefined : result;
+  return accepted ? result : undefined;
 }

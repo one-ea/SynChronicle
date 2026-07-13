@@ -90,6 +90,26 @@ synchronicle --version
 
 项目级配置会与全局配置合并，适合为某本作品指定模型、代理地址或角色设置。
 
+### 反思执行
+
+Architect、Writer 和 Editor 默认采用反思执行：每轮由原 Agent 生成候选，再交给独立 Reviewer 会话评分。Reviewer 不注册创作业务工具，可使用 `reflection.reviewer_model` 指定独立模型；省略时沿用默认模型。
+
+默认最多执行 3 轮，通过阈值为 85 分。候选达到阈值后立即提交；达到轮数上限仍未通过，或预算在后续轮次前耗尽时，系统返回已评分候选中的最高分结果，同分选择较新的轮次，并附带未达阈值或预算耗尽的质量风险及未解决问题。
+
+```jsonc
+{
+  "reflection": {
+    "enabled": true,
+    "max_rounds": 3,
+    "pass_threshold": 85,
+    "review_retry_limit": 2,
+    "reviewer_model": "anthropic/claude-sonnet-4"
+  }
+}
+```
+
+每轮包含一次原 Agent 执行和一次 Reviewer 评审，修订轮会重复这组调用；Reviewer 结构化输出重试也可能产生额外调用。默认配置最多产生三组执行与评审用量，因此会增加 Token 消耗、运行时间和模型费用。可通过降低 `max_rounds`、选择成本更低的 Reviewer 模型或设置预算控制成本。
+
 ## 启动与常用命令
 
 在计划存放作品的目录中启动交互式 TUI：
