@@ -381,7 +381,7 @@ git commit -m "feat: add staged reflection artifacts"
 - Produces: Architect、Writer、Editor 的兼容 `generate`/`stream` 行为。
 - Coordinator 继续使用现有直接执行路径。
 
-- [ ] **Step 1: 编写失败的构建集成测试**
+- [x] **Step 1: 编写失败的构建集成测试**
 
 ```ts
 it("wraps specialist agents and keeps coordinator direct", async () => {
@@ -394,13 +394,13 @@ it("wraps specialist agents and keeps coordinator direct", async () => {
 });
 ```
 
-- [ ] **Step 2: 运行测试并确认失败**
+- [x] **Step 2: 运行测试并确认失败**
 
 Run: `pnpm vitest run src/agents/agents.test.ts`
 
 Expected: FAIL，提示 reflection 状态或包装器尚未接入。
 
-- [ ] **Step 3: 接入执行装饰器**
+- [x] **Step 3: 接入执行装饰器**
 
 在 `AgentOptions` 增加可选 `executor`，保留原始 `generate` 和 `stream` 公共签名。抽取无装饰器的私有 `generateDirect(prompt)`，Reflective Executor 通过该函数执行候选，避免递归进入反思闭环。`buildCoordinator` 只为 specialist agents 创建 Executor。
 
@@ -413,13 +413,13 @@ async generate(prompt: string) {
 
 流式模式在闭环完成后输出最终候选文本，评审过程通过 Host 事件呈现。
 
-- [ ] **Step 4: 运行测试并确认通过**
+- [x] **Step 4: 运行测试并确认通过**
 
 Run: `pnpm vitest run src/agents/agents.test.ts src/agents/reflection/*.test.ts`
 
 Expected: PASS，Coordinator 保持直接调用，三个 specialist agents 使用独立闭环。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add src/agents
