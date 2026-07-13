@@ -317,7 +317,7 @@ git commit -m "feat: add reflective execution loop"
 - Produces: `stage(round, artifact)`, `commit(candidateIds)`, `saveState(state)`, `loadState(sessionId)`。
 - Consumes: Existing `FileIO.writeFile`、`writeJSON` and Store checkpoint interfaces。
 
-- [ ] **Step 1: 编写失败的隔离和幂等提交测试**
+- [x] **Step 1: 编写失败的隔离和幂等提交测试**
 
 ```ts
 it("commits only the selected round and can resume idempotently", async () => {
@@ -333,13 +333,13 @@ it("commits only the selected round and can resume idempotently", async () => {
 });
 ```
 
-- [ ] **Step 2: 运行测试并确认失败**
+- [x] **Step 2: 运行测试并确认失败**
 
 Run: `pnpm vitest run src/store/staging.test.ts`
 
 Expected: FAIL，提示 `store.staging` 尚未定义。
 
-- [ ] **Step 3: 实现暂存存储**
+- [x] **Step 3: 实现暂存存储**
 
 暂存目录使用 `meta/reflection/<session-id>/round-<n>/`，manifest 记录目标相对路径、内容文件和提交状态。`commit` 逐项调用 FileIO 原子写入，并在每项成功后更新 manifest；恢复时跳过 `committed` 项。
 
@@ -353,13 +353,13 @@ interface StagedArtifact {
 }
 ```
 
-- [ ] **Step 4: 运行测试并确认通过**
+- [x] **Step 4: 运行测试并确认通过**
 
 Run: `pnpm vitest run src/store/staging.test.ts src/store/store.test.ts`
 
 Expected: PASS，覆盖隔离、最终提交、部分失败恢复和路径越界拒绝。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add src/store/staging.ts src/store/staging.test.ts src/store/index.ts src/store/io.ts
