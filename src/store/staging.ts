@@ -79,7 +79,7 @@ export class StagingSession {
   stage(round: number, artifact: ArtifactInput) {
     return this.withLock(async () => {
       if (!Number.isInteger(round) || round < 0) throw new Error("round 必须是非负整数");
-      const target = validateRelativePath(artifact.target);
+      const target = validateTarget(artifact.target);
       const manifest = await this.requireManifest();
       const id = randomUUID();
       const contentFile = `${sessionRoot(this.sessionId)}/round-${round}/${id}.artifact`;
@@ -96,7 +96,6 @@ export class StagingSession {
   commit(candidateIds: string[]) {
     return this.withLock(async () => {
       const manifest = await this.requireManifest();
-      await this.recover(manifest);
       const selected = candidateIds.map((id) => {
         const artifact = manifest.artifacts.find((entry) => entry.id === id);
         if (!artifact) throw new Error(`未知候选 ID: ${id}`);
@@ -107,6 +106,7 @@ export class StagingSession {
         if (targets.has(artifact.target)) throw new Error(`同一 target 只能选择一个工件: ${artifact.target}`);
         targets.add(artifact.target);
       }
+      await this.recover(manifest, selected);
       for (const artifact of selected) {
         if (artifact.status === "committed") continue;
         await this.commitArtifact(manifest, artifact);
@@ -146,8 +146,8 @@ export class StagingSession {
     await this.persist(manifest);
   }
 
-  private async recover(manifest: Manifest) {
-    for (const artifact of manifest.artifacts) {
+  private async recover(manifest: Manifest, artifacts = manifest.artifacts) {
+    for (const artifact of artifacts) {
       if (artifact.status !== "committing") continue;
       await assertSafeStorePath(this.io, artifact.contentFile);
       await assertSafeStorePath(this.io, artifact.target);
@@ -182,8 +182,8 @@ export class StagingSession {
     await this.io.writeJSON(manifestPath(this.sessionId), manifest);
   }
 
-  private withLock<T>(operation: () => Promise<T>) {
-    const key = `${resolve(this.io.dir)}\0${this.sessionId}`;
+  private async withLock<T>(operation: () => Promise<T>) {
+    const key = `${await realpath(this.io.dir)}\0${this.sessionId}`;
     const previous = StagingSession.locks.get(key) ?? Promise.resolve();
     const result = previous.then(operation);
     const settled = result.then(() => undefined, () => undefined);
@@ -194,7 +194,7 @@ export class StagingSession {
 }
 
 function validateArtifact(artifact: StagedArtifact, sessionId: string) {
-  validateRelativePath(artifact.target);
+  validateTarget(artifact.target);
   const expected = `${sessionRoot(sessionId)}/round-${artifact.round}/${artifact.id}.artifact`;
   if (artifact.contentFile !== expected) throw new Error("暂存内容路径越界");
 }
@@ -207,6 +207,12 @@ function validateRelativePath(value: string) {
   if (!value || isAbsolute(value)) throw new Error("路径必须是 store 内的相对路径");
   const normalized = posix.normalize(value.replaceAll("\\", "/"));
   if (normalized === ".." || normalized.startsWith("../")) throw new Error("路径越界");
+  return normalized;
+}
+
+function validateTarget(value: string) {
+  const normalized = validateRelativePath(value);
+  if (normalized === "meta/reflection" || normalized.startsWith("meta/reflection/")) throw new Error("target 不得位于 reflection 控制命名空间");
   return normalized;
 }
 

@@ -173,4 +173,88 @@ describe("StagedArtifactStore", () => {
     await expect(session.commit([artifact.id])).rejects.toThrow("符号链接");
     await expect(readFile(join(outside, "outside.md"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
+
+  it("validates an invalid request before recovering unrelated committing artifacts", async () => {
+    const { dir, store } = await tempStore();
+    const session = await store.staging.createSession("session-1");
+    const artifact = await session.stage(1, { target: "chapters/01.md", content: "pending" });
+    const manifestPath = join(dir, "meta", "reflection", "session-1", "manifest.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    manifest.artifacts[0].status = "committing";
+    await writeFile(manifestPath, JSON.stringify(manifest));
+
+    await expect(session.commit(["missing"])).rejects.toThrow("未知候选");
+    await expect(readFile(join(dir, "chapters", "01.md"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    expect(artifact.status).toBe("staged");
+  });
+
+  it("recovers only requested committing artifacts", async () => {
+    const { dir, store } = await tempStore();
+    const session = await store.staging.createSession("session-1");
+    const requested = await session.stage(1, { target: "chapters/01.md", content: "requested" });
+    const unrelated = await session.stage(1, { target: "chapters/02.md", content: "unrelated" });
+    const manifestPath = join(dir, "meta", "reflection", "session-1", "manifest.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    manifest.artifacts.find((artifact: { id: string }) => artifact.id === unrelated.id).status = "committing";
+    await writeFile(manifestPath, JSON.stringify(manifest));
+
+    await session.commit([requested.id]);
+
+    expect(await readFile(join(dir, "chapters", "01.md"), "utf8")).toBe("requested");
+    await expect(readFile(join(dir, "chapters", "02.md"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    const persisted = JSON.parse(await readFile(manifestPath, "utf8"));
+    expect(persisted.artifacts.find((artifact: { id: string }) => artifact.id === unrelated.id).status).toBe("committing");
+  });
+
+  it("rejects targets in the reflection control namespace", async () => {
+    const { store } = await tempStore();
+    const session = await store.staging.createSession("session-1");
+
+    await expect(session.stage(1, { target: "meta/reflection/overwrite.json", content: "bad" })).rejects.toThrow("控制命名空间");
+  });
+
+  it("shares a lock across Store root path aliases", async () => {
+    const { dir } = await tempStore();
+    const aliasParent = await mkdtemp(join(tmpdir(), "synchronicle-alias-"));
+    const alias = join(aliasParent, "store");
+    await symlink(dir, alias);
+    const first = await new StagedArtifactStore(new FileIO(dir)).createSession("session-1");
+    const second = await new StagedArtifactStore(new FileIO(alias)).createSession("session-1");
+
+    const [one, two] = await Promise.all([
+      first.stage(1, { target: "chapters/01.md", content: "one" }),
+      second.stage(1, { target: "chapters/02.md", content: "two" }),
+    ]);
+
+    const resumed = await new StagedArtifactStore(new FileIO(dir)).createSession("session-1");
+    expect(await resumed.status(one.id)).toBe("staged");
+    expect(await resumed.status(two.id)).toBe("staged");
+  });
+
+  it("rejects a symbolic link at the reflection control directory", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "synchronicle-control-link-"));
+    const outside = await mkdtemp(join(tmpdir(), "synchronicle-control-outside-"));
+    await mkdir(join(dir, "meta"), { recursive: true });
+    await symlink(outside, join(dir, "meta", "reflection"));
+
+    await expect(new StagedArtifactStore(new FileIO(dir)).createSession("session-1")).rejects.toThrow("符号链接");
+  });
+
+  it("rejects a symbolic link at the session directory", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "synchronicle-session-link-"));
+    const outside = await mkdtemp(join(tmpdir(), "synchronicle-session-outside-"));
+    await mkdir(join(dir, "meta", "reflection"), { recursive: true });
+    await symlink(outside, join(dir, "meta", "reflection", "session-1"));
+
+    await expect(new StagedArtifactStore(new FileIO(dir)).createSession("session-1")).rejects.toThrow("符号链接");
+  });
+
+  it("rejects a symbolic link at the round content directory", async () => {
+    const { dir, store } = await tempStore();
+    const outside = await mkdtemp(join(tmpdir(), "synchronicle-content-outside-"));
+    const session = await store.staging.createSession("session-1");
+    await symlink(outside, join(dir, "meta", "reflection", "session-1", "round-1"));
+
+    await expect(session.stage(1, { target: "chapters/01.md", content: "bad" })).rejects.toThrow("符号链接");
+  });
 });
