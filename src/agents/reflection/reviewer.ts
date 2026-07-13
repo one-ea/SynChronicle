@@ -51,6 +51,7 @@ export class Reviewer {
     let lastError: unknown;
 
     for (let attempt = 0; attempt <= this.retryLimit; attempt++) {
+      signal?.throwIfAborted();
       let raw: Awaited<ReturnType<Generate>>;
       try {
         raw = await this.generate({
@@ -59,6 +60,7 @@ export class Reviewer {
           ...(signal ? { abortSignal: signal } : {}),
         });
       } catch (error) {
+        signal?.throwIfAborted();
         lastError = error;
         continue;
       }

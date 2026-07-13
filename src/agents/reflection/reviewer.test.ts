@@ -54,6 +54,30 @@ describe("Reviewer", () => {
     expect(generate.mock.calls[1]?.[0]).not.toHaveProperty("abortSignal");
   });
 
+  it("throws the abort reason before generation when already aborted", async () => {
+    const reason = new Error("cancel before review");
+    const controller = new AbortController();
+    controller.abort(reason);
+    const generate = vi.fn();
+    const reviewer = new Reviewer({ model, generate, retryLimit: 3 });
+
+    await expect(reviewer.review(request, controller.signal)).rejects.toBe(reason);
+    expect(generate).not.toHaveBeenCalled();
+  });
+
+  it("throws the abort reason without retrying after generation is cancelled", async () => {
+    const reason = new Error("cancel active review");
+    const controller = new AbortController();
+    const generate = vi.fn().mockImplementation(async () => {
+      controller.abort(reason);
+      throw new Error("provider aborted");
+    });
+    const reviewer = new Reviewer({ model, generate, retryLimit: 3 });
+
+    await expect(reviewer.review(request, controller.signal)).rejects.toBe(reason);
+    expect(generate).toHaveBeenCalledOnce();
+  });
+
   it("retries invalid JSON and records usage for every completed generation", async () => {
     const generate = vi.fn()
       .mockResolvedValueOnce({ text: "invalid", usage: { totalTokens: 3 } })
