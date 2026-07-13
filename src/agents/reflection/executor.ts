@@ -225,7 +225,7 @@ export class ReflectiveExecutor<T> {
   }
 }
 
-function sameTask(left: ReflectionTask, right: ReflectionTask) {
+export function sameTask(left: ReflectionTask, right: ReflectionTask) {
   return left.objective === right.objective && left.constraints.length === right.constraints.length && left.constraints.every((value, index) => value === right.constraints[index]);
 }
 

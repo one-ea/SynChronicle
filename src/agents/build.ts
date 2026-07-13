@@ -12,7 +12,7 @@ import { ContextManager } from "./context.js";
 import { createCoordinator } from "./coordinator.js";
 import { createEditor } from "./editor.js";
 import { createWriter } from "./writer.js";
-import { ReflectiveExecutor, Reviewer, type AgentRole, type ReflectionEvent, type ReflectionExecutionState } from "./reflection/index.js";
+import { ReflectiveExecutor, Reviewer, sameTask, type AgentRole, type ReflectionEvent, type ReflectionExecutionState, type ReflectionTask } from "./reflection/index.js";
 
 export type UsageRecorder = (agentName: string, usage: unknown) => void;
 export type FlowBoundaryHook = (toolName: string) => void;
@@ -41,11 +41,12 @@ export async function commitReflectionCandidate(store: Store, staging: StagingSe
   if (deliverCompletion(committed, agent, emit)) await staging.saveState({ ...committed, phase: "completed" });
 }
 
-export async function coordinateReflectionRecovery(store: Store, staging: StagingSession, stateId: string, agent: string, emit?: (event: IntegratedReflectionEvent) => void) {
+export async function coordinateReflectionRecovery(store: Store, staging: StagingSession, stateId: string, task: ReflectionTask, agent: string, emit?: (event: IntegratedReflectionEvent) => void) {
   await recoverReflectionCommit(store, staging, agent, emit);
   const commit = await staging.loadState<ReflectionCommitState>();
   const execution = await store.staging.loadState<ReflectionExecutionState<GenerateResult>>(stateId);
   if (commit?.phase !== "completed" || execution?.status !== "selected" || !execution.selectedResult) return null;
+  if (!sameTask(execution.task, task)) throw new Error("current request does not match persisted reflection task");
   if (commit.executionId && commit.executionId !== execution.executionId) throw new Error("completed reflection commit does not match selected execution");
   const selectedIds = execution.selectedResult.stagedArtifactIds ?? [];
   if (selectedIds.length !== commit.candidateIds.length || selectedIds.some((id, index) => id !== commit.candidateIds[index])) throw new Error("completed reflection commit artifacts do not match selected execution");
@@ -93,7 +94,7 @@ export function buildCoordinator(
       async execute(task, generate) {
         const staging = await store.staging.createSession(`${name}-active`);
         const stateId = `${name}-execution`;
-        const recovered = await coordinateReflectionRecovery(store, staging, stateId, name, onReflectionEvent);
+        const recovered = await coordinateReflectionRecovery(store, staging, stateId, task, name, onReflectionEvent);
         if (recovered) return recovered;
         const savedState = await store.staging.loadState<ReflectionExecutionState<GenerateResult>>(stateId);
         const executionId = savedState && savedState.status !== "completed" ? savedState.executionId : randomUUID();

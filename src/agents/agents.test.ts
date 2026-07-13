@@ -298,11 +298,26 @@ describe("buildCoordinator", () => {
     await store.staging.saveState("writer-execution", { executionId: "exec-window", status: "selected", task: { objective: "write", constraints: [] }, nextRound: 2, candidates: [], revisionInstructions: [], priorIssues: [], selectedResult });
     const events: unknown[] = [];
 
-    const resumed = await coordinateReflectionRecovery(store, staging, "writer-execution", "writer", (event) => events.push(event));
+    const resumed = await coordinateReflectionRecovery(store, staging, "writer-execution", { objective: "write", constraints: [] }, "writer", (event) => events.push(event));
 
     expect(resumed).toEqual(selectedResult);
     expect((await store.staging.loadState<{ status: string }>("writer-execution"))?.status).toBe("completed");
     expect(events).toEqual([]);
+  });
+
+  it("does not return or advance a completed result for a different current task", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "synchronicle-reflection-task-mismatch-"));
+    const store = new Store(dir);
+    await store.init();
+    const staging = await store.staging.createSession("task-mismatch");
+    const completion = { type: "reflection.completed" as const, rounds: 1, score: 90, passed: true };
+    await staging.saveState({ phase: "completed", candidateIds: ["artifact-a"], completion, executionId: "exec-a" });
+    const selectedResult = { executionId: "exec-a", output: generated("A"), rounds: 1, finalReview: { score: 90, passed: true, summary: "ok", issues: [], revisionInstructions: [] }, stagedArtifactIds: ["artifact-a"] };
+    await store.staging.saveState("writer-execution", { executionId: "exec-a", status: "selected", task: { objective: "task A", constraints: ["A"] }, nextRound: 2, candidates: [], revisionInstructions: [], priorIssues: [], selectedResult });
+
+    await expect(coordinateReflectionRecovery(store, staging, "writer-execution", { objective: "task B", constraints: ["B"] }, "writer")).rejects.toThrow("does not match persisted reflection task");
+
+    expect((await store.staging.loadState<{ status: string }>("writer-execution"))?.status).toBe("selected");
   });
 
   it("wraps specialist agents and keeps coordinator direct", async () => {
