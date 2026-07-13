@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ReflectionConfigSchema, ReviewResultSchema } from "./schemas.js";
+import { parseReflectionExecutionState, ReflectionConfigSchema, ReviewResultSchema } from "./schemas.js";
 
 const reviewResult = (score: number) => ({
   score,
@@ -7,6 +7,12 @@ const reviewResult = (score: number) => ({
   summary: "ready",
   issues: [],
   revisionInstructions: [],
+});
+
+it("diagnoses unknown versions and extra fields in persisted execution state", () => {
+  const base = { version: 1, executionId: "exec", status: "running", task: { objective: "write", constraints: [] }, nextRound: 1, candidates: [], revisionInstructions: [], priorIssues: [] };
+  expect(() => parseReflectionExecutionState({ ...base, version: 2 })).toThrow(/schema\/version invalid/);
+  expect(() => parseReflectionExecutionState({ ...base, unexpected: true })).toThrow(/schema\/version invalid/);
 });
 
 describe("reflection schemas", () => {

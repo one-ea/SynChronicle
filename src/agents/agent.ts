@@ -8,7 +8,8 @@ export type GenerateResult = Awaited<ReturnType<typeof generateText>>;
 export interface AgentExecutor {
   execute(
     task: { objective: string; constraints: string[] },
-    generate: (prompt: string) => Promise<GenerateResult>,
+    generate: (prompt: string, signal?: AbortSignal) => Promise<GenerateResult>,
+    signal?: AbortSignal,
   ): Promise<{ executionId?: string; output: GenerateResult; qualityRisk?: unknown; finalReview?: unknown; rounds?: number; stagedArtifactIds?: string[] }>;
 }
 
@@ -34,6 +35,7 @@ export class Agent {
   private readonly executor?: AgentExecutor;
   private lastReflection: { executionId?: string; status: "running" | "completed" | "failed"; qualityRisk?: unknown; finalReview?: unknown; rounds?: number } | null = null;
   private history: ModelMessage[] = [];
+  private executionQueue: Promise<void> = Promise.resolve();
 
   constructor({ name, model, system, tools = {}, context = new ContextManager({ window: 200000 }), maxSteps = 20, onUsage, executor }: AgentOptions) {
     this.name = name;
@@ -68,18 +70,26 @@ export class Agent {
 
   reflectionMetadata() { return structuredClone(this.lastReflection); }
 
-  async generate(prompt: string) {
-    if (!this.executor) return this.generateDirect(prompt);
+  generate(prompt: string, signal?: AbortSignal) {
+    const operation = this.executionQueue.then(() => this.generateUnlocked(prompt, signal));
+    this.executionQueue = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
+
+  private async generateUnlocked(prompt: string, signal?: AbortSignal) {
+    signal?.throwIfAborted();
+    if (!this.executor) return this.generateDirect(prompt, signal);
     const baseline = structuredClone(this.history);
     this.lastReflection = { executionId: crypto.randomUUID(), status: "running" };
     let result: Awaited<ReturnType<AgentExecutor["execute"]>>;
     try {
       result = await this.executor.execute(
         { objective: prompt, constraints: [] },
-        async (revisionPrompt) => {
+        async (revisionPrompt, executionSignal) => {
           this.history = structuredClone(baseline);
-          return this.generateDirect(revisionPrompt);
+          return this.generateDirect(revisionPrompt, executionSignal);
         },
+        signal,
       );
     } catch (error) {
       this.history = baseline;
@@ -91,17 +101,19 @@ export class Agent {
     return result.output;
   }
 
-  private async generateDirect(prompt: string) {
+  private async generateDirect(prompt: string, signal?: AbortSignal) {
     const messages = await this.prepare(prompt);
-    const result = await generateText({ model: this.model, system: this.system, messages, tools: this.tools, stopWhen: stepCountIs(this.maxSteps) });
+    signal?.throwIfAborted();
+    const result = await generateText({ model: this.model, system: this.system, messages, tools: this.tools, stopWhen: stepCountIs(this.maxSteps), ...(signal ? { abortSignal: signal } : {}) });
+    signal?.throwIfAborted();
     this.history.push({ role: "assistant", content: result.text });
     this.onUsage?.(this.name, result.usage);
     return result;
   }
 
-  stream(prompt: string) {
+  stream(prompt: string, signal?: AbortSignal) {
     if (this.executor) {
-      const completed = this.generate(prompt);
+      const completed = this.generate(prompt, signal);
       const textStream = (async function* () {
         const result = await completed;
         yield result.text;
@@ -109,7 +121,7 @@ export class Agent {
       return { textStream, completed };
     }
     const prepared = this.prepare(prompt);
-    const resultPromise = prepared.then((messages) => streamText({ model: this.model, system: this.system, messages, tools: this.tools, stopWhen: stepCountIs(this.maxSteps) }));
+    const resultPromise = prepared.then((messages) => { signal?.throwIfAborted(); return streamText({ model: this.model, system: this.system, messages, tools: this.tools, stopWhen: stepCountIs(this.maxSteps), ...(signal ? { abortSignal: signal } : {}) }); });
     const textStream = (async function* () {
       const result = await resultPromise;
       yield* result.textStream;

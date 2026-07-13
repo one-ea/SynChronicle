@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { normalizeUsage, UsageTracker } from "./usage.js";
 
 describe("UsageTracker", () => {
@@ -45,5 +45,28 @@ describe("UsageTracker", () => {
 
     expect(tracker.snapshot().overall.latency_ms).toBe(9);
     expect(tracker.snapshot().per_agent.reviewer?.latency_ms).toBe(9);
+  });
+
+  it("queues an incremental durable save after every record", async () => {
+    const save = vi.fn(async (_state: ReturnType<UsageTracker["snapshot"]>) => {});
+    const tracker = new UsageTracker(save);
+    tracker.record("writer", { inputTokens: 2, outputTokens: 3, totalCost: 0.4, latencyMs: 5 });
+    tracker.record("reviewer", { inputTokens: 7, totalCost: 0.2, latencyMs: 9 });
+    await tracker.flush();
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(save.mock.calls[1]![0].overall).toMatchObject({ input: 9, output: 3, latency_ms: 14 });
+    expect(save.mock.calls[1]![0].overall.cost_usd).toBeCloseTo(0.6);
+  });
+
+  it("continues persisting later snapshots after an earlier save failure", async () => {
+    const save = vi.fn()
+      .mockRejectedValueOnce(new Error("disk unavailable"))
+      .mockResolvedValueOnce(undefined);
+    const tracker = new UsageTracker(save);
+    tracker.record("writer", { inputTokens: 2 });
+    tracker.record("reviewer", { outputTokens: 3 });
+    await expect(tracker.flush()).rejects.toThrow("disk unavailable");
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(save.mock.calls[1]![0].overall).toMatchObject({ input: 2, output: 3 });
   });
 });

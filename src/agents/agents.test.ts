@@ -163,6 +163,25 @@ describe("Agent", () => {
     expect(agent.reflectionMetadata()).toMatchObject({ status: "failed" });
     expect(agent.reflectionMetadata()).not.toHaveProperty("rounds");
   });
+
+  it("serializes concurrent reflected executions on the same agent", async () => {
+    let active = 0;
+    let maximum = 0;
+    const executor = { execute: async (task: { objective: string }, generate: (prompt: string) => Promise<ReturnType<typeof generated>>) => {
+      active++;
+      maximum = Math.max(maximum, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const output = await generate(task.objective);
+      active--;
+      return { output };
+    } };
+    const agent = createAgent({ name: "writer", model: mockModel({ generate: async (options) => generated(JSON.stringify(options.prompt)) }), system: "system", executor: executor as never });
+
+    await Promise.all([agent.generate("first"), agent.generate("second")]);
+
+    expect(maximum).toBe(1);
+    expect(agent.messages()).toHaveLength(4);
+  });
 });
 
 describe("ContextManager", () => {
@@ -245,8 +264,23 @@ describe("buildCoordinator", () => {
 
     await commitReflectionCandidate(store, staging, "writer", ids, completion, (event) => events.push(event));
 
-    expect(await staging.loadState()).toEqual({ phase: "completed", candidateIds: ids, completion });
+    expect(await staging.loadState()).toEqual({ version: 1, phase: "completed", candidateIds: ids, completion });
     expect(events).toEqual([{ ...completion, agent: "writer" }]);
+  });
+
+  it("waits for completion persistence acknowledgement before marking the commit completed", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "synchronicle-reflection-ack-"));
+    const store = new Store(dir);
+    await store.init();
+    const staging = await store.staging.createSession("ack");
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const completion = { type: "reflection.completed" as const, rounds: 1, score: 90, passed: true };
+    const committing = commitReflectionCandidate(store, staging, "writer", [], completion, async () => gate);
+    await vi.waitFor(async () => expect((await staging.loadState<{ phase: string }>())?.phase).toBe("committed"));
+    release();
+    await committing;
+    expect((await staging.loadState<{ phase: string }>())?.phase).toBe("completed");
   });
 
   it("recovers a persisted in-flight reflection commit before emitting completion", async () => {
@@ -258,13 +292,13 @@ describe("buildCoordinator", () => {
     const staging = await store.staging.createSession("recovery");
     const ids = await transaction.stage(staging, 1);
     const completion = { type: "reflection.completed" as const, rounds: 2, score: 88, passed: true };
-    await staging.saveState({ phase: "committing", candidateIds: ids, completion });
+    await staging.saveState({ version: 1, phase: "committing", candidateIds: ids, completion });
     const events: unknown[] = [];
 
     await recoverReflectionCommit(store, staging, "writer", (event) => events.push(event));
 
     expect(await store.drafts.loadDraft(1)).toBe("recovered");
-    expect(await staging.loadState()).toEqual({ phase: "completed", candidateIds: ids, completion });
+    expect(await staging.loadState()).toEqual({ version: 1, phase: "completed", candidateIds: ids, completion });
     expect(events).toEqual([{ ...completion, agent: "writer" }]);
   });
 
@@ -293,9 +327,9 @@ describe("buildCoordinator", () => {
     await store.init();
     const staging = await store.staging.createSession("completed-window");
     const completion = { type: "reflection.completed" as const, rounds: 1, score: 90, passed: true };
-    await staging.saveState({ phase: "completed", candidateIds: ["artifact-1"], completion, executionId: "exec-window" });
+    await staging.saveState({ version: 1, phase: "completed", candidateIds: ["artifact-1"], completion, executionId: "exec-window" });
     const selectedResult = { executionId: "exec-window", output: generated("selected"), rounds: 1, finalReview: { score: 90, passed: true, summary: "ok", issues: [], revisionInstructions: [] }, stagedArtifactIds: ["artifact-1"] };
-    await store.staging.saveState("writer-execution", { executionId: "exec-window", status: "selected", task: { objective: "write", constraints: [] }, nextRound: 2, candidates: [], revisionInstructions: [], priorIssues: [], selectedResult });
+    await store.staging.saveState("writer-execution", { version: 1, executionId: "exec-window", status: "selected", task: { objective: "write", constraints: [] }, nextRound: 2, candidates: [], revisionInstructions: [], priorIssues: [], selectedResult });
     const events: unknown[] = [];
 
     const resumed = await coordinateReflectionRecovery(store, staging, "writer-execution", { objective: "write", constraints: [] }, "writer", (event) => events.push(event));
@@ -311,13 +345,22 @@ describe("buildCoordinator", () => {
     await store.init();
     const staging = await store.staging.createSession("task-mismatch");
     const completion = { type: "reflection.completed" as const, rounds: 1, score: 90, passed: true };
-    await staging.saveState({ phase: "completed", candidateIds: ["artifact-a"], completion, executionId: "exec-a" });
+    await staging.saveState({ version: 1, phase: "completed", candidateIds: ["artifact-a"], completion, executionId: "exec-a" });
     const selectedResult = { executionId: "exec-a", output: generated("A"), rounds: 1, finalReview: { score: 90, passed: true, summary: "ok", issues: [], revisionInstructions: [] }, stagedArtifactIds: ["artifact-a"] };
-    await store.staging.saveState("writer-execution", { executionId: "exec-a", status: "selected", task: { objective: "task A", constraints: ["A"] }, nextRound: 2, candidates: [], revisionInstructions: [], priorIssues: [], selectedResult });
+    await store.staging.saveState("writer-execution", { version: 1, executionId: "exec-a", status: "selected", task: { objective: "task A", constraints: ["A"] }, nextRound: 2, candidates: [], revisionInstructions: [], priorIssues: [], selectedResult });
 
     await expect(coordinateReflectionRecovery(store, staging, "writer-execution", { objective: "task B", constraints: ["B"] }, "writer")).rejects.toThrow("does not match persisted reflection task");
 
     expect((await store.staging.loadState<{ status: string }>("writer-execution"))?.status).toBe("selected");
+  });
+
+  it("diagnoses invalid reflection commit state versions", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "synchronicle-reflection-commit-schema-"));
+    const store = new Store(dir);
+    await store.init();
+    const staging = await store.staging.createSession("invalid-version");
+    await staging.saveState({ version: 2, phase: "committed", candidateIds: [], completion: { type: "reflection.completed", rounds: 1, score: 90, passed: true } });
+    await expect(recoverReflectionCommit(store, staging, "writer")).rejects.toThrow(/commit state schema\/version invalid/);
   });
 
   it("wraps specialist agents and keeps coordinator direct", async () => {
@@ -341,7 +384,7 @@ describe("buildCoordinator", () => {
     expect(built.agents.editor.reflectionEnabled).toBe(true);
   });
 
-  it("returns the best reviewed candidate when the runtime budget ends before revision", async () => {
+  it("stops before reviewer when hard-stop budget ends after candidate execution", async () => {
     const dir = await mkdtemp(join(tmpdir(), "synchronicle-reflection-budget-"));
     const store = new Store(dir);
     await store.init();
@@ -350,6 +393,7 @@ describe("buildCoordinator", () => {
       model: "mock-model",
       providers: { mock: { type: "openai", api_key: "test" } },
       roles: {},
+      budget: { book_usd: 1, hard_stop: true },
       reflection: { enabled: true, max_rounds: 3, pass_threshold: 85 },
     };
     let calls = 0;
@@ -364,14 +408,9 @@ describe("buildCoordinator", () => {
     const hasBudget = vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(false);
     const built = buildCoordinator(config, store, new ModelSet(config, () => model), { prompts: {} }, undefined, undefined, undefined, undefined, undefined, hasBudget);
 
-    const result = await built.agents.writer.generate("write");
-
-    expect(result.text).toBe("first candidate");
-    expect(built.agents.writer.reflectionMetadata()).toMatchObject({
-      status: "completed",
-      rounds: 1,
-      qualityRisk: { code: "budget_exhausted", score: 70 },
-    });
+    await expect(built.agents.writer.generate("write")).rejects.toThrow(/before any candidate was reviewed/);
+    expect(calls).toBe(1);
+    expect(built.agents.writer.reflectionMetadata()).toMatchObject({ status: "failed" });
     expect(hasBudget).toHaveBeenCalledTimes(2);
   });
 });

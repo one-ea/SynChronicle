@@ -21,6 +21,7 @@ export interface ReviewerOptions {
   onUsage?: (name: string, usage: unknown) => void;
   onUsageError?: (error: unknown) => void;
   now?: () => number;
+  canContinue?: () => boolean;
 }
 
 export class ReviewerError extends Error {
@@ -37,8 +38,9 @@ export class Reviewer {
   private readonly onUsage?: ReviewerOptions["onUsage"];
   private readonly onUsageError?: ReviewerOptions["onUsageError"];
   private readonly now: () => number;
+  private readonly canContinue: () => boolean;
 
-  constructor({ model, generate = generateText, retryLimit = 2, onUsage, onUsageError, now = () => performance.now() }: ReviewerOptions) {
+  constructor({ model, generate = generateText, retryLimit = 2, onUsage, onUsageError, now = () => performance.now(), canContinue = () => true }: ReviewerOptions) {
     if (!Number.isInteger(retryLimit) || retryLimit < 0 || retryLimit > 3) {
       throw new RangeError("retryLimit must be an integer between 0 and 3");
     }
@@ -48,6 +50,7 @@ export class Reviewer {
     this.onUsage = onUsage;
     this.onUsageError = onUsageError;
     this.now = now;
+    this.canContinue = canContinue;
   }
 
   async review(request: ReviewRequest, signal?: AbortSignal): Promise<ReviewResult> {
@@ -55,6 +58,7 @@ export class Reviewer {
 
     for (let attempt = 0; attempt <= this.retryLimit; attempt++) {
       signal?.throwIfAborted();
+      if (!this.canContinue()) throw new ReviewerError("review stopped by budget policy", { cause: lastError });
       let raw: Awaited<ReturnType<Generate>>;
       const startedAt = this.now();
       try {

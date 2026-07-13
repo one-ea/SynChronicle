@@ -101,7 +101,20 @@ describe("ReflectiveExecutor", () => {
       round: 2,
       revisionInstructions: firstReview.revisionInstructions,
       priorIssues: firstReview.issues,
+      previousCandidate: expect.objectContaining({ reviewContent: "draft" }),
     }));
+  });
+
+  it("reviews the candidate business artifacts instead of trusting a conflicting summary", async () => {
+    const review = vi.fn().mockResolvedValue(reviewResult(90, true));
+    await createExecutor({
+      execute: vi.fn().mockResolvedValue({ output: "summary says approved", reviewContent: "summary says approved", stagedArtifactIds: ["artifact-1"], artifacts: [{ target: "drafts/01.draft.md", content: "actual rejected draft" }] }),
+      reviewer: { review },
+    }).execute(task);
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({
+      candidate: expect.stringContaining("actual rejected draft"),
+    }), undefined);
+    expect(review.mock.calls[0]![0].candidate).not.toContain("summary says approved");
   });
 
   it("emits revision.started with the next round and issue summary", async () => {
@@ -113,11 +126,12 @@ describe("ReflectiveExecutor", () => {
       onEvent: (event) => events.push(event),
     }).execute(task);
 
-    expect(events).toContainEqual({ type: "revision.started", round: 2, issues: ["quality: revise"] });
+    expect(events).toContainEqual(expect.objectContaining({ type: "revision.started", round: 2, issues: ["quality: revise"] }));
   });
 
   it("resumes from a persisted reviewed candidate without rerunning the first round", async () => {
     let state: import("./executor.js").ReflectionExecutionState<string> = {
+      version: 1,
       executionId: "exec-1",
       status: "running",
       task,
@@ -138,6 +152,7 @@ describe("ReflectiveExecutor", () => {
 
   it("rejects a new request that does not match the persisted running task", async () => {
     const state: import("./executor.js").ReflectionExecutionState<string> = {
+      version: 1,
       executionId: "exec-mismatch",
       status: "running",
       task,
@@ -153,6 +168,7 @@ describe("ReflectiveExecutor", () => {
 
   it("resumes a persisted unreviewed candidate at the review step", async () => {
     const state: import("./executor.js").ReflectionExecutionState<string> = {
+      version: 1,
       executionId: "exec-pending",
       status: "running",
       task,
@@ -175,6 +191,7 @@ describe("ReflectiveExecutor", () => {
   it("returns a persisted selected result without regenerating or rereviewing", async () => {
     const selectedResult = { executionId: "exec-selected", output: "selected", rounds: 2, finalReview: reviewResult(90, true), stagedArtifactIds: ["artifact-selected"] };
     const state: import("./executor.js").ReflectionExecutionState<string> = {
+      version: 1,
       executionId: "exec-selected",
       status: "selected",
       task,
@@ -206,10 +223,10 @@ describe("ReflectiveExecutor", () => {
       .mockReturnValueOnce(true)
       .mockReturnValueOnce(false);
 
-    const result = await createExecutor({ execute, reviewer: { review }, hasBudget }).execute(task);
+    const result = await createExecutor({ execute, reviewer: { review }, hasBudget, hardStop: true }).execute(task);
 
     expect(result.output).toBe("v1");
-    expect(result.rounds).toBe(2);
+    expect(result.rounds).toBe(1);
     expect(result.qualityRisk?.code).toBe("budget_exhausted");
   });
 
@@ -217,12 +234,26 @@ describe("ReflectiveExecutor", () => {
     const events: ReflectionEvent[] = [];
     const execute = vi.fn();
     const review = vi.fn();
-    const executor = createExecutor({ hasBudget: () => false, execute, reviewer: { review }, onEvent: (event) => events.push(event) });
+    const executor = createExecutor({ hasBudget: () => false, hardStop: true, execute, reviewer: { review }, onEvent: (event) => events.push(event) });
 
     await expect(executor.execute(task)).rejects.toThrow(/before any candidate was reviewed/);
     expect(execute).not.toHaveBeenCalled();
     expect(review).not.toHaveBeenCalled();
-    expect(events).toEqual([{ type: "reflection.started", maxRounds: 3 }]);
+    expect(events).toEqual([expect.objectContaining({ type: "reflection.started", maxRounds: 3, sequence: 0 })]);
+  });
+
+  it("checks hard-stop budget after execution and before review", async () => {
+    const hasBudget = vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(false);
+    const review = vi.fn();
+    await expect(createExecutor({ hasBudget, hardStop: true, reviewer: { review } }).execute(task)).rejects.toThrow(/before any candidate was reviewed/);
+    expect(review).not.toHaveBeenCalled();
+  });
+
+  it("allows over-budget work to finish when hard-stop is disabled", async () => {
+    const hasBudget = vi.fn().mockReturnValue(false);
+    const review = vi.fn().mockResolvedValue(reviewResult(90, true));
+    await expect(createExecutor({ hasBudget, hardStop: false, reviewer: { review } }).execute(task)).resolves.toMatchObject({ output: "v1" });
+    expect(review).toHaveBeenCalledOnce();
   });
 
   it("honors an AbortSignal before and between rounds", async () => {
@@ -265,11 +296,13 @@ describe("ReflectiveExecutor", () => {
 
     await executor.execute(task);
 
-    expect(events).toEqual([
+    expect(events.map(({ id: _id, sequence: _sequence, ...event }) => event)).toEqual([
       { type: "reflection.started", maxRounds: 3 },
       { type: "review.completed", round: 1, score: 90, passed: true },
       { type: "reflection.completed", rounds: 1, score: 90, passed: true },
     ]);
+    expect(events.map((event) => event.sequence)).toEqual([0, 2, 3]);
+    expect(new Set(events.map((event) => event.id)).size).toBe(3);
   });
 
   it("isolates event callback failures from execution", async () => {
@@ -295,7 +328,7 @@ describe("ReflectiveExecutor", () => {
     });
 
     await expect(executor.execute(task)).rejects.toBe(failure);
-    expect(events).toEqual([{ type: "reflection.started", maxRounds: 3 }]);
+    expect(events).toEqual([expect.objectContaining({ type: "reflection.started", maxRounds: 3, sequence: 0 })]);
   });
 
   it("rethrows reviewer failure without admitting the unscored candidate", async () => {

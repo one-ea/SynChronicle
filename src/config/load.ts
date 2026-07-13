@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { ConfigSchema, ProviderConfigSchema, RoleConfigSchema, BudgetConfigSchema, NotifyConfigSchema, type ConfigInput, type PartialConfig, type ProviderConfig, type ResolvedConfig, type RoleConfig } from "./schemas.js";
 import { z } from "zod";
+import { ReflectionConfigSchema } from "../agents/reflection/schemas.js";
 
 const ConfigFileSchema = z.object({
   output_dir: z.string().optional(),
@@ -15,6 +16,7 @@ const ConfigFileSchema = z.object({
   context_window: z.number().int().optional(),
   budget: BudgetConfigSchema.optional(),
   notify: NotifyConfigSchema.optional(),
+  reflection: ReflectionConfigSchema.removeDefault().partial().optional(),
 });
 
 const configDirName = ".synchronicle";
@@ -119,6 +121,7 @@ export function mergeConfig(base: PartialConfig, overlay: PartialConfig): Resolv
   }
   if (overlay.budget !== undefined) result.budget = { ...overlay.budget };
   if (overlay.notify !== undefined) result.notify = { ...overlay.notify };
+  if (overlay.reflection !== undefined) result.reflection = { ...(base.reflection ?? {}), ...overlay.reflection };
   return ConfigSchema.parse(result);
 }
 

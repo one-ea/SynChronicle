@@ -10,6 +10,8 @@ export interface ReflectionCandidate<T> {
   output: T;
   review: ReviewResult;
   stagedArtifactIds: string[];
+  reviewContent?: string;
+  artifacts?: Array<{ target: string; content: string }>;
 }
 
 export interface QualityRisk {

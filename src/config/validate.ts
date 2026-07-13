@@ -1,6 +1,6 @@
 import { ConfigSchema, type PartialConfig, type ResolvedConfig } from "./schemas.js";
 
-const knownRoles = new Set(["coordinator", "architect", "writer", "editor"]);
+const knownRoles = new Set(["coordinator", "architect", "writer", "editor", "reviewer"]);
 const knownProviders = new Set(["openai", "anthropic", "gemini", "openrouter", "deepseek", "qwen", "glm", "grok", "mimo", "ollama", "bedrock"]);
 const knownNotifyEvents = new Set(["run_end", "repeat", "budget"]);
 
@@ -57,6 +57,11 @@ export function validateConfig(input: PartialConfig): void {
       if (!fallback.provider || !fallback.model) throw new Error(`role ${JSON.stringify(role)} fallback[${index}] must have both provider and model`);
       validateProvider(fallback.provider, `role ${JSON.stringify(role)} fallback[${index}]`, cfg);
     }
+  }
+  if (cfg.reflection.reviewer_model) {
+    const separator = cfg.reflection.reviewer_model.indexOf("/");
+    if (separator > 0) validateProvider(cfg.reflection.reviewer_model.slice(0, separator), "reflection.reviewer_model", cfg);
+    validateText("reflection.reviewer_model", cfg.reflection.reviewer_model);
   }
   const budget = cfg.budget;
   if ((budget?.book_usd ?? 0) < 0) throw new Error("budget.book_usd must be >= 0");

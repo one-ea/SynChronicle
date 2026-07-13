@@ -122,6 +122,7 @@ describe("Host", () => {
     const task = { objective: "write", constraints: [] };
     const review = { score: 60, passed: false, summary: "revise", issues: [{ dimension: "quality", severity: "high" as const, evidence: "weak", recommendation: "revise" }], revisionInstructions: ["revise"] };
     const state: ReflectionExecutionState<string> = {
+      version: 1,
       executionId: "exec-resume",
       status: "running",
       task,
@@ -167,7 +168,7 @@ describe("Host", () => {
     const { value, runtimeAgent } = await host(["hello", " world"]);
     const stream = value.stream();
     await value.startPrepared("write");
-    expect(runtimeAgent.run).toHaveBeenCalledWith("write");
+    expect(runtimeAgent.run).toHaveBeenCalledWith("write", expect.any(AbortSignal));
     const chunks: string[] = [];
     for await (const chunk of stream) chunks.push(chunk);
     expect(chunks).toEqual(["hello", " world"]);
@@ -181,7 +182,7 @@ describe("Host", () => {
     await value.store.runMeta.save({ started_at: new Date().toISOString(), provider: "mock", model: "mock", style: "", planning_tier: "short", steer_history: [], pending_steer: "make it darker", pause_point: null });
     const result = await value.resume();
     expect(result.label).toContain("第 3 章");
-    expect(runtimeAgent.run).toHaveBeenCalledWith(expect.stringContaining("make it darker"));
+    expect(runtimeAgent.run).toHaveBeenCalledWith(expect.stringContaining("make it darker"), expect.any(AbortSignal));
   });
 
   it("supports continue, abort, and close lifecycle", async () => {
@@ -192,6 +193,25 @@ describe("Host", () => {
     expect(runtimeAgent.abort).toHaveBeenCalledWith("stop");
     expect(runtimeAgent.close).toHaveBeenCalled();
     expect(value.snapshot().runtimeState).toBe("closed");
+  });
+
+  it("aborts the active run signal and prevents completion", async () => {
+    let observedSignal: AbortSignal | undefined;
+    let started!: () => void;
+    const ready = new Promise<void>((resolve) => { started = resolve; });
+    const runtimeAgent: RuntimeAgent = {
+      run: async function* (_prompt, signal) { observedSignal = signal; started(); await new Promise<void>((_resolve, reject) => signal?.addEventListener("abort", () => reject(signal.reason), { once: true })); yield "late"; },
+      abort: vi.fn(),
+      close: vi.fn(),
+    };
+    const dir = await mkdtemp(join(tmpdir(), "runtime-host-abort-signal-"));
+    const value = await Host.new({ provider: "mock", model: "mock", providers: { mock: { api_key: "test" } }, roles: {}, output_dir: dir }, {}, { agent: runtimeAgent });
+    const running = value.startPrepared("write");
+    await ready;
+    value.abort("cancelled");
+    await expect(running).rejects.toThrow("cancelled");
+    expect(observedSignal?.aborted).toBe(true);
+    expect(value.snapshot().runtimeState).toBe("paused");
   });
 
   it("imports text, exports txt/epub, and runs simulation", async () => {

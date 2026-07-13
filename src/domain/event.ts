@@ -10,7 +10,7 @@ export const ReflectionRuntimePayloadSchema = z.discriminatedUnion("phase", [
   z.object({ phase: z.literal("revision_started"), round: z.number().int().positive(), issues: z.array(z.string()) }).strict(),
   z.object({ phase: z.literal("completed"), rounds: z.number().int().nonnegative(), score: z.number(), passed: z.boolean() }).strict(),
 ]); export type ReflectionRuntimePayload = z.infer<typeof ReflectionRuntimePayloadSchema>;
-const RuntimeEventFields = { time: z.string().optional(), agent: z.string().optional(), message: z.string().optional() };
+const RuntimeEventFields = { id: z.string().optional(), sequence: z.number().int().nonnegative().optional(), time: z.string().optional(), agent: z.string().optional(), message: z.string().optional() };
 const genericEvent = (type: Exclude<RuntimeEventKind, "reflection">) => z.object({ type: z.literal(type), ...RuntimeEventFields, payload: z.unknown().optional() }).strict();
 export const SystemEventSchema = genericEvent("system"); export type SystemEvent = z.infer<typeof SystemEventSchema>;
 export const ToolEventSchema = z.object({ type: z.literal("tool"), ...RuntimeEventFields, payload: z.unknown().optional(), tool: z.string() }).strict(); export type ToolEvent = z.infer<typeof ToolEventSchema>;

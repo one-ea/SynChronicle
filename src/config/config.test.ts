@@ -94,6 +94,16 @@ describe("config schemas and validation", () => {
     expect(() => validateConfig({ ...baseConfig, budget: { book_usd: 1, warn_ratio: 1 } })).toThrow(/warn_ratio/);
     expect(() => validateConfig({ ...baseConfig, notify: { events: ["unknown"] } })).toThrow(/notify event/);
   });
+
+  it("validates reviewer fallbacks and an explicit reflection reviewer provider", () => {
+    expect(() => validateConfig({
+      ...baseConfig,
+      providers: { ...baseConfig.providers, backup: { type: "openai" } },
+      roles: { reviewer: { provider: "openrouter", model: "review", fallbacks: [{ provider: "backup", model: "review-backup" }] } },
+      reflection: { reviewer_model: "backup/review-explicit" },
+    })).not.toThrow();
+    expect(() => validateConfig({ ...baseConfig, reflection: { reviewer_model: "missing/review" } })).toThrow(/reflection\.reviewer_model/);
+  });
 });
 
 describe("config loading and merging", () => {
@@ -107,21 +117,24 @@ describe("config loading and merging", () => {
       reasoning_effort: "low",
       providers: { openrouter: { api_key: "global-key", api: "chat", extra_body: { temperature: 1 } } },
       roles: { writer: { provider: "openrouter", model: "global-model", reasoning_effort: "low" } },
+      reflection: { enabled: true, max_rounds: 2, pass_threshold: 70 },
     });
     await writeJson(join(project, ".synchronicle", "config.json"), {
       model: "project-model",
       providers: { openrouter: { base_url: "https://project.example/v1", extra_body: { min_p: 0.1 } } },
       roles: { writer: { model: "project-writer" } },
       budget: { book_usd: 10 },
+      reflection: { pass_threshold: 80, review_retry_limit: 1 },
     });
     const flag = join(project, "override.jsonc");
-    await writeFile(flag, `{// flag wins\n"style":"suspense","context_window":300000}`, "utf8");
+    await writeFile(flag, `{// flag wins\n"style":"suspense","context_window":300000,"reflection":{"enabled":false,"reviewer_model":"openrouter/reviewer"}}`, "utf8");
 
     const cfg = await loadConfig(flag);
     expect(cfg).toMatchObject({ provider: "openrouter", model: "project-model", style: "suspense", context_window: 300000 });
     expect(cfg.providers.openrouter).toMatchObject({ api_key: "global-key", base_url: "https://project.example/v1", extra_body: { min_p: 0.1 } });
     expect(cfg.roles.writer).toMatchObject({ provider: "openrouter", model: "project-writer", reasoning_effort: "low" });
     expect(cfg.budget).toEqual({ book_usd: 10, warn_ratio: 0.8, hard_stop: false });
+    expect(cfg.reflection).toEqual({ enabled: false, max_rounds: 2, pass_threshold: 80, review_retry_limit: 1, reviewer_model: "openrouter/reviewer" });
   });
 
   it("ignores corrupt global config when an explicit valid config is present", async () => {

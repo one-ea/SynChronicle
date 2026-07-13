@@ -98,6 +98,16 @@ describe("Reviewer", () => {
     expect(onUsage).toHaveBeenNthCalledWith(2, "reviewer", { totalTokens: 7, latencyMs: 15 });
   });
 
+  it("checks the budget policy before each reviewer retry", async () => {
+    const generate = vi.fn().mockResolvedValue({ text: "invalid", usage: {} });
+    const canContinue = vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(false);
+    const reviewer = new Reviewer({ model, generate, retryLimit: 2, canContinue });
+
+    await expect(reviewer.review(request)).rejects.toThrow(/budget policy/);
+    expect(generate).toHaveBeenCalledOnce();
+    expect(canContinue).toHaveBeenCalledTimes(2);
+  });
+
   it("retries output that fails the review schema", async () => {
     const generate = vi.fn()
       .mockResolvedValueOnce({ text: JSON.stringify(validReview({ score: 101 })), usage: {} })

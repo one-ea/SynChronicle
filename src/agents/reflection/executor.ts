@@ -12,6 +12,7 @@ export interface ExecutionContext {
   round: number;
   revisionInstructions: string[];
   priorIssues: ReviewIssue[];
+  previousCandidate?: ExecutionCandidate<unknown>;
   signal?: AbortSignal;
 }
 
@@ -19,15 +20,17 @@ export interface ExecutionCandidate<T> {
   output: T;
   reviewContent: string;
   stagedArtifactIds: string[];
+  artifacts?: Array<{ target: string; content: string }>;
 }
 
 export type ReflectionEvent =
-  | { type: "reflection.started"; maxRounds: number }
-  | { type: "revision.started"; round: number; issues: string[] }
-  | { type: "review.completed"; round: number; score: number; passed: boolean }
-  | { type: "reflection.completed"; rounds: number; score: number; passed: boolean };
+  | { id?: string; sequence?: number; type: "reflection.started"; maxRounds: number }
+  | { id?: string; sequence?: number; type: "revision.started"; round: number; issues: string[] }
+  | { id?: string; sequence?: number; type: "review.completed"; round: number; score: number; passed: boolean }
+  | { id?: string; sequence?: number; type: "reflection.completed"; rounds: number; score: number; passed: boolean };
 
 export interface ReflectionExecutionState<T> {
+  version: 1;
   executionId: string;
   status: "running" | "selected" | "completed";
   task: ReflectionTask;
@@ -55,7 +58,8 @@ export interface ReflectiveExecutorOptions<T> {
   maxRounds?: number;
   passThreshold?: number;
   hasBudget?: () => boolean;
-  onEvent?: (event: ReflectionEvent) => void;
+  hardStop?: boolean;
+  onEvent?: (event: ReflectionEvent) => unknown;
   onEventError?: (error: unknown) => void;
   emitCompleted?: boolean;
   executionId?: string;
@@ -69,6 +73,7 @@ export class ReflectiveExecutor<T> {
   private readonly maxRounds: number;
   private readonly passThreshold: number;
   private readonly hasBudget: () => boolean;
+  private readonly hardStop: boolean;
   private readonly onEvent?: ReflectiveExecutorOptions<T>["onEvent"];
   private readonly onEventError?: ReflectiveExecutorOptions<T>["onEventError"];
   private readonly emitCompleted: boolean;
@@ -82,6 +87,7 @@ export class ReflectiveExecutor<T> {
     maxRounds = 3,
     passThreshold = 85,
     hasBudget = () => true,
+    hardStop = false,
     onEvent,
     onEventError,
     emitCompleted = true,
@@ -100,6 +106,7 @@ export class ReflectiveExecutor<T> {
     this.maxRounds = maxRounds;
     this.passThreshold = passThreshold;
     this.hasBudget = hasBudget;
+    this.hardStop = hardStop;
     this.onEvent = onEvent;
     this.onEventError = onEventError;
     this.emitCompleted = emitCompleted;
@@ -115,7 +122,7 @@ export class ReflectiveExecutor<T> {
     if (restored?.executionId === this.executionId && restored.status === "selected" && restored.selectedResult) return restored.selectedResult;
     const state: ReflectionExecutionState<T> = restored?.executionId === this.executionId && restored.status === "running"
       ? restored
-      : { executionId: this.executionId, status: "running", task, nextRound: 1, candidates: [], revisionInstructions: [], priorIssues: [] };
+      : { version: 1, executionId: this.executionId, status: "running", task, nextRound: 1, candidates: [], revisionInstructions: [], priorIssues: [] };
     const candidates = state.candidates;
     const activeTask = state.task;
     let revisionInstructions = state.revisionInstructions;
@@ -123,26 +130,26 @@ export class ReflectiveExecutor<T> {
     const rubric = getReviewRubric(this.role, this.passThreshold);
 
     signal?.throwIfAborted();
-    this.emit({ type: "reflection.started", maxRounds: this.maxRounds });
-
     await this.stateStore?.save(state);
+    await this.emit({ type: "reflection.started", maxRounds: this.maxRounds });
     for (let round = state.nextRound; round <= this.maxRounds; round++) {
       signal?.throwIfAborted();
-      if (!this.hasBudget()) {
+      if (this.hardStop && !this.hasBudget()) {
         return this.finalizeAvailable(candidates, state, "budget_exhausted");
       }
 
-      if (round > 1) this.emit({ type: "revision.started", round, issues: priorIssues.map((issue) => `${issue.dimension}: ${issue.recommendation}`) });
+      if (round > 1) await this.emit({ type: "revision.started", round, issues: priorIssues.map((issue) => `${issue.dimension}: ${issue.recommendation}`) });
       const execution = state.pendingCandidate?.round === round
         ? state.pendingCandidate.execution
-        : await this.executeCandidate({ task: activeTask, round, revisionInstructions, priorIssues, signal });
+        : await this.executeCandidate({ task: activeTask, round, revisionInstructions, priorIssues, previousCandidate: candidates.at(-1) ? candidateSnapshot(candidates.at(-1)!) : undefined, signal });
       state.pendingCandidate = { round, execution };
       await this.stateStore?.save(state);
       signal?.throwIfAborted();
+      if (this.hardStop && !this.hasBudget()) return this.finalizeAvailable(candidates, state, "budget_exhausted");
       const rawReview = await waitForAbort(this.reviewer.review({
         objective: activeTask.objective,
         constraints: activeTask.constraints,
-        candidate: execution.reviewContent,
+        candidate: reviewCandidate(execution),
         rubric,
         priorIssues: priorIssues.map((issue) => issue.recommendation),
       }, signal), signal);
@@ -153,18 +160,21 @@ export class ReflectiveExecutor<T> {
         output: execution.output,
         review,
         stagedArtifactIds: execution.stagedArtifactIds,
+        reviewContent: execution.reviewContent,
+        artifacts: execution.artifacts,
       };
       candidates.push(candidate);
       state.pendingCandidate = undefined;
       state.nextRound = round + 1;
-      this.emit({ type: "review.completed", round, score: review.score, passed: review.passed });
-
-      if (review.passed) return this.finalizeAndSave(candidate, candidates.length, state);
       revisionInstructions = review.revisionInstructions;
       priorIssues = review.issues;
       state.revisionInstructions = revisionInstructions;
       state.priorIssues = priorIssues;
       await this.stateStore?.save(state);
+      await this.emit({ type: "review.completed", round, score: review.score, passed: review.passed });
+
+      if (review.passed) return this.finalizeAndSave(candidate, candidates.length, state);
+      if (this.hardStop && !this.hasBudget()) return this.finalizeAvailable(candidates, state, "budget_exhausted");
     }
 
     return this.finalizeAndSave(this.selectBest(candidates), candidates.length, state, "quality_threshold_unmet");
@@ -200,7 +210,6 @@ export class ReflectiveExecutor<T> {
         ? { qualityRisk: { code: riskCode, score: candidate.review.score, unresolvedIssues: candidate.review.issues } }
         : {}),
     };
-    if (this.emitCompleted) this.emit({ type: "reflection.completed", rounds, score: candidate.review.score, passed: candidate.review.passed });
     return result;
   }
 
@@ -209,12 +218,14 @@ export class ReflectiveExecutor<T> {
     state.status = "selected";
     state.selectedResult = result;
     await this.stateStore?.save(state);
+    if (this.emitCompleted) await this.emit({ type: "reflection.completed", rounds, score: candidate.review.score, passed: candidate.review.passed });
     return result;
   }
 
-  private emit(event: ReflectionEvent): void {
+  private async emit(event: ReflectionEvent): Promise<void> {
+    const stable = withStableEventIdentity(this.executionId, event);
     try {
-      this.onEvent?.(event);
+      await this.onEvent?.(stable);
     } catch (error) {
       try {
         this.onEventError?.(error);
@@ -223,6 +234,23 @@ export class ReflectiveExecutor<T> {
       }
     }
   }
+}
+
+function withStableEventIdentity(executionId: string, event: ReflectionEvent): ReflectionEvent {
+  const index = event.type === "reflection.started" ? 0
+    : event.type === "revision.started" ? event.round * 2 - 1
+      : event.type === "review.completed" ? event.round * 2
+        : event.rounds * 2 + 1;
+  return { ...event, id: `${executionId}:${index}:${event.type}`, sequence: index };
+}
+
+function reviewCandidate<T>(execution: ExecutionCandidate<T>): string {
+  if (!execution.artifacts?.length) return execution.reviewContent;
+  return JSON.stringify({ artifacts: execution.artifacts }, null, 2);
+}
+
+function candidateSnapshot<T>(candidate: ReflectionCandidate<T>): ExecutionCandidate<unknown> {
+  return { output: candidate.output, reviewContent: candidate.reviewContent ?? (typeof candidate.output === "string" ? candidate.output : JSON.stringify(candidate.output)), stagedArtifactIds: candidate.stagedArtifactIds, artifacts: candidate.artifacts };
 }
 
 export function sameTask(left: ReflectionTask, right: ReflectionTask) {
