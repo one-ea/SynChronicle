@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ReflectionConfigSchema } from "../agents/reflection/schemas.js";
 
 const JsonObjectSchema = z.record(z.unknown());
 
@@ -47,6 +48,7 @@ export const ConfigSchema = z.object({
   context_window: z.number().int().optional(),
   budget: BudgetConfigSchema.optional(),
   notify: NotifyConfigSchema.optional(),
+  reflection: ReflectionConfigSchema,
 });
 
 export type ProviderConfig = z.infer<typeof ProviderConfigSchema>;

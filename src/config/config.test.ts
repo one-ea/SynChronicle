@@ -41,6 +41,19 @@ const baseConfig = {
 };
 
 describe("config schemas and validation", () => {
+  it("applies reflection defaults and validates max rounds", () => {
+    expect(ConfigSchema.parse(baseConfig).reflection).toEqual({
+      enabled: true,
+      max_rounds: 3,
+      pass_threshold: 85,
+      review_retry_limit: 2,
+    });
+    expect(() => ConfigSchema.parse({
+      ...baseConfig,
+      reflection: { max_rounds: 4 },
+    })).toThrow();
+  });
+
   it("parses the repository JSONC example without losing compatibility fields", async () => {
     const cfg = await loadConfigFile(join(originalCwd, "config.example.jsonc"));
     expect(ConfigSchema.parse(cfg).providers.openrouter).toMatchObject({
