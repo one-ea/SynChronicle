@@ -82,6 +82,29 @@ describe("Agent", () => {
     expect(text).toBe("streamed");
     expect(agent.messages().at(-1)).toEqual({ role: "assistant", content: "streamed" });
   });
+
+  it("runs reflected streaming once and emits only the final candidate", async () => {
+    const direct = vi.fn()
+      .mockResolvedValueOnce({ text: "draft" })
+      .mockResolvedValueOnce({ text: "final" });
+    const executor = {
+      execute: vi.fn(async (_task, generate) => {
+        await generate("first");
+        return { output: await generate("revision"), rounds: 2, finalReview: { score: 90, passed: true, summary: "ok", issues: [], revisionInstructions: [] } };
+      }),
+    };
+    const agent = createAgent({ name: "writer", model: mockModel({}), system: "system", executor: executor as never });
+    Object.defineProperty(agent, "generateDirect", { value: direct });
+
+    const streamed = agent.stream("write");
+    let text = "";
+    for await (const delta of streamed.textStream) text += delta;
+
+    expect(text).toBe("final");
+    expect((await streamed.completed).text).toBe("final");
+    expect(executor.execute).toHaveBeenCalledOnce();
+    expect(direct).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("ContextManager", () => {
@@ -149,5 +172,26 @@ describe("buildCoordinator", () => {
     await built.coordinator.generate("start");
     expect(recordUsage).toHaveBeenCalledOnce();
     expect(built.coordinatorCtxMgr.reserve).toBe(8000);
+  });
+
+  it("wraps specialist agents and keeps coordinator direct", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "synchronicle-reflection-build-"));
+    const store = new Store(dir);
+    await store.init();
+    const config: Config = {
+      provider: "mock",
+      model: "mock-model",
+      providers: { mock: { type: "openai", api_key: "test" } },
+      roles: {},
+      reflection: { enabled: true },
+    };
+    const models = new ModelSet(config, () => mockModel({}));
+    const built = buildCoordinator(config, store, models, { prompts: {} });
+
+    expect(built.agents.coordinator.reflectionEnabled).toBe(false);
+    expect(built.agents.architect_short.reflectionEnabled).toBe(true);
+    expect(built.agents.architect_long.reflectionEnabled).toBe(true);
+    expect(built.agents.writer.reflectionEnabled).toBe(true);
+    expect(built.agents.editor.reflectionEnabled).toBe(true);
   });
 });

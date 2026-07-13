@@ -3,6 +3,14 @@ import type { RegisteredTool } from "../tools/registry.js";
 import { ContextManager } from "./context.js";
 
 type LanguageModelInstance = Exclude<LanguageModel, string>;
+type GenerateResult = Awaited<ReturnType<typeof generateText>>;
+
+export interface AgentExecutor {
+  execute(
+    task: { objective: string; constraints: string[] },
+    generate: (prompt: string) => Promise<GenerateResult>,
+  ): Promise<{ output: GenerateResult }>;
+}
 
 export interface AgentOptions {
   name: string;
@@ -12,6 +20,7 @@ export interface AgentOptions {
   context?: ContextManager;
   maxSteps?: number;
   onUsage?: (name: string, usage: unknown) => void;
+  executor?: AgentExecutor;
 }
 
 export class Agent {
@@ -22,15 +31,17 @@ export class Agent {
   private readonly tools: ToolSet;
   private readonly maxSteps: number;
   private readonly onUsage?: AgentOptions["onUsage"];
+  private readonly executor?: AgentExecutor;
   private history: ModelMessage[] = [];
 
-  constructor({ name, model, system, tools = {}, context = new ContextManager({ window: 200000 }), maxSteps = 20, onUsage }: AgentOptions) {
+  constructor({ name, model, system, tools = {}, context = new ContextManager({ window: 200000 }), maxSteps = 20, onUsage, executor }: AgentOptions) {
     this.name = name;
     this.model = model;
     this.system = system;
     this.context = context;
     this.maxSteps = maxSteps;
     this.onUsage = onUsage;
+    this.executor = executor;
     this.tools = Object.fromEntries(Object.entries(tools).map(([toolName, definition]) => [toolName, tool({
       description: definition.description,
       inputSchema: definition.inputSchema,
@@ -50,7 +61,20 @@ export class Agent {
     this.history = [];
   }
 
+  get reflectionEnabled(): boolean {
+    return this.executor !== undefined;
+  }
+
   async generate(prompt: string) {
+    if (!this.executor) return this.generateDirect(prompt);
+    const result = await this.executor.execute(
+      { objective: prompt, constraints: [] },
+      (revisionPrompt) => this.generateDirect(revisionPrompt),
+    );
+    return result.output;
+  }
+
+  private async generateDirect(prompt: string) {
     const messages = await this.prepare(prompt);
     const result = await generateText({ model: this.model, system: this.system, messages, tools: this.tools, stopWhen: stepCountIs(this.maxSteps) });
     this.history.push({ role: "assistant", content: result.text });
@@ -59,6 +83,14 @@ export class Agent {
   }
 
   stream(prompt: string) {
+    if (this.executor) {
+      const completed = this.generate(prompt);
+      const textStream = (async function* () {
+        const result = await completed;
+        yield result.text;
+      })();
+      return { textStream, completed };
+    }
     const prepared = this.prepare(prompt);
     const resultPromise = prepared.then((messages) => streamText({ model: this.model, system: this.system, messages, tools: this.tools, stopWhen: stepCountIs(this.maxSteps) }));
     const textStream = (async function* () {
