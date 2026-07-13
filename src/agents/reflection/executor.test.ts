@@ -136,6 +136,21 @@ describe("ReflectiveExecutor", () => {
     expect(execute).toHaveBeenCalledWith(expect.objectContaining({ round: 2 }));
   });
 
+  it("rejects a new request that does not match the persisted running task", async () => {
+    const state: import("./executor.js").ReflectionExecutionState<string> = {
+      executionId: "exec-mismatch",
+      status: "running",
+      task,
+      nextRound: 2,
+      candidates: [{ round: 1, output: "v1", review: reviewResult(60), stagedArtifactIds: ["artifact-v1"] }],
+      revisionInstructions: ["Improve 60"],
+      priorIssues: reviewResult(60).issues,
+    };
+    const executor = createExecutor({ executionId: "exec-mismatch", stateStore: { load: async () => state, save: async () => {} } });
+
+    await expect(executor.execute({ objective: "Different task", constraints: [] })).rejects.toThrow("does not match persisted reflection task");
+  });
+
   it("resumes a persisted unreviewed candidate at the review step", async () => {
     const state: import("./executor.js").ReflectionExecutionState<string> = {
       executionId: "exec-pending",

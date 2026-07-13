@@ -18,7 +18,7 @@ export type UsageRecorder = (agentName: string, usage: unknown) => void;
 export type FlowBoundaryHook = (toolName: string) => void;
 export type GuardBlockHook = (agentName: string, reason: string) => void;
 type IntegratedReflectionEvent = ReflectionEvent & { agent: string };
-type ReflectionCommitState = { phase: "committing" | "committed" | "completed"; candidateIds: string[]; completion: Extract<ReflectionEvent, { type: "reflection.completed" }> };
+type ReflectionCommitState = { phase: "committing" | "committed" | "completed"; candidateIds: string[]; completion: Extract<ReflectionEvent, { type: "reflection.completed" }>; executionId?: string };
 
 function deliverCompletion(state: ReflectionCommitState, agent: string, emit?: (event: IntegratedReflectionEvent) => void) {
   try { emit?.({ ...state.completion, agent }); return true; } catch { return false; }
@@ -33,12 +33,24 @@ export async function recoverReflectionCommit(store: Store, staging: StagingSess
   if (deliverCompletion(committed, agent, emit)) await staging.saveState({ ...committed, phase: "completed" });
 }
 
-export async function commitReflectionCandidate(store: Store, staging: StagingSession, agent: string, candidateIds: string[], completion: Extract<ReflectionEvent, { type: "reflection.completed" }>, emit?: (event: IntegratedReflectionEvent) => void) {
-  await staging.saveState({ phase: "committing", candidateIds, completion });
+export async function commitReflectionCandidate(store: Store, staging: StagingSession, agent: string, candidateIds: string[], completion: Extract<ReflectionEvent, { type: "reflection.completed" }>, emit?: (event: IntegratedReflectionEvent) => void, executionId?: string) {
+  await staging.saveState({ phase: "committing", candidateIds, completion, ...(executionId ? { executionId } : {}) });
   await store.commitStaged(staging, candidateIds);
-  const committed = { phase: "committed" as const, candidateIds, completion };
+  const committed = { phase: "committed" as const, candidateIds, completion, ...(executionId ? { executionId } : {}) };
   await staging.saveState(committed);
   if (deliverCompletion(committed, agent, emit)) await staging.saveState({ ...committed, phase: "completed" });
+}
+
+export async function coordinateReflectionRecovery(store: Store, staging: StagingSession, stateId: string, agent: string, emit?: (event: IntegratedReflectionEvent) => void) {
+  await recoverReflectionCommit(store, staging, agent, emit);
+  const commit = await staging.loadState<ReflectionCommitState>();
+  const execution = await store.staging.loadState<ReflectionExecutionState<GenerateResult>>(stateId);
+  if (commit?.phase !== "completed" || execution?.status !== "selected" || !execution.selectedResult) return null;
+  if (commit.executionId && commit.executionId !== execution.executionId) throw new Error("completed reflection commit does not match selected execution");
+  const selectedIds = execution.selectedResult.stagedArtifactIds ?? [];
+  if (selectedIds.length !== commit.candidateIds.length || selectedIds.some((id, index) => id !== commit.candidateIds[index])) throw new Error("completed reflection commit artifacts do not match selected execution");
+  await store.staging.saveState(stateId, { ...execution, status: "completed" });
+  return execution.selectedResult;
 }
 
 export interface BuiltCoordinator {
@@ -80,8 +92,9 @@ export function buildCoordinator(
     return {
       async execute(task, generate) {
         const staging = await store.staging.createSession(`${name}-active`);
-        await recoverReflectionCommit(store, staging, name, onReflectionEvent);
         const stateId = `${name}-execution`;
+        const recovered = await coordinateReflectionRecovery(store, staging, stateId, name, onReflectionEvent);
+        if (recovered) return recovered;
         const savedState = await store.staging.loadState<ReflectionExecutionState<GenerateResult>>(stateId);
         const executionId = savedState && savedState.status !== "completed" ? savedState.executionId : randomUUID();
         const executor = new ReflectiveExecutor<GenerateResult>({
@@ -113,7 +126,7 @@ export function buildCoordinator(
         const result = await executor.execute(task);
         const candidateIds = result.stagedArtifactIds ?? [];
         const completion: ReflectionEvent = { type: "reflection.completed", rounds: result.rounds, score: result.finalReview.score, passed: result.finalReview.passed };
-        await commitReflectionCandidate(store, staging, name, candidateIds, completion, onReflectionEvent);
+        await commitReflectionCandidate(store, staging, name, candidateIds, completion, onReflectionEvent, executionId);
         const completedState = await store.staging.loadState<ReflectionExecutionState<GenerateResult>>(stateId);
         if (completedState?.executionId === executionId) await store.staging.saveState(stateId, { ...completedState, status: "completed" });
         return result;

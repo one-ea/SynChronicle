@@ -109,11 +109,15 @@ export class ReflectiveExecutor<T> {
 
   async execute(task: ReflectionTask, signal?: AbortSignal): Promise<ReflectiveResult<T>> {
     const restored = await this.stateStore?.load();
+    if (restored?.executionId === this.executionId && restored.status !== "completed" && !sameTask(restored.task, task)) {
+      throw new Error("current request does not match persisted reflection task");
+    }
     if (restored?.executionId === this.executionId && restored.status === "selected" && restored.selectedResult) return restored.selectedResult;
     const state: ReflectionExecutionState<T> = restored?.executionId === this.executionId && restored.status === "running"
       ? restored
       : { executionId: this.executionId, status: "running", task, nextRound: 1, candidates: [], revisionInstructions: [], priorIssues: [] };
     const candidates = state.candidates;
+    const activeTask = state.task;
     let revisionInstructions = state.revisionInstructions;
     let priorIssues = state.priorIssues;
     const rubric = getReviewRubric(this.role, this.passThreshold);
@@ -131,13 +135,13 @@ export class ReflectiveExecutor<T> {
       if (round > 1) this.emit({ type: "revision.started", round, issues: priorIssues.map((issue) => `${issue.dimension}: ${issue.recommendation}`) });
       const execution = state.pendingCandidate?.round === round
         ? state.pendingCandidate.execution
-        : await this.executeCandidate({ task, round, revisionInstructions, priorIssues, signal });
+        : await this.executeCandidate({ task: activeTask, round, revisionInstructions, priorIssues, signal });
       state.pendingCandidate = { round, execution };
       await this.stateStore?.save(state);
       signal?.throwIfAborted();
       const rawReview = await waitForAbort(this.reviewer.review({
-        objective: task.objective,
-        constraints: task.constraints,
+        objective: activeTask.objective,
+        constraints: activeTask.constraints,
         candidate: execution.reviewContent,
         rubric,
         priorIssues: priorIssues.map((issue) => issue.recommendation),
@@ -219,6 +223,10 @@ export class ReflectiveExecutor<T> {
       }
     }
   }
+}
+
+function sameTask(left: ReflectionTask, right: ReflectionTask) {
+  return left.objective === right.objective && left.constraints.length === right.constraints.length && left.constraints.every((value, index) => value === right.constraints[index]);
 }
 
 function waitForAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {

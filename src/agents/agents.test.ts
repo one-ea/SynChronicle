@@ -7,7 +7,7 @@ import type { Config } from "../config/index.js";
 import type { Bundle } from "../domain/index.js";
 import { ModelSet } from "../providers/index.js";
 import { Store } from "../store/index.js";
-import { buildCoordinator, commitReflectionCandidate, recoverReflectionCommit } from "./build.js";
+import { buildCoordinator, commitReflectionCandidate, coordinateReflectionRecovery, recoverReflectionCommit } from "./build.js";
 import { ContextManager } from "./context.js";
 import { createAgent } from "./agent.js";
 import { packArchitect, packCoordinator, packEditor, packWriter } from "./ctxpack/index.js";
@@ -285,6 +285,24 @@ describe("buildCoordinator", () => {
 
     expect(await store.drafts.loadDraft(1)).toBe("committed");
     expect(events).toEqual([{ ...completion, agent: "writer" }]);
+  });
+
+  it("advances selected execution after completed commit without recommit or event replay", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "synchronicle-reflection-completed-window-"));
+    const store = new Store(dir);
+    await store.init();
+    const staging = await store.staging.createSession("completed-window");
+    const completion = { type: "reflection.completed" as const, rounds: 1, score: 90, passed: true };
+    await staging.saveState({ phase: "completed", candidateIds: ["artifact-1"], completion, executionId: "exec-window" });
+    const selectedResult = { executionId: "exec-window", output: generated("selected"), rounds: 1, finalReview: { score: 90, passed: true, summary: "ok", issues: [], revisionInstructions: [] }, stagedArtifactIds: ["artifact-1"] };
+    await store.staging.saveState("writer-execution", { executionId: "exec-window", status: "selected", task: { objective: "write", constraints: [] }, nextRound: 2, candidates: [], revisionInstructions: [], priorIssues: [], selectedResult });
+    const events: unknown[] = [];
+
+    const resumed = await coordinateReflectionRecovery(store, staging, "writer-execution", "writer", (event) => events.push(event));
+
+    expect(resumed).toEqual(selectedResult);
+    expect((await store.staging.loadState<{ status: string }>("writer-execution"))?.status).toBe("completed");
+    expect(events).toEqual([]);
   });
 
   it("wraps specialist agents and keeps coordinator direct", async () => {
