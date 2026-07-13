@@ -77,6 +77,7 @@ export function buildCoordinator(
   _onGuardBlock?: GuardBlockHook,
   askUser?: AskUserHandler,
   onReflectionEvent?: (event: IntegratedReflectionEvent) => void,
+  hasBudget?: () => boolean,
 ): BuiltCoordinator {
   const reflection = cfg.reflection === undefined
     ? { enabled: true, max_rounds: 3, pass_threshold: 85, review_retry_limit: 2 }
@@ -107,6 +108,7 @@ export function buildCoordinator(
           role,
           maxRounds: reflection.max_rounds,
           passThreshold: reflection.pass_threshold,
+          hasBudget,
           reviewer: new Reviewer({
             model: models.forReviewer(),
             retryLimit: reflection.review_retry_limit,

@@ -30,7 +30,8 @@ describe("Reviewer", () => {
       usage: { inputTokens: 12, outputTokens: 8 },
     });
     const onUsage = vi.fn();
-    const reviewer = new Reviewer({ model, generate, onUsage });
+    const now = vi.fn().mockReturnValueOnce(100).mockReturnValueOnce(137);
+    const reviewer = new Reviewer({ model, generate, onUsage, now });
 
     const result = await reviewer.review(request);
 
@@ -39,7 +40,7 @@ describe("Reviewer", () => {
     expect(generate).toHaveBeenCalledWith(expect.objectContaining({ model, prompt: expect.any(String) }));
     expect(generate.mock.calls[0]?.[0]).not.toHaveProperty("tools");
     expect(generate.mock.calls[0]?.[0].prompt).toContain(JSON.stringify(rubric));
-    expect(onUsage).toHaveBeenCalledWith("reviewer", { inputTokens: 12, outputTokens: 8 });
+    expect(onUsage).toHaveBeenCalledWith("reviewer", { inputTokens: 12, outputTokens: 8, latencyMs: 37 });
   });
 
   it("forwards AbortSignal to generation while preserving signal-free calls", async () => {
@@ -72,10 +73,13 @@ describe("Reviewer", () => {
       controller.abort(reason);
       throw new Error("provider aborted");
     });
-    const reviewer = new Reviewer({ model, generate, retryLimit: 3 });
+    const onUsage = vi.fn();
+    const now = vi.fn().mockReturnValueOnce(50).mockReturnValueOnce(62);
+    const reviewer = new Reviewer({ model, generate, retryLimit: 3, onUsage, now });
 
     await expect(reviewer.review(request, controller.signal)).rejects.toBe(reason);
     expect(generate).toHaveBeenCalledOnce();
+    expect(onUsage).toHaveBeenCalledWith("reviewer", { latencyMs: 12 });
   });
 
   it("retries invalid JSON and records usage for every completed generation", async () => {
@@ -83,14 +87,15 @@ describe("Reviewer", () => {
       .mockResolvedValueOnce({ text: "invalid", usage: { totalTokens: 3 } })
       .mockResolvedValueOnce({ text: JSON.stringify(validReview()), usage: { totalTokens: 7 } });
     const onUsage = vi.fn();
-    const reviewer = new Reviewer({ model, generate, retryLimit: 2, onUsage });
+    const now = vi.fn().mockReturnValueOnce(0).mockReturnValueOnce(10).mockReturnValueOnce(20).mockReturnValueOnce(35);
+    const reviewer = new Reviewer({ model, generate, retryLimit: 2, onUsage, now });
 
     const result = await reviewer.review(request);
 
     expect(result.passed).toBe(true);
     expect(generate).toHaveBeenCalledTimes(2);
-    expect(onUsage).toHaveBeenNthCalledWith(1, "reviewer", { totalTokens: 3 });
-    expect(onUsage).toHaveBeenNthCalledWith(2, "reviewer", { totalTokens: 7 });
+    expect(onUsage).toHaveBeenNthCalledWith(1, "reviewer", { totalTokens: 3, latencyMs: 10 });
+    expect(onUsage).toHaveBeenNthCalledWith(2, "reviewer", { totalTokens: 7, latencyMs: 15 });
   });
 
   it("retries output that fails the review schema", async () => {

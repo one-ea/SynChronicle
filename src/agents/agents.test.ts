@@ -340,4 +340,38 @@ describe("buildCoordinator", () => {
     expect(built.agents.writer.reflectionEnabled).toBe(true);
     expect(built.agents.editor.reflectionEnabled).toBe(true);
   });
+
+  it("returns the best reviewed candidate when the runtime budget ends before revision", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "synchronicle-reflection-budget-"));
+    const store = new Store(dir);
+    await store.init();
+    const config: Config = {
+      provider: "mock",
+      model: "mock-model",
+      providers: { mock: { type: "openai", api_key: "test" } },
+      roles: {},
+      reflection: { enabled: true, max_rounds: 3, pass_threshold: 85 },
+    };
+    let calls = 0;
+    const model = mockModel({
+      generate: async () => {
+        calls++;
+        return calls === 1
+          ? generated("first candidate")
+          : generated(JSON.stringify({ score: 70, passed: false, summary: "revise", issues: [], revisionInstructions: ["improve"] }));
+      },
+    });
+    const hasBudget = vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(false);
+    const built = buildCoordinator(config, store, new ModelSet(config, () => model), { prompts: {} }, undefined, undefined, undefined, undefined, undefined, hasBudget);
+
+    const result = await built.agents.writer.generate("write");
+
+    expect(result.text).toBe("first candidate");
+    expect(built.agents.writer.reflectionMetadata()).toMatchObject({
+      status: "completed",
+      rounds: 1,
+      qualityRisk: { code: "budget_exhausted", score: 70 },
+    });
+    expect(hasBudget).toHaveBeenCalledTimes(2);
+  });
 });

@@ -20,6 +20,7 @@ export interface ReviewerOptions {
   retryLimit?: number;
   onUsage?: (name: string, usage: unknown) => void;
   onUsageError?: (error: unknown) => void;
+  now?: () => number;
 }
 
 export class ReviewerError extends Error {
@@ -35,8 +36,9 @@ export class Reviewer {
   private readonly retryLimit: number;
   private readonly onUsage?: ReviewerOptions["onUsage"];
   private readonly onUsageError?: ReviewerOptions["onUsageError"];
+  private readonly now: () => number;
 
-  constructor({ model, generate = generateText, retryLimit = 2, onUsage, onUsageError }: ReviewerOptions) {
+  constructor({ model, generate = generateText, retryLimit = 2, onUsage, onUsageError, now = () => performance.now() }: ReviewerOptions) {
     if (!Number.isInteger(retryLimit) || retryLimit < 0 || retryLimit > 3) {
       throw new RangeError("retryLimit must be an integer between 0 and 3");
     }
@@ -45,6 +47,7 @@ export class Reviewer {
     this.retryLimit = retryLimit;
     this.onUsage = onUsage;
     this.onUsageError = onUsageError;
+    this.now = now;
   }
 
   async review(request: ReviewRequest, signal?: AbortSignal): Promise<ReviewResult> {
@@ -53,6 +56,7 @@ export class Reviewer {
     for (let attempt = 0; attempt <= this.retryLimit; attempt++) {
       signal?.throwIfAborted();
       let raw: Awaited<ReturnType<Generate>>;
+      const startedAt = this.now();
       try {
         raw = await this.generate({
           model: this.model,
@@ -60,12 +64,13 @@ export class Reviewer {
           ...(signal ? { abortSignal: signal } : {}),
         });
       } catch (error) {
+        this.reportUsage({ latencyMs: Math.max(0, this.now() - startedAt) });
         signal?.throwIfAborted();
         lastError = error;
         continue;
       }
 
-      this.reportUsage(raw.usage);
+      this.reportUsage(withLatency(raw.usage, Math.max(0, this.now() - startedAt)));
       try {
         const parsed = ReviewResultSchema.parse(JSON.parse(raw.text));
         return { ...parsed, passed: parsed.score >= request.rubric.threshold };
@@ -88,6 +93,10 @@ export class Reviewer {
       }
     }
   }
+}
+
+function withLatency(usage: unknown, latencyMs: number): Record<string, unknown> {
+  return usage && typeof usage === "object" ? { ...usage, latencyMs } : { latencyMs };
 }
 
 function buildReviewPrompt(request: ReviewRequest): string {

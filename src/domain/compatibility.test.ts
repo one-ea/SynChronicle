@@ -19,6 +19,12 @@ describe("Go JSON persistence compatibility", () => {
     expect(domain.NovelSchema.safeParse({ Name: "Test", TotalChapters: 10 }).success).toBe(false);
   });
 
+  it("keeps latency optional for persisted usage written before reviewer timing", () => {
+    const legacy = fixtures.find(([name]) => name === "UsageState")?.[2];
+    const parsed = domain.UsageStateSchema.parse(legacy);
+    expect(parsed.overall.latency_ms).toBeUndefined();
+  });
+
   it("exports every Task 3 domain module", () => {
     for (const name of [
       "TransitionSchema", "TransitionsSchema", "RuntimeEventSchema", "BundleSchema",
