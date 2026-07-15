@@ -144,4 +144,21 @@ describe("run command routes", () => {
     ]);
     await app.close();
   });
+
+  it("rejects client command IDs in the reserved legacy namespace", async () => {
+    const { app } = await testApp();
+    const headers = { "x-user-id": "alice" };
+    const start = await app.inject({ method: "POST", url: "/api/projects/project-a/runs", headers, payload: { idempotencyKey: "reserved-start" } });
+    const run = start.json().run as RunRecord;
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/projects/project-a/runs/${run.id}/steer`,
+      headers,
+      payload: { commandId: "legacy:client-value", instruction: "Collision" },
+    });
+
+    expect(response.statusCode).toBe(400);
+    await app.close();
+  });
 });

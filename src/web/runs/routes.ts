@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import type { RequestAuth } from "../auth/plugin.js";
-import type { EnqueueRunInput, RunCommand, RunCommandResult, RunRow } from "../../scheduler/types.js";
+import { LEGACY_COMMAND_ID_PREFIX, type EnqueueRunInput, type RunCommand, type RunCommandResult, type RunRow } from "../../scheduler/types.js";
 
 const ParamsSchema = z.object({ projectId: z.string().min(1), runId: z.string().uuid().optional() }).strict();
 const StartSchema = z.object({
@@ -12,7 +12,10 @@ const StartSchema = z.object({
   budgetSnapshot: z.record(z.string(), z.unknown()).optional(),
 }).strict();
 const SteerSchema = z.object({
-  commandId: z.string().trim().min(1).max(200),
+  commandId: z.string().trim().min(1).max(200).refine(
+    (value) => !value.startsWith(LEGACY_COMMAND_ID_PREFIX),
+    "Reserved command ID prefix",
+  ),
   instruction: z.string().trim().min(1),
 }).strict();
 

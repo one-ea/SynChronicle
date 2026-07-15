@@ -1,5 +1,7 @@
 import type { runs, tasks } from "../db/schema/index.js";
 
+export const LEGACY_COMMAND_ID_PREFIX = "legacy:";
+
 export type RunRow = typeof runs.$inferSelect;
 export type TaskRow = typeof tasks.$inferSelect;
 export type TaskType = TaskRow["type"];

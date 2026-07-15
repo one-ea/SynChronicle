@@ -37,7 +37,7 @@ describe("scheduler service", () => {
       expect(query.sql).toContain("concurrency_limit");
       expect(query.sql).toContain("not exists");
       expect(query.sql).toContain("coalesce");
-      expect(query.sql).toContain("desiredState");
+      expect(query.sql).toMatch(/desiredState.*not in \('paused', 'cancelled'\)/);
       expect(query.sql).toMatch(/"tasks"\."attempts" < "tasks"\."max_attempts"/);
       expect(query.params).not.toContain(100);
     } finally {
@@ -65,7 +65,7 @@ describe("scheduler service", () => {
       desiredState: "running",
       checkpoint: { chapter: 3 },
       steerCommands: [
-        { id: expect.stringMatching(/^legacy-/), instruction: "Revise pacing" },
+        { id: expect.stringMatching(/^legacy:/), instruction: "Revise pacing" },
         { id: "old-object", instruction: "Keep tone" },
         { id: "current", instruction: "Add detail" },
       ],
@@ -79,6 +79,16 @@ describe("scheduler service", () => {
       legacy: true,
     });
     expect(normalizeRunResumeData("broken")).toEqual({ desiredState: "running", steerCommands: [] });
+  });
+
+  it("keeps generated legacy IDs stable and preserves existing normalized IDs", () => {
+    const generated = normalizeRunResumeData({ steerCommands: ["Legacy command"] });
+    const repeated = normalizeRunResumeData({ steerCommands: ["Legacy command"] });
+    const persisted = normalizeRunResumeData(generated);
+
+    expect(generated.steerCommands[0]?.id).toMatch(/^legacy:/);
+    expect(repeated).toEqual(generated);
+    expect(persisted).toEqual(generated);
   });
 });
 
@@ -372,7 +382,16 @@ postgres("PostgreSQL leased scheduler", () => {
       concurrencyLimit: 10,
     }).returning();
     const [legacyProject] = await database.insert(projects).values({ userId: legacyUser!.id, title: "Legacy eligibility" }).returning();
-    const states = [null, {}, { checkpoint: { chapter: 2 } }, { desiredState: "paused" }, { desiredState: "cancelled" }] as const;
+    const states: unknown[] = [
+      null,
+      {},
+      { checkpoint: { chapter: 2 } },
+      { desiredState: 42 },
+      { desiredState: ["paused"] },
+      { desiredState: "future-state" },
+      { desiredState: "paused" },
+      { desiredState: "cancelled" },
+    ];
     const legacyRuns = await database.insert(runs).values(states.map((resumeData, index) => ({
       userId: legacyUser!.id,
       projectId: legacyProject!.id,
@@ -387,16 +406,15 @@ postgres("PostgreSQL leased scheduler", () => {
       priority: 2_000_000,
     })));
 
-    const claimed = await Promise.all([
-      repository.claimNextTask("legacy-worker-1", 30_000),
-      repository.claimNextTask("legacy-worker-2", 30_000),
-      repository.claimNextTask("legacy-worker-3", 30_000),
-    ]);
+    const claimed = await Promise.all(Array.from(
+      { length: 6 },
+      (_, index) => repository.claimNextTask(`legacy-worker-${index + 1}`, 30_000),
+    ));
     const claimedRunIds = new Set(claimed.map((task) => task?.runId));
 
-    expect(claimedRunIds).toEqual(new Set(legacyRuns.slice(0, 3).map((run) => run.id)));
-    expect(claimedRunIds.has(legacyRuns[3]!.id)).toBe(false);
-    expect(claimedRunIds.has(legacyRuns[4]!.id)).toBe(false);
+    expect(claimedRunIds).toEqual(new Set(legacyRuns.slice(0, 6).map((run) => run.id)));
+    expect(claimedRunIds.has(legacyRuns[6]!.id)).toBe(false);
+    expect(claimedRunIds.has(legacyRuns[7]!.id)).toBe(false);
     await settleTasks([legacyUser!.id]);
   });
 
@@ -409,6 +427,10 @@ postgres("PostgreSQL leased scheduler", () => {
     };
     await database.update(runs).set({ resumeData: historical }).where(eq(runs.id, run!.id));
 
+    expect(await repository.command(auth, project!.id, run!.id, "steer", {
+      commandId: "legacy:client-collision",
+      instruction: "Must reject",
+    })).toBe("conflict");
     const first = await repository.command(auth, project!.id, run!.id, "steer", { commandId: "new-id", instruction: "Add tension" });
     const retry = await repository.command(auth, project!.id, run!.id, "steer", { commandId: "new-id", instruction: "Ignored retry" });
 
@@ -418,7 +440,7 @@ postgres("PostgreSQL leased scheduler", () => {
       desiredState: "running",
       checkpoint: { chapter: 7 },
       steerCommands: [
-        { id: expect.stringMatching(/^legacy-0-/), instruction: "Legacy direction" },
+        { id: expect.stringMatching(/^legacy:0:/), instruction: "Legacy direction" },
         { id: "old-id", instruction: "Keep voice" },
         { id: "new-id", instruction: "Add tension" },
       ],

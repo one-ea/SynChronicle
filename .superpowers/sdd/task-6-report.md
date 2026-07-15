@@ -173,3 +173,50 @@ DONE_WITH_CONCERNS
 ### 顾虑
 
 - 当前环境未设置 `TEST_DATABASE_URL`，13 个 Scheduler PostgreSQL 条件测试完成收集并明确跳过；历史 JSONB 与真实 claim/command 行锁路径仍需由 PostgreSQL CI 执行。
+
+## Resumable 语义最终对齐 2026-07-15
+
+### 状态
+
+DONE_WITH_CONCERNS
+
+### 修复
+
+- eligible SQL 改为 `coalesce(resume_data->>'desiredState' not in ('paused', 'cancelled'), true)`，与 `normalizeRunResumeData()` 对齐：仅明确字符串 paused/cancelled 阻塞，null、缺失、非法类型和未知字符串均可领取。
+- legacy 生成 ID 使用保留命名空间 `legacy:`，格式为 `legacy:{index}:{sha256}`，相同历史输入重复规范化保持稳定。
+- HTTP steer schema 拒绝客户端 `commandId` 使用 `legacy:` 前缀。
+- `SchedulerRepository.command()` 同步防御性拒绝保留前缀，绕过 HTTP 的调用也返回 conflict。
+- 已持久化的合法 legacy ID 作为当前 `{id,instruction}` 项保留，不会在重复规范化时变化。
+
+### RED
+
+- 命令：`pnpm vitest run src/scheduler/scheduler.test.ts src/web/runs/routes.test.ts`
+- 结果：4 failed，8 passed，13 skipped。
+- SQL 断言证明旧查询仍只接受 running。
+- normalizer 测试证明旧生成 ID 使用 `legacy-`，尚未进入保留命名空间。
+- route 测试证明客户端 `legacy:` commandId 仍返回 200。
+
+### GREEN
+
+- 目标命令：`pnpm vitest run src/scheduler/scheduler.test.ts src/web/runs src/db/schema.test.ts`
+- 结果：18 passed，15 skipped，共 33 项。
+- 全量命令：`pnpm test`
+- 结果：339 passed，29 skipped，共 368 项。
+- `pnpm typecheck`：退出码 0。
+- `pnpm build`：退出码 0。
+- `pnpm exec drizzle-kit check`：通过。
+- `pnpm exec drizzle-kit generate`：`No schema changes, nothing to migrate`。
+- `git diff --check`：退出码 0。
+
+### PostgreSQL 条件覆盖
+
+- 历史 eligible 测试新增 desiredState 数字、数组和未知字符串，均必须可领取；paused/cancelled 继续不可领取。
+- 真实 repository command 测试新增 `legacy:` 客户端 command ID，要求返回 conflict 且不写入命令。
+
+### 提交
+
+- Message: `fix(runtime): align resumable run semantics`
+
+### 顾虑
+
+- 当前环境未设置 `TEST_DATABASE_URL`，13 个 Scheduler PostgreSQL 条件测试明确跳过；JSONB 运算符对数字、数组和未知字符串的实际执行仍需 PostgreSQL CI 验证。

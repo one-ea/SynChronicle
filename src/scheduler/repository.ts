@@ -3,6 +3,7 @@ import { and, asc, count, eq, inArray, lte, sql } from "drizzle-orm";
 import type { Database } from "../db/client.js";
 import { projects, runs, tasks, users } from "../db/schema/index.js";
 import type { RequestAuth } from "../web/auth/plugin.js";
+import { LEGACY_COMMAND_ID_PREFIX } from "./types.js";
 import type {
   EnqueueRunInput,
   ReleaseLeaseOutcome,
@@ -25,7 +26,7 @@ type SchedulerExecutor = Database | Parameters<Parameters<Database["transaction"
 
 function legacyCommandId(index: number, instruction: string): string {
   const digest = createHash("sha256").update(`${index}\0${instruction}`).digest("hex").slice(0, 16);
-  return `legacy-${index}-${digest}`;
+  return `${LEGACY_COMMAND_ID_PREFIX}${index}:${digest}`;
 }
 
 export function normalizeRunResumeData(value: unknown): RunResumeData {
@@ -96,7 +97,7 @@ export function buildEligibleTaskQuery(executor: SchedulerExecutor, now: Date) {
       sql`${tasks.attempts} < ${tasks.maxAttempts}`,
       lte(tasks.scheduledAt, now),
       eq(users.status, "active"),
-      sql`coalesce(${runs.resumeData}->>'desiredState', 'running') = 'running'`,
+      sql`coalesce(${runs.resumeData}->>'desiredState' not in ('paused', 'cancelled'), true)`,
       sql`(select count(*) from tasks active_user where active_user.user_id = ${tasks.userId} and active_user.status in ('leased', 'running')) < ${users.concurrencyLimit}`,
       sql`(${tasks.type} <> 'write' or not exists (select 1 from tasks active_write where active_write.project_id = ${tasks.projectId} and active_write.type = 'write' and active_write.status in ('leased', 'running')))`,
     ))
@@ -254,7 +255,13 @@ export class SchedulerRepository {
       if (command === "steer") {
         if (!payload || typeof payload !== "object") return "conflict";
         const { commandId, instruction } = payload as { commandId?: unknown; instruction?: unknown };
-        if (typeof commandId !== "string" || !commandId.trim() || typeof instruction !== "string" || !instruction.trim()) return "conflict";
+        if (
+          typeof commandId !== "string"
+          || !commandId.trim()
+          || commandId.startsWith(LEGACY_COMMAND_ID_PREFIX)
+          || typeof instruction !== "string"
+          || !instruction.trim()
+        ) return "conflict";
         const commands = resumeData.steerCommands;
         next = commands.some((candidate) => candidate.id === commandId)
           ? resumeData
