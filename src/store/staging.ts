@@ -76,6 +76,8 @@ export class StagingSession {
     return session;
   }
 
+  bind(io: FileIO) { return new StagingSession(io, this.sessionId); }
+
   stage(round: number, artifact: ArtifactInput) {
     return this.withLock(async () => {
       if (!Number.isInteger(round) || round < 0) throw new Error("round 必须是非负整数");

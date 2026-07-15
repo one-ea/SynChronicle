@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { ReflectiveExecutor, type ReflectionExecutionState } from "../agents/reflection/index.js";
 import { Store } from "../store/index.js";
+import { createMemoryDatabaseStore } from "../store/database/index.js";
 import { Host, type RuntimeAgent, type RuntimeObserver } from "./host.js";
 
 function agent(outputs: string[] = []): RuntimeAgent {
@@ -226,5 +227,15 @@ describe("Host", () => {
     expect(epub.path).toMatch(/\.epub$/);
     expect((await readFile(epub.path)).includes(Buffer.from("META-INF/container.xml"))).toBe(true);
     await expect(value.simulate({ sources: [source] })).resolves.toMatchObject({ sources: 1 });
+  });
+
+  it("requires an explicit export path for a database store", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "runtime-host-database-export-"));
+    const store = createMemoryDatabaseStore({ userId: crypto.randomUUID(), projectId: crypto.randomUUID(), runId: crypto.randomUUID() });
+    await store.progress.save({ novel_name: "Book", phase: "complete", current_chapter: 2, total_chapters: 1, completed_chapters: [1], total_word_count: 7 });
+    await store.drafts.saveFinalChapter(1, "chapter");
+    const value = await Host.new({ provider: "mock", model: "mock", providers: { mock: { api_key: "test" } }, roles: {}, output_dir: dir }, {}, { agent: agent(), store });
+    await expect(value.export({ format: "txt" })).rejects.toThrow("explicit export path");
+    await expect(value.export({ format: "txt", path: join(dir, "book.txt") })).resolves.toMatchObject({ chapters: 1 });
   });
 });

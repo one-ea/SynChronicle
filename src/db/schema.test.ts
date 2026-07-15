@@ -44,6 +44,11 @@ function uniqueShape(table: Parameters<typeof getTableConfig>[0], name: string) 
   return constraint?.columns.map((column) => column.name);
 }
 
+function indexShape(table: Parameters<typeof getTableConfig>[0], name: string) {
+  const index = getTableConfig(table).indexes.find((candidate) => candidate.config.name === name);
+  return index?.config.columns.map((column) => "name" in column! ? column.name : undefined);
+}
+
 describe("database schema", () => {
   it("defines every platform table", () => {
     const tables = [
@@ -109,6 +114,10 @@ describe("database schema", () => {
       foreignColumns: ["user_id", "id"],
       foreignTable: "projects",
     });
+    expect(foreignKeyShape(schema.artifacts, "artifacts_user_project_run_fk")).toEqual({ columns: ["user_id", "project_id", "run_id"], foreignColumns: ["user_id", "project_id", "id"], foreignTable: "runs" });
+    expect(foreignKeyShape(schema.chapters, "chapters_user_project_run_fk")).toEqual({ columns: ["user_id", "project_id", "run_id"], foreignColumns: ["user_id", "project_id", "id"], foreignTable: "runs" });
+    expect(indexShape(schema.artifacts, "artifacts_scope_type_version_uq")).toEqual(["user_id", "project_id", "run_id", "type", "version"]);
+    expect(indexShape(schema.chapters, "chapters_scope_sequence_version_uq")).toEqual(["user_id", "project_id", "run_id", "sequence", "version"]);
 
     for (const [table, name] of [
       [schema.tasks, "tasks_user_project_run_fk"],
@@ -169,7 +178,8 @@ describe("database schema", () => {
       new URL("../../drizzle/0002_lean_felicia_hardy.sql", import.meta.url),
       "utf8",
     );
-    const sql = `${foundationSql}\n${ownershipSql}\n${authenticationSql}`;
+    const storeScopeSql = await readFile(new URL("../../drizzle/0003_lonely_shiva.sql", import.meta.url), "utf8");
+    const sql = `${foundationSql}\n${ownershipSql}\n${authenticationSql}\n${storeScopeSql}`;
 
     for (const table of requiredTables) {
       expect(sql).toContain(`CREATE TABLE \"${table}\"`);
@@ -177,6 +187,10 @@ describe("database schema", () => {
     expect(sql).toContain('CREATE UNIQUE INDEX "users_username_uq"');
     expect(authenticationSql).toContain('ALTER TABLE "users" ADD COLUMN "auth_version" integer DEFAULT 1 NOT NULL');
     expect(authenticationSql).toContain('ALTER TABLE "sessions" ADD COLUMN "auth_version" integer DEFAULT 1 NOT NULL');
+    expect(storeScopeSql).toContain('ALTER TABLE "artifacts" ALTER COLUMN "run_id" SET NOT NULL');
+    expect(storeScopeSql).toContain('ALTER TABLE "chapters" ALTER COLUMN "run_id" SET NOT NULL');
+    expect(storeScopeSql).toContain('CONSTRAINT "artifacts_user_project_run_fk"');
+    expect(storeScopeSql).toContain('CONSTRAINT "chapters_user_project_run_fk"');
     expect(sql).toContain('CREATE UNIQUE INDEX "run_events_run_sequence_uq"');
     expect(sql).toMatch(
       /CREATE UNIQUE INDEX "tasks_active_write_project_uq"[\s\S]+WHERE .*"type" = 'write'.*"status" in \('leased', 'running'\)/i,

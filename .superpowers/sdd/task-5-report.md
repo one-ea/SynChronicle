@@ -41,6 +41,46 @@
 - 当前环境缺少 PostgreSQL，真实数据库 migration + contract + rollback 路径留待提供 `TEST_DATABASE_URL` 的 CI 执行。
 - Task 2 Schema 使用 `artifacts.type/content_text/content_json` 字段名，适配器按实际 schema 映射；任务简报中的 `kind/text_content/json_content` 属于旧命名。
 
+## 独立审查整改项
+
+- Critical: PostgreSQL artifacts/chapters 必须包含并强制 `user_id/project_id/run_id` scope；当前真实查询忽略 runId。
+- Critical: checkpoint、usage、runtime event 必须写入 `checkpoints`、`usage_records`、`run_events` 领域表。
+- Critical: PostgreSQL 条件测试必须覆盖跨 run 隔离、领域表映射、候选不可见和真实事务失败回滚。
+- Important: 移除通过 `Reflect.set` 替换共享 `StagingSession.io` 的事务实现，使用显式 transaction-bound staging/commit API。
+- Important: 解决 DatabaseStore 与 `StorePort.dir`/`exportNovel` 的文件路径耦合。
+- Important: chapter 读取当前版本，runtime append 使用数据库序列化写入，避免 read-modify-write 丢事件。
+- Important: 扩展共享 contract 覆盖更新、JSON/text、runtime 顺序、checkpoint reload、候选隔离与回滚。
+
+## 独立审查整改结果 2026-07-15
+
+### 修复
+
+- `artifacts`、`chapters` 新增非空 `run_id`，通过 `user_id/project_id/run_id -> runs` 复合外键强制归属；唯一索引包含完整 scope。
+- 新迁移先为历史 project scope 创建或复用 run，回填 `run_id`，再启用非空、复合外键和完整 scope 唯一索引。
+- runtime queue 映射 `run_events`，checkpoint 映射 `checkpoints`，usage aggregate snapshot 映射 `usage_records.state`。
+- runtime append 在数据库事务中获取 run 级 advisory lock，并从领域表分配下一 sequence，消除文件式 read-modify-write。
+- chapter 每次写入新版本，读取按 version 降序返回最新内容。
+- `StagingSession.bind(io)` 提供显式 transaction-bound session；候选提交不再反射替换共享私有 IO。
+- Store 导出路径通过 `resolveExportPath` 抽象；DatabaseStore 缺省导出给出明确错误，显式 `options.path` 可正常导出。
+- shared contract 新增 text/JSON 更新、chapter 最新版本、runtime 并发顺序、checkpoint reload/reset、候选不可见和校验回滚覆盖。
+- `TEST_DATABASE_URL` 条件测试新增跨 run 隔离、领域表落库、并发 event sequence、chapter 最新版本、候选不可见及真实 constraint rollback。
+
+### RED / GREEN
+
+- RED：Schema 元数据测试缺少 artifacts/chapters run 复合外键；内存 backend 无领域表；Database Host export 尝试写入 `database://`；领域表 reset 保留旧事件。
+- GREEN：Store/Host/Agent/Schema 目标测试 81 passed，10 skipped；`pnpm typecheck`、`drizzle-kit check`、`git diff --check` 通过。
+- 全量验证：327 passed，16 skipped；`pnpm build` 通过。
+- PostgreSQL 条件测试在当前无 `TEST_DATABASE_URL` 环境明确跳过 10 项；测试代码会在数据库环境执行 migration 后验证真实约束和回滚。
+
+### 提交
+
+- Commit message：`fix(store): enforce database run isolation`
+
+### 剩余顾虑
+
+- 当前环境未提供 PostgreSQL，advisory lock、复合外键和真实 constraint rollback 依赖带 `TEST_DATABASE_URL` 的 CI 完成运行时验证。
+- usage 当前以 aggregate snapshot 记录写入 `usage_records.state`；后续逐调用计量可在 Task 13 或 usage pipeline 扩展时并存。
+
 ---
 
 ## 前序候选暂存实施记录

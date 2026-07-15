@@ -16,4 +16,56 @@ export function storeContract(createStore: () => Promise<StorePort>): void {
     expect((await store.usage.load())?.overall.output).toBe(2);
     expect(await store.runtime.loadQueue()).toHaveLength(1);
   });
+
+  it("updates text and JSON artifacts and serializes runtime sequence", async () => {
+    const store = await createStore();
+    await store.outline.savePremise("first");
+    await store.outline.savePremise("second");
+    await store.drafts.saveFinalChapter(1, "first chapter");
+    await store.drafts.saveFinalChapter(1, "second chapter");
+    const runMeta = { started_at: "now", provider: "test", style: "", model: "test", planning_tier: "short" as const, steer_history: [], pending_steer: "first", pause_point: null };
+    await store.runMeta.save(runMeta);
+    await store.runMeta.save({ ...runMeta, pending_steer: "second" });
+    await Promise.all([1, 2, 3].map((value) => store.runtime.appendQueue({ seq: 0, time: "", kind: "ui_event", priority: "background", summary: String(value) })));
+    await store.checkpoints.append({ kind: "global" }, "one");
+    await store.checkpoints.reload();
+    expect(await store.outline.loadPremise()).toBe("second");
+    expect(await store.drafts.loadChapterText(1)).toBe("second chapter");
+    expect(await store.runMeta.load()).toMatchObject({ pending_steer: "second" });
+    expect((await store.runtime.loadQueue()).map((item) => item.seq)).toEqual([1, 2, 3]);
+    expect((await store.checkpoints.latestGlobal())?.step).toBe("one");
+  });
+
+  it("keeps recording candidates invisible until selected", async () => {
+    const store = await createStore();
+    await store.outline.savePremise("baseline");
+    const transaction = store.recordingTransaction();
+    await transaction.store.outline.savePremise("candidate");
+    const staging = await store.staging.createSession(`contract-${Math.random()}`);
+    const ids = await transaction.stage(staging, 1);
+    expect(await store.outline.loadPremise()).toBe("baseline");
+    await store.commitStaged(staging, ids);
+    expect(await store.outline.loadPremise()).toBe("candidate");
+  });
+
+  it("keeps every candidate invisible when commit validation fails", async () => {
+    const store = await createStore();
+    await store.outline.savePremise("baseline");
+    const transaction = store.recordingTransaction();
+    await transaction.store.outline.savePremise("candidate");
+    const staging = await store.staging.createSession(`contract-rollback-${Math.random()}`);
+    const ids = await transaction.stage(staging, 1);
+    await expect(store.commitStaged(staging, [...ids, "unknown-candidate"])).rejects.toThrow("未知候选 ID");
+    expect(await store.outline.loadPremise()).toBe("baseline");
+  });
+
+  it("resets runtime events and checkpoints", async () => {
+    const store = await createStore();
+    await store.runtime.appendQueue({ seq: 0, time: "", kind: "ui_event", priority: "background", summary: "event" });
+    await store.checkpoints.append({ kind: "global" }, "checkpoint");
+    await store.runtime.reset();
+    await store.checkpoints.reset();
+    expect(await store.runtime.loadQueue()).toEqual([]);
+    expect(await store.checkpoints.all()).toEqual([]);
+  });
 }

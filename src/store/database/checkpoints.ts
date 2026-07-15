@@ -10,16 +10,10 @@ export class DatabaseRecordingTransaction extends RecordingTransaction {
 export async function commitDatabaseStaging(io: DatabaseFileIO, staging: StagingSession, candidateIds: string[]): Promise<void> {
   await io.backend.transaction(async (backend) => {
     const transactionIo = io.withBackend(backend);
-    const original = Reflect.get(staging, "io") as DatabaseFileIO;
-    Reflect.set(staging, "io", transactionIo);
-    try {
-      const state = await staging.loadState<{ completion?: unknown }>();
-      await staging.commit(candidateIds);
-      const store = new Store(transactionIo.dir, transactionIo);
-      await store.runtime.appendQueue({ seq: 0, time: new Date().toISOString(), kind: "ui_event", priority: "control", category: "REFLECTION.COMPLETED", summary: "候选提交完成", payload: state?.completion ?? { type: "reflection.completed", candidateIds } });
-    } finally {
-      Reflect.set(staging, "io", original);
-    }
+    const transactionStaging = staging.bind(transactionIo);
+    const state = await transactionStaging.loadState<{ completion?: unknown }>();
+    await transactionStaging.commit(candidateIds);
+    await backend.appendRuntime(io.scope, { seq: 0, time: new Date().toISOString(), kind: "ui_event", priority: "control", category: "REFLECTION.COMPLETED", summary: "候选提交完成", payload: state?.completion ?? { type: "reflection.completed", candidateIds } });
   });
 }
 

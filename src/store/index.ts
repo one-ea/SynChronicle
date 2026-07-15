@@ -12,6 +12,7 @@ import { JSONStore, SimulationStore, UsageStore } from "./misc.js";
 import { SessionStore } from "./session.js";
 import { StagedArtifactStore, type StagingSession } from "./staging.js";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { join } from "node:path";
 import type { StorePort } from "./port.js";
 
 export class Store implements StorePort {
@@ -19,6 +20,7 @@ export class Store implements StorePort {
   private readonly io: FileIO;
   constructor(readonly dir: string, io = new FileIO(dir)) { this.io = io; this.progress = new ProgressStore(io); this.outline = new OutlineStore(io); this.drafts = new DraftStore(io); this.summaries = new SummaryStore(io); this.runMeta = new JSONStore(io, "meta/run.json"); this.userRules = new JSONStore(io, "meta/user_rules.json"); this.signals = new SignalStore(io); this.runtime = new RuntimeStore(io); this.characters = new CharacterStore(io); this.cast = new CastStore(io); this.world = new WorldStore(io); this.checkpoints = new CheckpointStore(io); this.sessions = new SessionStore(io); this.staging = new StagedArtifactStore(io); this.usage = new UsageStore(io); this.simulation = new SimulationStore(io); }
   init() { return this.io.ensureDirs(["chapters", "summaries", "drafts", "reviews", "meta", "meta/runtime", "meta/runtime/tasks", "meta/sessions", "meta/sessions/agents"]); }
+  resolveExportPath(filename: string) { return join(this.dir, filename); }
   async checkConsistency() { const warnings: string[] = []; const progress = await this.progress.load(); if (!progress) return warnings; const completed = progress.completed_chapters; if (completed.length) { const chapter = completed.at(-1)!; if (!(await this.drafts.loadChapterText(chapter))) warnings.push(`progress 标记第 ${chapter} 章已完成，但 chapters/${String(chapter).padStart(2, "0")}.md 不存在或为空`); } if (progress.layered && progress.current_volume && progress.current_arc) { const volumes = await this.outline.loadLayeredOutline(); if (volumes.length && !volumes.some((v) => v.index === progress.current_volume && v.arcs.some((a) => a.index === progress.current_arc))) warnings.push(`progress 当前 V${progress.current_volume} A${progress.current_arc} 在分层大纲中找不到对应条目`); } return warnings; }
   async foundationMissing() { const missing: string[] = []; if (!(await this.outline.loadPremise())) missing.push("premise"); if (!(await this.outline.loadOutline()).length) missing.push("outline"); if (!(await this.characters.load()).length) missing.push("characters"); if (!(await this.world.loadWorldRules()).length) missing.push("world_rules"); if ((await this.outline.loadLayeredOutline()).length && !(await this.outline.loadCompass())) missing.push("compass"); return missing; }
   async clearHandledSteer() { const meta = await this.runMeta.load(); if (meta?.pending_steer) await this.runMeta.save({ ...meta, pending_steer: "" }); const progress = await this.progress.load(); if (progress?.flow === "steering") await this.progress.save({ ...progress, flow: "writing" }); }

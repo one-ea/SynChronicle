@@ -1,11 +1,13 @@
 import { sql } from "drizzle-orm";
-import { type AnyPgColumn, bigint, foreignKey, index, integer, jsonb, numeric, pgEnum, pgTable, text, timestamp, unique, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { type AnyPgColumn, bigint, check, foreignKey, index, integer, jsonb, numeric, pgEnum, pgTable, text, timestamp, unique, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { users } from "./auth.js";
 import { projects } from "./projects.js";
 
 export const runStatus = pgEnum("run_status", ["queued", "running", "paused", "completed", "failed", "cancelled"]);
 export const taskType = pgEnum("task_type", ["write", "review", "maintenance"]);
 export const taskStatus = pgEnum("task_status", ["queued", "leased", "running", "paused", "completed", "failed", "cancelled"]);
+export const artifactStatus = pgEnum("artifact_status", ["draft", "committed"]);
+export const chapterStatus = pgEnum("chapter_status", ["planned", "draft", "review", "complete"]);
 
 type RunOwnershipColumns = [
   AnyPgColumn<{ tableName: "runs" }>,
@@ -56,6 +58,31 @@ export const runs = pgTable(
     }),
     unique("runs_user_project_id_uq").on(table.userId, table.projectId, table.id),
     index("runs_user_project_status_idx").on(table.userId, table.projectId, table.status),
+  ],
+);
+
+export const artifacts = pgTable(
+  "artifacts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(), userId: uuid("user_id").notNull(), projectId: uuid("project_id").notNull(), runId: uuid("run_id").notNull(), type: text("type").notNull(), contentJson: jsonb("content_json"), contentText: text("content_text"), status: artifactStatus("status").notNull().default("draft"), version: integer("version").notNull().default(1), summary: text("summary"), createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(), updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    foreignKey({ name: "artifacts_user_project_run_fk", columns: [table.userId, table.projectId, table.runId], foreignColumns: runOwnershipColumns() }).onDelete("cascade"),
+    uniqueIndex("artifacts_scope_type_version_uq").on(table.userId, table.projectId, table.runId, table.type, table.version),
+    index("artifacts_scope_idx").on(table.userId, table.projectId, table.runId),
+  ],
+);
+
+export const chapters = pgTable(
+  "chapters",
+  {
+    id: uuid("id").primaryKey().defaultRandom(), userId: uuid("user_id").notNull(), projectId: uuid("project_id").notNull(), runId: uuid("run_id").notNull(), sequence: integer("sequence").notNull(), title: text("title").notNull(), body: text("body").notNull().default(""), status: chapterStatus("status").notNull().default("planned"), version: integer("version").notNull().default(1), createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(), updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    foreignKey({ name: "chapters_user_project_run_fk", columns: [table.userId, table.projectId, table.runId], foreignColumns: runOwnershipColumns() }).onDelete("cascade"),
+    uniqueIndex("chapters_scope_sequence_version_uq").on(table.userId, table.projectId, table.runId, table.sequence, table.version),
+    index("chapters_scope_idx").on(table.userId, table.projectId, table.runId),
+    check("chapters_sequence_positive_ck", sql`${table.sequence} > 0`),
   ],
 );
 
@@ -184,6 +211,7 @@ export const usageRecords = pgTable(
     outputTokens: bigint("output_tokens", { mode: "number" }).notNull().default(0),
     cost: numeric("cost", { precision: 18, scale: 8 }).notNull().default("0"),
     latencyMs: integer("latency_ms").notNull(),
+    state: jsonb("state"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [

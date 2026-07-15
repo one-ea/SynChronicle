@@ -31,6 +31,7 @@ export interface RecordingTransactionPort {
 
 export interface StorePort {
   readonly dir: string;
+  resolveExportPath(filename: string): string;
   readonly progress: ProgressStore;
   readonly outline: OutlineStore;
   readonly drafts: DraftStore;
