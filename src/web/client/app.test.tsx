@@ -16,6 +16,12 @@ function jsonResponse({ status = 200, body, requestId = "req-test" }: MockRespon
   });
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((next) => { resolve = next; });
+  return { promise, resolve };
+}
+
 const project = (overrides: Record<string, unknown> = {}) => ({
   id: "7ef5fd40-38a7-43dd-856c-b2c074fcf611",
   userId: "user-1",
@@ -61,6 +67,22 @@ describe("App", () => {
     expect(await screen.findByRole("heading", { name: "你的作品" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "退出登录" }));
 
+    expect(await screen.findByRole("heading", { name: "继续你的故事" })).toBeVisible();
+  });
+
+  it("keeps the session and offers retry when logout fails", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ body: { projects: [project()] } }))
+      .mockResolvedValueOnce(jsonResponse({ status: 500, body: { error: "Internal Server Error" }, requestId: "req-logout" }))
+      .mockResolvedValueOnce(jsonResponse({ status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "退出登录" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("req-logout");
+    expect(screen.getByRole("heading", { name: "你的作品" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "重试退出" }));
     expect(await screen.findByRole("heading", { name: "继续你的故事" })).toBeVisible();
   });
 
@@ -112,6 +134,52 @@ describe("App", () => {
     expect(screen.getByText("雾港来信")).toBeVisible();
   });
 
+  it("preserves a concurrently created project when an optimistic rename rolls back", async () => {
+    const renameResponse = deferred<Response>();
+    const created = project({ id: "25746024-6025-4ad9-916a-29ce50bb3229", title: "并行新作" });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ body: { projects: [project()] } }))
+      .mockImplementationOnce(() => renameResponse.promise)
+      .mockResolvedValueOnce(jsonResponse({ status: 201, body: { project: created } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "重命名《雾港来信》" }));
+    await user.clear(screen.getByLabelText("新的作品名称"));
+    await user.type(screen.getByLabelText("新的作品名称"), "潮汐手稿");
+    await user.click(screen.getByRole("button", { name: "保存名称" }));
+    await user.click(screen.getByRole("button", { name: "创建作品" }));
+    await user.type(screen.getByLabelText("作品名称"), "并行新作");
+    await user.click(screen.getByRole("button", { name: "确认创建" }));
+    renameResponse.resolve(jsonResponse({ status: 409, body: { error: "Version conflict" } }));
+
+    expect(await screen.findByText("雾港来信")).toBeVisible();
+    expect(screen.getByText("并行新作")).toBeVisible();
+  });
+
+  it("preserves concurrent list changes when an optimistic archive rolls back", async () => {
+    const archiveResponse = deferred<Response>();
+    const created = project({ id: "25746024-6025-4ad9-916a-29ce50bb3229", title: "并行新作" });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ body: { projects: [project()] } }))
+      .mockImplementationOnce(() => archiveResponse.promise)
+      .mockResolvedValueOnce(jsonResponse({ status: 201, body: { project: created } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "归档《雾港来信》" }));
+    await user.click(screen.getByRole("button", { name: "确认归档" }));
+    await user.click(screen.getByRole("button", { name: "创建作品" }));
+    await user.type(screen.getByLabelText("作品名称"), "并行新作");
+    await user.click(screen.getByRole("button", { name: "确认创建" }));
+    archiveResponse.resolve(jsonResponse({ status: 500, body: { error: "Internal Server Error" } }));
+
+    expect(await screen.findByText("雾港来信")).toBeVisible();
+    expect(screen.getByText("并行新作")).toBeVisible();
+  });
+
   it("shows uniform authentication errors and request IDs", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({ status: 401, body: { error: "Unauthorized" } }))
@@ -126,6 +194,68 @@ describe("App", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("用户名或密码不正确");
     expect(screen.getByRole("alert")).toHaveTextContent("req-login");
+  });
+
+  it.each([
+    [429, "登录尝试过于频繁", "req-rate"],
+    [500, "登录服务暂时不可用", "req-login-server"],
+  ])("shows a recoverable login message for status %i", async (status, message, requestId) => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ status: 401, body: { error: "Unauthorized" } }))
+      .mockResolvedValueOnce(jsonResponse({ status, body: { error: "failure" }, requestId }));
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+    await user.type(await screen.findByLabelText("用户名"), "alice");
+    await user.type(screen.getByLabelText("密码"), "password");
+    await user.click(screen.getByRole("button", { name: "登录" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(message);
+    expect(screen.getByRole("alert")).toHaveTextContent(requestId);
+    expect(screen.getByRole("button", { name: "重试登录" })).toBeVisible();
+  });
+
+  it("shows a recoverable login message for a network failure", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ status: 401, body: { error: "Unauthorized" } }))
+      .mockRejectedValueOnce(new TypeError("offline"));
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    render(<App />);
+    await user.type(await screen.findByLabelText("用户名"), "alice");
+    await user.type(screen.getByLabelText("密码"), "password");
+    await user.click(screen.getByRole("button", { name: "登录" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("网络连接失败");
+    expect(screen.getByRole("button", { name: "重试登录" })).toBeVisible();
+  });
+
+  it("traps focus in a modal, closes with Escape, and restores the trigger", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ body: { projects: [project()] } })));
+    const user = userEvent.setup();
+    render(<App />);
+
+    const trigger = await screen.findByRole("button", { name: "重命名《雾港来信》" });
+    await user.click(trigger);
+    const dialog = screen.getByRole("dialog");
+    expect(document.querySelector(".app-shell")).toHaveAttribute("inert");
+    expect(screen.getByLabelText("新的作品名称")).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(dialog).toContainElement(document.activeElement as HTMLElement);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it("renders responsive navigation and project actions without viewport-specific duplication", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ body: { projects: [project()] } })));
+    window.innerWidth = 375;
+    render(<App />);
+
+    expect(await screen.findByRole("navigation", { name: "主导航" })).toBeVisible();
+    expect(screen.getAllByRole("button", { name: "重命名《雾港来信》" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "归档《雾港来信》" })).toHaveLength(1);
   });
 
   it("renders a recoverable project loading error", async () => {

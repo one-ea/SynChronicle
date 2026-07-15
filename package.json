@@ -20,9 +20,11 @@
   "scripts": {
     "build": "tsup && vite build",
     "dev": "tsup --watch",
+    "dev:web": "node scripts/dev-web.ts",
     "web": "node dist/web/main.js",
     "worker": "node dist/worker/main.js",
     "test": "vitest run",
+    "test:browser": "playwright test",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },

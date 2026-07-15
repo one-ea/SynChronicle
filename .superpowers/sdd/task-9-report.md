@@ -55,3 +55,42 @@ Implemented the React/Vite application shell, cookie-session authentication flow
 - Session restoration infers authentication through `/api/projects/`; a future dedicated session endpoint can restore display identity without coupling shell startup to project availability.
 - Google Fonts require network access; Georgia fallbacks preserve the literary layout when font delivery is unavailable.
 - Fastify static serving resolves from the process working directory, so production launch must continue from the repository/application root as the package scripts do.
+
+## Hardening Follow-up
+
+### RED / GREEN
+
+- RED: failed logout cleared the local session in `finally` and produced an unhandled rejection. GREEN: only a 204 response clears state; failures retain the project page and expose a request-ID-bearing retry action.
+- RED: rename and archive restored a captured whole-list snapshot, dropping a project created while the mutation was pending. GREEN: functional target-level updates and per-project mutation tokens preserve unrelated and newer state.
+- RED: the static route test consumed residual `dist` output and the server resolved assets from `process.cwd()`. GREEN: tests create an isolated temporary fixture and inject its root; production defaults to the client directory beside the bundled server module.
+- RED: Fastify discarded valid client correlation IDs. GREEN: valid UUID request IDs flow through responses, audit calls, and logs; malformed values are replaced with a generated UUID.
+- RED: login rendered every failure as invalid credentials. GREEN: 401, 429, network, and server failures have distinct recovery messages, with retry labeling for transient failures.
+- RED: the modal lacked inert background, Escape handling, and focus containment. GREEN: modal focus initializes inside the dialog, wraps on Tab, closes on Escape, restores its trigger, and marks background content inert and hidden from assistive technology.
+- RED: custom development ports diverged between Vite, Fastify, and `PUBLIC_URL`. GREEN: `dev:web` derives the Vite port and proxy backend from one environment configuration and supervises all child processes without another runtime dependency.
+
+### Accessibility And Responsive Verification
+
+- The project page and open modal pass axe WCAG 2 A/AA checks in jsdom.
+- Keyboard tests cover initial modal focus, reverse-tab containment, Escape dismissal, and trigger focus restoration.
+- Playwright runs Chromium at 375, 768, 1024, and 1440 pixels, asserting visible navigation, no horizontal overflow, and 44px minimum button bounds.
+
+### Development And Static Serving
+
+- `pnpm dev:web` performs an initial server build, starts tsup watch, Fastify watch, and Vite, and shuts sibling processes down when one exits.
+- A live smoke run started Fastify on 3000 and Vite on 5173; `/api/health` returned 200 through the Vite proxy with `PUBLIC_URL=http://localhost:5173`.
+- Vite retains `/api` and `/ws` proxying and accepts `VITE_BACKEND_URL` from the supervisor for custom backend ports.
+
+### Updated Concerns
+
+- PostgreSQL-conditional tests still require `TEST_DATABASE_URL` and remain skipped in the local full suite.
+- Playwright Chromium and its Linux runtime libraries must be installed in CI before `pnpm test:browser`; this environment was provisioned with Playwright's official install commands.
+- Session restoration continues to infer authentication through `/api/projects/`; a dedicated session endpoint remains a future decoupling opportunity.
+- Google Fonts still use network delivery with Georgia fallbacks.
+
+### Final Hardening Gate
+
+- Vitest: 412 passed, 43 PostgreSQL-conditional skipped.
+- Playwright Chromium: 4 passed across 375, 768, 1024, and 1440 pixel viewports.
+- TypeScript, production build, Drizzle migration check, and Git diff check: passed.
+- Development smoke: Vite and Fastify started together and `/api/health` passed through the configured proxy.
+- Self-review found no remaining Critical or Important findings in the Task 9 scope.

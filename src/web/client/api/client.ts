@@ -12,7 +12,7 @@ export class ApiError extends Error {
 }
 
 interface ApiClientOptions {
-  onUnauthorized?: () => void;
+  onUnauthorized?: (path: string) => void;
 }
 
 function createRequestId(): string {
@@ -42,7 +42,7 @@ export function createApiClient(options: ApiClientOptions = {}) {
           : response.status === 409
             ? "conflict"
             : "request";
-      if (kind === "unauthorized") options.onUnauthorized?.();
+      if (kind === "unauthorized") options.onUnauthorized?.(path);
       throw new ApiError(kind, `请求失败 (${response.status})`, response.status, requestId);
     }
     if (response.status === 204) return undefined as T;

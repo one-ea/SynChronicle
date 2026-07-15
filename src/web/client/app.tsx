@@ -9,9 +9,14 @@ function Application() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [logoutError, setLogoutError] = useState<string | null>(null);
   const sessionRef = useRef(session);
   sessionRef.current = session;
-  const apiRef = useRef(createApiClient({ onUnauthorized: () => sessionRef.current.clear() }));
+  const apiRef = useRef(createApiClient({
+    onUnauthorized: (path) => {
+      if (path !== "/api/auth/logout") sessionRef.current.clear();
+    },
+  }));
 
   const loadProjects = useCallback(async () => {
     setLoading(true);
@@ -38,10 +43,13 @@ function Application() {
   async function logout() {
     try {
       await apiRef.current.request("/api/auth/logout", { method: "POST" });
-    } finally {
+      setLogoutError(null);
       session.clear();
       setProjects([]);
       window.history.replaceState({}, "", "/login");
+    } catch (error) {
+      const requestId = error instanceof ApiError && error.requestId ? ` 请求 ID：${error.requestId}` : "";
+      setLogoutError(`退出失败，请重试。${requestId}`);
     }
   }
 
@@ -55,7 +63,7 @@ function Application() {
 
   if (!session.authenticated) return <LoginPage api={apiRef.current} onAuthenticated={loadProjects} />;
 
-  return <ProjectsPage api={apiRef.current} projects={projects} error={loadError} loading={loading} onProjectsChange={setProjects} onReload={loadProjects} onLogout={logout} />;
+  return <ProjectsPage api={apiRef.current} projects={projects} error={loadError} logoutError={logoutError} loading={loading} onProjectsChange={setProjects} onReload={loadProjects} onLogout={logout} />;
 }
 
 export function App() {

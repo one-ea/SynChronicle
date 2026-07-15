@@ -12,6 +12,7 @@ export function LoginPage({ api, onAuthenticated }: LoginPageProps) {
   const usernameRef = useRef<HTMLInputElement>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [recoverable, setRecoverable] = useState(false);
 
   useEffect(() => usernameRef.current?.focus(), []);
 
@@ -19,6 +20,7 @@ export function LoginPage({ api, onAuthenticated }: LoginPageProps) {
     event.preventDefault();
     setSubmitting(true);
     setError(null);
+    setRecoverable(false);
     const data = new FormData(event.currentTarget);
     try {
       const result = await api.request<{ user: SessionUser }>("/api/auth/login", {
@@ -30,7 +32,18 @@ export function LoginPage({ api, onAuthenticated }: LoginPageProps) {
       window.history.replaceState({}, "", "/projects");
     } catch (caught) {
       const requestId = caught instanceof ApiError && caught.requestId ? ` 请求 ID：${caught.requestId}` : "";
-      setError(`用户名或密码不正确。${requestId}`);
+      if (caught instanceof ApiError && caught.status === 401) {
+        setError(`用户名或密码不正确。${requestId}`);
+      } else if (caught instanceof ApiError && caught.status === 429) {
+        setError(`登录尝试过于频繁，请稍后重试。${requestId}`);
+        setRecoverable(true);
+      } else if (caught instanceof ApiError && caught.status === 0) {
+        setError("网络连接失败，请检查连接后重试。");
+        setRecoverable(true);
+      } else {
+        setError(`登录服务暂时不可用，请稍后重试。${requestId}`);
+        setRecoverable(true);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -54,7 +67,7 @@ export function LoginPage({ api, onAuthenticated }: LoginPageProps) {
           <input id="password" name="password" type="password" autoComplete="current-password" required />
           {error && <p className="message message-error" role="alert">{error}</p>}
           <button className="button button-primary" type="submit" disabled={submitting}>
-            {submitting ? "正在登录" : "登录"}
+            {submitting ? "正在登录" : recoverable ? "重试登录" : "登录"}
           </button>
         </form>
       </section>

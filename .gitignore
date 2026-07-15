@@ -16,6 +16,8 @@
 coverage.*
 *.coverprofile
 profile.cov
+test-results/
+playwright-report/
 
 # Dependency directories
 node_modules/

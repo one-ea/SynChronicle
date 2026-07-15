@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import Fastify, { type FastifyInstance } from "fastify";
 import staticFiles from "@fastify/static";
 import { createDatabase, type Database } from "../db/client.js";
@@ -21,7 +22,9 @@ import {
 import { runRoutes } from "./runs/routes.js";
 import { realtimeRoutes } from "./realtime/routes.js";
 
-type WebServerCommonOptions = Partial<Pick<WebConfig, "publicUrl" | "trustProxy">>;
+type WebServerCommonOptions = Partial<Pick<WebConfig, "publicUrl" | "trustProxy">> & { staticRoot?: string | null };
+
+const requestIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export type WebServerOptions = WebServerCommonOptions & (
   | { databaseUrl: string; database?: never; databaseOwnership?: never }
@@ -32,7 +35,10 @@ export async function buildWebServer(options: WebServerOptions): Promise<Fastify
   const app = Fastify({
     logger: true,
     trustProxy: options.trustProxy ?? false,
-    genReqId: () => randomUUID(),
+    genReqId: (request) => {
+      const candidate = request.headers["x-request-id"];
+      return typeof candidate === "string" && requestIdPattern.test(candidate) ? candidate : randomUUID();
+    },
   });
   app.addHook("onSend", async (request, reply) => {
     reply.header("x-request-id", request.id);
@@ -73,8 +79,10 @@ export async function buildWebServer(options: WebServerOptions): Promise<Fastify
     repository: new SchedulerRepository(database),
   });
   app.get("/api/health", async () => ({ status: "ok" as const }));
-  const clientRoot = resolve(process.cwd(), "dist/web/client");
-  if (existsSync(clientRoot)) {
+  const clientRoot = options.staticRoot === undefined
+    ? resolve(dirname(fileURLToPath(import.meta.url)), "client")
+    : options.staticRoot;
+  if (clientRoot && existsSync(resolve(clientRoot, "index.html"))) {
     await app.register(staticFiles, { root: clientRoot, prefix: "/" });
     app.setNotFoundHandler(async (request, reply) => {
       if (request.url.startsWith("/api/") || request.url.startsWith("/ws/")) {

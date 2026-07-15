@@ -1,4 +1,4 @@
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
 import { ApiError, type ApiClient } from "../api/client.js";
 
 export interface Project {
@@ -18,8 +18,9 @@ interface ProjectsPageProps {
   api: ApiClient;
   projects: Project[];
   error: string | null;
+  logoutError: string | null;
   loading: boolean;
-  onProjectsChange(projects: Project[]): void;
+  onProjectsChange: Dispatch<SetStateAction<Project[]>>;
   onReload(): Promise<void>;
   onLogout(): Promise<void>;
 }
@@ -42,12 +43,43 @@ function ArchiveIcon() {
 export function ProjectsPage(props: ProjectsPageProps) {
   const [dialog, setDialog] = useState<DialogState>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
+  const [dialogPending, setDialogPending] = useState(false);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const dialogRef = useRef<HTMLElement | null>(null);
+  const mutationTokens = useRef(new Map<string, symbol>());
+
+  useEffect(() => {
+    if (!dialog) return;
+    const element = dialogRef.current;
+    const focusable = () => [...(element?.querySelectorAll<HTMLElement>("button:not([disabled]), input:not([disabled]), a[href], [tabindex]:not([tabindex='-1'])") ?? [])];
+    focusable()[0]?.focus();
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeDialog();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const items = focusable();
+      if (items.length === 0) return;
+      const first = items[0]!;
+      const last = items.at(-1)!;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [dialog]);
 
   function openDialog(next: DialogState, trigger: HTMLButtonElement) {
     triggerRef.current = trigger;
     setMessage(null);
+    setDialogPending(false);
     setDialog(next);
   }
 
@@ -60,15 +92,15 @@ export function ProjectsPage(props: ProjectsPageProps) {
     event.preventDefault();
     const title = String(new FormData(event.currentTarget).get("title") ?? "").trim();
     if (!title) return;
-    setPending(true);
+    setDialogPending(true);
     try {
       const { project } = await props.api.request<{ project: Project }>("/api/projects/", { method: "POST", body: JSON.stringify({ title }) });
-      props.onProjectsChange([project, ...props.projects]);
+      props.onProjectsChange((current) => [project, ...current]);
       closeDialog();
     } catch (error) {
       setMessage(requestMessage(error, "作品创建失败。"));
     } finally {
-      setPending(false);
+      setDialogPending(false);
     }
   }
 
@@ -76,28 +108,33 @@ export function ProjectsPage(props: ProjectsPageProps) {
     event.preventDefault();
     const title = String(new FormData(event.currentTarget).get("title") ?? "").trim();
     if (!title || title === project.title) return closeDialog();
-    const previous = props.projects;
-    props.onProjectsChange(previous.map((item) => item.id === project.id ? { ...item, title } : item));
-    setPending(true);
+    const token = Symbol(project.id);
+    mutationTokens.current.set(project.id, token);
+    props.onProjectsChange((current) => current.map((item) => item.id === project.id ? { ...item, title } : item));
     closeDialog();
     try {
       const result = await props.api.request<{ project: Project }>(`/api/projects/${project.id}`, {
         method: "PATCH",
         body: JSON.stringify({ title, version: project.version }),
       });
-      props.onProjectsChange(previous.map((item) => item.id === project.id ? result.project : item));
+      if (mutationTokens.current.get(project.id) === token) {
+        props.onProjectsChange((current) => current.map((item) => item.id === project.id ? result.project : item));
+      }
     } catch (error) {
-      props.onProjectsChange(previous);
-      setMessage(requestMessage(error, "作品重命名失败。"));
+      if (mutationTokens.current.get(project.id) === token) {
+        props.onProjectsChange((current) => current.map((item) => item.id === project.id && item.title === title ? project : item));
+        setMessage(requestMessage(error, "作品重命名失败。"));
+      }
     } finally {
-      setPending(false);
+      if (mutationTokens.current.get(project.id) === token) mutationTokens.current.delete(project.id);
     }
   }
 
   async function archive(project: Project) {
-    const previous = props.projects;
-    props.onProjectsChange(previous.filter((item) => item.id !== project.id));
-    setPending(true);
+    const token = Symbol(project.id);
+    const originalIndex = props.projects.findIndex((item) => item.id === project.id);
+    mutationTokens.current.set(project.id, token);
+    props.onProjectsChange((current) => current.filter((item) => item.id !== project.id));
     closeDialog();
     try {
       await props.api.request(`/api/projects/${project.id}/archive`, {
@@ -105,15 +142,23 @@ export function ProjectsPage(props: ProjectsPageProps) {
         body: JSON.stringify({ version: project.version }),
       });
     } catch (error) {
-      props.onProjectsChange(previous);
-      setMessage(requestMessage(error, "作品归档失败。"));
+      if (mutationTokens.current.get(project.id) === token) {
+        props.onProjectsChange((current) => {
+          if (current.some((item) => item.id === project.id)) return current;
+          const restored = [...current];
+          restored.splice(Math.min(Math.max(originalIndex, 0), restored.length), 0, project);
+          return restored;
+        });
+        setMessage(requestMessage(error, "作品归档失败。"));
+      }
     } finally {
-      setPending(false);
+      if (mutationTokens.current.get(project.id) === token) mutationTokens.current.delete(project.id);
     }
   }
 
   return (
-    <div className="app-shell">
+    <>
+    <div className="app-shell" inert={dialog ? true : undefined} aria-hidden={dialog ? true : undefined}>
       <a className="skip-link" href="#main-content">跳到主要内容</a>
       <header className="site-header">
         <a className="wordmark" href="/projects" aria-label="SynChronicle 作品首页">SynChronicle</a>
@@ -132,10 +177,11 @@ export function ProjectsPage(props: ProjectsPageProps) {
           <button className="button button-primary" type="button" onClick={(event) => openDialog({ kind: "create" }, event.currentTarget)}>创建作品</button>
         </header>
 
-        {(message || props.error) && (
+        {(message || props.error || props.logoutError) && (
           <div className="message message-error error-row" role="alert">
-            <span>{message ?? props.error}</span>
+            <span>{props.logoutError ?? message ?? props.error}</span>
             {props.error && <button className="text-button" type="button" onClick={() => void props.onReload()}>重试</button>}
+            {props.logoutError && <button className="text-button" type="button" onClick={() => void props.onLogout()}>重试退出</button>}
           </div>
         )}
 
@@ -166,30 +212,31 @@ export function ProjectsPage(props: ProjectsPageProps) {
         )}
       </main>
 
+    </div>
       {dialog && (
         <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeDialog(); }}>
-          <section className="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
+          <section ref={dialogRef} className="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
             {dialog.kind === "create" && <form onSubmit={create}>
               <p className="section-number">新手稿</p><h2 id="dialog-title">创建作品</h2>
               <label htmlFor="project-title">作品名称</label>
               <input id="project-title" name="title" autoFocus maxLength={256} required />
               {message && <p className="message message-error" role="alert">{message}</p>}
-              <div className="dialog-actions"><button className="text-button" type="button" onClick={closeDialog}>取消</button><button className="button button-primary" type="submit" disabled={pending}>确认创建</button></div>
+              <div className="dialog-actions"><button className="text-button" type="button" onClick={closeDialog}>取消</button><button className="button button-primary" type="submit" disabled={dialogPending}>确认创建</button></div>
             </form>}
             {dialog.kind === "rename" && <form onSubmit={(event) => void rename(event, dialog.project)}>
               <p className="section-number">编辑书名</p><h2 id="dialog-title">重命名作品</h2>
               <label htmlFor="rename-title">新的作品名称</label>
               <input id="rename-title" name="title" autoFocus defaultValue={dialog.project.title} maxLength={256} required />
-              <div className="dialog-actions"><button className="text-button" type="button" onClick={closeDialog}>取消</button><button className="button button-primary" type="submit" disabled={pending}>保存名称</button></div>
+              <div className="dialog-actions"><button className="text-button" type="button" onClick={closeDialog}>取消</button><button className="button button-primary" type="submit">保存名称</button></div>
             </form>}
             {dialog.kind === "archive" && <div>
               <p className="section-number">移出书架</p><h2 id="dialog-title">归档《{dialog.project.title}》</h2>
               <p>作品内容会完整保留，活动书架将不再显示它。</p>
-              <div className="dialog-actions"><button className="text-button" type="button" onClick={closeDialog}>取消</button><button className="button button-danger" type="button" onClick={() => void archive(dialog.project)} disabled={pending}>确认归档</button></div>
+              <div className="dialog-actions"><button className="text-button" type="button" onClick={closeDialog}>取消</button><button className="button button-danger" type="button" onClick={() => void archive(dialog.project)}>确认归档</button></div>
             </div>}
           </section>
         </div>
       )}
-    </div>
+    </>
   );
 }
