@@ -1,7 +1,10 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { createDatabase, type Database } from "../db/client.js";
 import { authPlugin } from "./auth/plugin.js";
+import { AuditRepository } from "./audit/repository.js";
 import type { WebConfig } from "./config.js";
+import { ProjectRepository } from "./projects/repository.js";
+import { projectRoutes } from "./projects/routes.js";
 
 type WebServerCommonOptions = Partial<Pick<WebConfig, "publicUrl" | "trustProxy">>;
 
@@ -22,6 +25,11 @@ export async function buildWebServer(options: WebServerOptions): Promise<Fastify
   await app.register(authPlugin, {
     db: database,
     publicUrl: options.publicUrl ?? "http://localhost:3000",
+  });
+  await app.register(projectRoutes, {
+    prefix: "/api/projects",
+    repository: new ProjectRepository(database),
+    audit: new AuditRepository(database),
   });
   app.get("/api/health", async () => ({ status: "ok" as const }));
   return app;
