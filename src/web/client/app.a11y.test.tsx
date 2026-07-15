@@ -3,6 +3,7 @@ import axe from "axe-core";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "./app.js";
+import { WorkbenchPage } from "./pages/workbench.js";
 
 it("has no detectable WCAG AA violations on the login page", async () => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "Unauthorized" }), {
@@ -11,6 +12,19 @@ it("has no detectable WCAG AA violations on the login page", async () => {
   })));
   const { container } = render(<App />);
   await screen.findByRole("heading", { name: "继续你的故事" });
+
+  const result = await axe.run(container, { runOnly: { type: "tag", values: ["wcag2a", "wcag2aa"] } });
+  expect(result.violations).toEqual([]);
+});
+
+it("has no detectable WCAG AA violations on the creative workbench", async () => {
+  const { container } = render(<WorkbenchPage api={{ request: vi.fn().mockResolvedValue({}) }} project={{
+    id: "project-1",
+    title: "雾港来信",
+    chapters: [{ id: "chapter-1", title: "潮声抵达前", order: 1, status: "draft", body: "正文" }],
+    latestRun: null,
+  }} initialEvents={[]} />);
+  await screen.findByRole("heading", { name: "创作流" });
 
   const result = await axe.run(container, { runOnly: { type: "tag", values: ["wcag2a", "wcag2aa"] } });
   expect(result.violations).toEqual([]);

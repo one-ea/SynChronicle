@@ -3,6 +3,7 @@ import { createApiClient, ApiError } from "./api/client.js";
 import { SessionProvider, useSession } from "./auth/session.js";
 import { LoginPage } from "./pages/login.js";
 import { ProjectsPage, type Project } from "./pages/projects.js";
+import { WorkbenchPage, type WorkbenchProject } from "./pages/workbench.js";
 
 function Application() {
   const session = useSession();
@@ -10,6 +11,7 @@ function Application() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [logoutError, setLogoutError] = useState<string | null>(null);
+  const [workbenchProject, setWorkbenchProject] = useState<WorkbenchProject | null>(null);
   const sessionRef = useRef(session);
   sessionRef.current = session;
   const apiRef = useRef(createApiClient({
@@ -40,6 +42,18 @@ function Application() {
 
   useEffect(() => { void loadProjects(); }, [loadProjects]);
 
+  const workbenchMatch = window.location.pathname.match(/^\/projects\/([^/]+)$/);
+  useEffect(() => {
+    if (!session.authenticated || !workbenchMatch) return;
+    let active = true;
+    apiRef.current.request<{ project: WorkbenchProject }>(`/api/projects/${encodeURIComponent(workbenchMatch[1]!)}`).then(({ project }) => {
+      if (active) setWorkbenchProject(project);
+    }).catch((error) => {
+      if (active && !(error instanceof ApiError && error.kind === "unauthorized")) setLoadError("创作台加载失败，请返回作品页重试。");
+    });
+    return () => { active = false; };
+  }, [session.authenticated, workbenchMatch?.[1]]);
+
   async function logout() {
     try {
       await apiRef.current.request("/api/auth/logout", { method: "POST" });
@@ -62,6 +76,12 @@ function Application() {
   }
 
   if (!session.authenticated) return <LoginPage api={apiRef.current} onAuthenticated={loadProjects} />;
+
+  if (workbenchMatch) {
+    if (loadError) return <main className="boot-state"><div className="message message-error" role="alert">{loadError}<a className="text-button" href="/projects">返回作品页</a></div></main>;
+    if (!workbenchProject) return <main className="boot-state" aria-live="polite"><span className="loader" />正在展开手稿</main>;
+    return <WorkbenchPage api={apiRef.current} project={workbenchProject} />;
+  }
 
   return <ProjectsPage api={apiRef.current} projects={projects} error={loadError} logoutError={logoutError} loading={loading} onProjectsChange={setProjects} onReload={loadProjects} onLogout={logout} />;
 }
