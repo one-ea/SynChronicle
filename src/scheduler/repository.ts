@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { and, asc, count, eq, inArray, lte, sql } from "drizzle-orm";
 import type { Database } from "../db/client.js";
-import { projects, runs, tasks, users } from "../db/schema/index.js";
+import { projects, runEvents, runs, tasks, users } from "../db/schema/index.js";
 import type { RequestAuth } from "../web/auth/plugin.js";
 import { LEGACY_COMMAND_ID_PREFIX } from "./types.js";
 import type {
@@ -221,6 +221,108 @@ export class SchedulerRepository {
       sql`${tasks.leaseExpiresAt} > ${now}`,
     )).returning({ id: tasks.id });
     return Boolean(renewed);
+  }
+
+  async startTask(taskId: string, workerId: string): Promise<boolean> {
+    const now = new Date();
+    return this.db.transaction(async (transaction) => {
+      const [started] = await transaction.update(tasks).set({ status: "running", updatedAt: now }).where(and(
+        eq(tasks.id, taskId),
+        eq(tasks.leaseOwner, workerId),
+        eq(tasks.status, "leased"),
+        sql`${tasks.leaseExpiresAt} > ${now}`,
+      )).returning({ runId: tasks.runId });
+      if (!started) return false;
+      await transaction.update(runs).set({ status: "running", startedAt: sql`coalesce(${runs.startedAt}, ${now})`, updatedAt: now })
+        .where(eq(runs.id, started.runId));
+      return true;
+    });
+  }
+
+  async readRunControl(runId: string): Promise<RunResumeData> {
+    const [run] = await this.db.select({ resumeData: runs.resumeData }).from(runs).where(eq(runs.id, runId)).limit(1);
+    if (!run) throw new Error(`run ${runId} is missing`);
+    return normalizeRunResumeData(run.resumeData);
+  }
+
+  async applySteerCommands(runId: string, workerId: string, commandIds: string[]): Promise<boolean> {
+    if (!commandIds.length) return true;
+    const now = new Date();
+    return this.db.transaction(async (transaction) => {
+      const [owned] = await transaction.select({ id: tasks.id }).from(tasks).where(and(
+        eq(tasks.runId, runId),
+        eq(tasks.leaseOwner, workerId),
+        inArray(tasks.status, activeTaskStatuses),
+        sql`${tasks.leaseExpiresAt} > ${now}`,
+      )).limit(1).for("update");
+      if (!owned) return false;
+      const [run] = await transaction.select().from(runs).where(eq(runs.id, runId)).limit(1).for("update");
+      if (!run) return false;
+      const resumeData = normalizeRunResumeData(run.resumeData);
+      await transaction.update(runs).set({
+        resumeData: { ...resumeData, steerCommands: resumeData.steerCommands.filter(({ id }) => !commandIds.includes(id)) },
+        updatedAt: now,
+      }).where(eq(runs.id, runId));
+      return true;
+    });
+  }
+
+  async finishTask(taskId: string, workerId: string, status: ReleaseLeaseOutcome["status"]): Promise<boolean> {
+    const now = new Date();
+    return this.db.transaction(async (transaction) => {
+      await transaction.execute(sql`select pg_advisory_xact_lock(${schedulerAdvisoryLock})`);
+      const [task] = await transaction.select({ runId: tasks.runId }).from(tasks).where(and(
+        eq(tasks.id, taskId),
+        eq(tasks.leaseOwner, workerId),
+        inArray(tasks.status, activeTaskStatuses),
+        sql`${tasks.leaseExpiresAt} > ${now}`,
+      )).limit(1).for("update");
+      if (!task) return false;
+      const [released] = await buildReleaseLeaseQuery(transaction, taskId, workerId, { status }, now);
+      if (!released) return false;
+      const runStatus = status === "queued" ? "queued" : status;
+      await transaction.update(runs).set({
+        status: runStatus,
+        completedAt: status === "completed" || status === "failed" || status === "cancelled" ? now : null,
+        updatedAt: now,
+      }).where(eq(runs.id, task.runId));
+      return true;
+    });
+  }
+
+  async recordTaskError(taskId: string, workerId: string, error: { message: string; stack?: string; retryable: boolean }): Promise<boolean> {
+    const now = new Date();
+    return this.db.transaction(async (transaction) => {
+      const [task] = await transaction.select().from(tasks).where(and(
+        eq(tasks.id, taskId),
+        eq(tasks.leaseOwner, workerId),
+        inArray(tasks.status, activeTaskStatuses),
+        sql`${tasks.leaseExpiresAt} > ${now}`,
+      )).limit(1).for("update");
+      if (!task) return false;
+      await transaction.execute(sql`select pg_advisory_xact_lock(hashtext(${task.runId}))`);
+      const rows = await transaction.select({ sequence: sql<number>`coalesce(max(${runEvents.sequence}), 0)` })
+        .from(runEvents).where(eq(runEvents.runId, task.runId));
+      const sequence = Number(rows[0]?.sequence ?? 0) + 1;
+      const payload = {
+        seq: sequence,
+        time: now.toISOString(),
+        kind: "ui_event",
+        priority: "control",
+        category: "WORKER.ERROR",
+        summary: error.message,
+        payload: { type: "error", message: error.message, stack: error.stack, retryable: error.retryable, taskId },
+      };
+      await transaction.insert(runEvents).values({
+        userId: task.userId,
+        projectId: task.projectId,
+        runId: task.runId,
+        sequence,
+        type: "ui_event",
+        payload,
+      });
+      return true;
+    });
   }
 
   async releaseLease(taskId: string, workerId: string, outcome: ReleaseLeaseOutcome): Promise<boolean> {

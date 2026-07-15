@@ -25,6 +25,26 @@ async function host(outputs: string[] = []) {
 }
 
 describe("Host", () => {
+  it("reports agent and durable commit boundaries", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "runtime-host-boundaries-"));
+    const store = new Store(dir);
+    await store.init();
+    const staging = await store.staging.createSession("boundary-test");
+    const artifact = await staging.stage(1, { target: "chapters/01.md", content: "chapter" });
+    const boundaries: string[] = [];
+    const runtimeAgent: RuntimeAgent = {
+      run: async function* () { await store.commitStaged(staging, [artifact.id]); },
+      abort: vi.fn(),
+      close: vi.fn(),
+    };
+    const value = await Host.new({ provider: "mock", model: "mock", providers: { mock: { api_key: "test" } }, roles: {}, output_dir: dir }, {}, { agent: runtimeAgent, store });
+    value.setBoundaryHandler(async (boundary) => { boundaries.push(boundary); });
+
+    await value.startPrepared("write");
+
+    expect(boundaries).toEqual(["agent", "commit:enter", "commit:exit", "agent"]);
+  });
+
   it("registers an injected agent observer once across multiple runs", async () => {
     const setObserver = vi.fn();
     const runtimeAgent = { ...agent(), setObserver };

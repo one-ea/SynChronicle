@@ -1,0 +1,179 @@
+import { describe, expect, it, vi } from "vitest";
+import type { TaskRow } from "../scheduler/types.js";
+import type { RunResumeData } from "../scheduler/types.js";
+import { WorkerRunner, taskFingerprint, type WorkerHost, type WorkerScheduler } from "./runner.js";
+
+function task(overrides: Partial<TaskRow> = {}): TaskRow {
+  const now = new Date();
+  return {
+    id: "task-1",
+    userId: "user-1",
+    projectId: "project-1",
+    runId: "run-1",
+    type: "write",
+    status: "leased",
+    priority: 0,
+    leaseOwner: "worker-1",
+    leaseExpiresAt: new Date(now.getTime() + 30_000),
+    attempts: 1,
+    maxAttempts: 3,
+    scheduledAt: now,
+    payload: { prompt: "Write chapter one" },
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  };
+}
+
+function scheduler(claimed: TaskRow | null, control: RunResumeData = { desiredState: "running", steerCommands: [] }) {
+  const value: WorkerScheduler = {
+    claimNextTask: vi.fn().mockResolvedValue(claimed),
+    startTask: vi.fn().mockResolvedValue(true),
+    renewLease: vi.fn().mockResolvedValue(true),
+    readRunControl: vi.fn().mockResolvedValue(control),
+    applySteerCommands: vi.fn().mockResolvedValue(true),
+    finishTask: vi.fn().mockResolvedValue(true),
+    recordTaskError: vi.fn().mockResolvedValue(true),
+  };
+  return value;
+}
+
+function host(options: { checkpoint?: string; execute?: () => Promise<void>; onBoundary?: (boundary: () => Promise<void>) => void } = {}) {
+  let boundary: (() => Promise<void>) | undefined;
+  const value: WorkerHost = {
+    latestCheckpointFingerprint: vi.fn().mockResolvedValue(options.checkpoint ?? null),
+    startPrepared: vi.fn(options.execute ?? (async () => undefined)),
+    resume: vi.fn(async () => { await options.execute?.(); return { label: "chapter 1" }; }),
+    steer: vi.fn().mockResolvedValue(undefined),
+    abort: vi.fn(),
+    close: vi.fn().mockResolvedValue(undefined),
+    setBoundaryHandler: vi.fn((handler) => { boundary = handler; options.onBoundary?.(handler); }),
+  };
+  return { value, boundary: () => boundary };
+}
+
+describe("WorkerRunner", () => {
+  it("recovers an expired task from the latest matching checkpoint", async () => {
+    const claimed = task({ attempts: 2 });
+    const repository = scheduler(claimed);
+    const fakeHost = host({ checkpoint: taskFingerprint(claimed) }).value;
+    const runner = new WorkerRunner({ scheduler: repository, createHost: async () => fakeHost, workerId: "worker-1", leaseMs: 30_000 });
+
+    await runner.runOnce();
+
+    expect(fakeHost.resume).toHaveBeenCalledOnce();
+    expect(fakeHost.startPrepared).not.toHaveBeenCalled();
+    expect(repository.finishTask).toHaveBeenCalledWith(claimed.id, "worker-1", "completed");
+  });
+
+  it("starts from the task prompt when the checkpoint fingerprint is stale", async () => {
+    const claimed = task();
+    const repository = scheduler(claimed);
+    const fakeHost = host({ checkpoint: "stale" }).value;
+    const runner = new WorkerRunner({ scheduler: repository, createHost: async () => fakeHost, workerId: "worker-1", leaseMs: 30_000 });
+
+    await runner.runOnce();
+
+    expect(fakeHost.startPrepared).toHaveBeenCalledWith("Write chapter one");
+    expect(fakeHost.resume).not.toHaveBeenCalled();
+  });
+
+  it("renews the lease while a task is executing", async () => {
+    vi.useFakeTimers();
+    try {
+      const claimed = task();
+      const repository = scheduler(claimed);
+      let finish!: () => void;
+      const execution = new Promise<void>((resolve) => { finish = resolve; });
+      const fakeHost = host({ execute: () => execution }).value;
+      const runner = new WorkerRunner({ scheduler: repository, createHost: async () => fakeHost, workerId: "worker-1", leaseMs: 300 });
+
+      const running = runner.runOnce();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(repository.renewLease).toHaveBeenCalledWith(claimed.id, "worker-1", 300);
+      finish();
+      await running;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops before a boundary when pause is requested", async () => {
+    const claimed = task();
+    const repository = scheduler(claimed, { desiredState: "paused", steerCommands: [] });
+    let boundary!: () => Promise<void>;
+    const fakeHost = host({ onBoundary: (handler) => { boundary = handler; }, execute: async () => { await boundary(); } }).value;
+    const runner = new WorkerRunner({ scheduler: repository, createHost: async () => fakeHost, workerId: "worker-1", leaseMs: 30_000 });
+
+    await runner.runOnce();
+
+    expect(fakeHost.abort).toHaveBeenCalledWith("run paused");
+    expect(repository.finishTask).toHaveBeenCalledWith(claimed.id, "worker-1", "paused");
+  });
+
+  it("applies steer once at an agent boundary", async () => {
+    const claimed = task();
+    const command = { id: "steer-1", instruction: "Increase tension" };
+    const repository = scheduler(claimed, { desiredState: "running", steerCommands: [command] });
+    let boundary!: () => Promise<void>;
+    const fakeHost = host({ onBoundary: (handler) => { boundary = handler; }, execute: async () => { await boundary(); await boundary(); } }).value;
+    const runner = new WorkerRunner({ scheduler: repository, createHost: async () => fakeHost, workerId: "worker-1", leaseMs: 30_000 });
+
+    await runner.runOnce();
+
+    expect(fakeHost.steer).toHaveBeenCalledTimes(1);
+    expect(fakeHost.steer).toHaveBeenCalledWith("Increase tension");
+    expect(repository.applySteerCommands).toHaveBeenCalledWith(claimed.runId, "worker-1", ["steer-1"]);
+  });
+
+  it("defers a pause received during commit until the transaction exits", async () => {
+    const claimed = task();
+    let control: RunResumeData = { desiredState: "running", steerCommands: [] };
+    const repository = scheduler(claimed);
+    vi.mocked(repository.readRunControl).mockImplementation(async () => control);
+    let boundary!: (value?: "agent" | "commit:enter" | "commit:exit") => Promise<void>;
+    const fakeHost = host({
+      onBoundary: (handler) => { boundary = handler; },
+      execute: async () => {
+        await boundary("commit:enter");
+        control = { desiredState: "paused", steerCommands: [] };
+        expect(fakeHost.abort).not.toHaveBeenCalled();
+        await boundary("commit:exit");
+      },
+    }).value;
+    const runner = new WorkerRunner({ scheduler: repository, createHost: async () => fakeHost, workerId: "worker-1", leaseMs: 30_000 });
+
+    await runner.runOnce();
+
+    expect(fakeHost.abort).toHaveBeenCalledWith("run paused");
+    expect(repository.finishTask).toHaveBeenCalledWith(claimed.id, "worker-1", "paused");
+  });
+
+  it("fences the final task commit after lease ownership is lost", async () => {
+    const claimed = task();
+    const repository = scheduler(claimed);
+    vi.mocked(repository.finishTask).mockResolvedValue(false);
+    const fakeHost = host().value;
+    const runner = new WorkerRunner({ scheduler: repository, createHost: async () => fakeHost, workerId: "worker-1", leaseMs: 30_000 });
+
+    await expect(runner.runOnce()).rejects.toThrow("lease ownership lost");
+    expect(vi.mocked(fakeHost.close).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(repository.finishTask).mock.invocationCallOrder[0]!);
+    expect(repository.recordTaskError).toHaveBeenCalledWith(claimed.id, "worker-1", expect.objectContaining({ retryable: true }));
+  });
+
+  it("persists retryable and terminal failures with distinct outcomes", async () => {
+    const retryTask = task({ attempts: 1, maxAttempts: 3 });
+    const retryScheduler = scheduler(retryTask);
+    const retryHost = host({ execute: async () => { throw new Error("provider timeout"); } }).value;
+    await new WorkerRunner({ scheduler: retryScheduler, createHost: async () => retryHost, workerId: "worker-1", leaseMs: 30_000 }).runOnce();
+    expect(retryScheduler.recordTaskError).toHaveBeenCalledWith(retryTask.id, "worker-1", expect.objectContaining({ retryable: true, message: "provider timeout" }));
+    expect(retryScheduler.finishTask).toHaveBeenCalledWith(retryTask.id, "worker-1", "queued");
+
+    const finalTask = task({ attempts: 3, maxAttempts: 3 });
+    const finalScheduler = scheduler(finalTask);
+    const finalHost = host({ execute: async () => { throw new Error("invalid task payload"); } }).value;
+    await new WorkerRunner({ scheduler: finalScheduler, createHost: async () => finalHost, workerId: "worker-1", leaseMs: 30_000 }).runOnce();
+    expect(finalScheduler.recordTaskError).toHaveBeenCalledWith(finalTask.id, "worker-1", expect.objectContaining({ retryable: false }));
+    expect(finalScheduler.finishTask).toHaveBeenCalledWith(finalTask.id, "worker-1", "failed");
+  });
+});

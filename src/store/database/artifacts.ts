@@ -3,7 +3,7 @@ import type { Database } from "../../db/client.js";
 import { artifacts, chapters, checkpoints, runEvents, usageRecords } from "../../db/schema/index.js";
 import type { Checkpoint, RuntimeQueueItem, UsageState } from "../../domain/index.js";
 
-export interface DatabaseStoreScope { userId: string; projectId: string; runId: string; }
+export interface DatabaseStoreScope { userId: string; projectId: string; runId: string; taskFingerprint?: string; }
 export type DomainTableName = "run_events" | "checkpoints" | "usage_records";
 
 export interface DatabaseBackend {
@@ -14,6 +14,7 @@ export interface DatabaseBackend {
   appendRuntime(scope: DatabaseStoreScope, item: RuntimeQueueItem): Promise<RuntimeQueueItem>;
   clearRuntime(scope: DatabaseStoreScope): Promise<void>;
   loadCheckpoints(scope: DatabaseStoreScope): Promise<Checkpoint[]>;
+  latestCheckpointFingerprint(scope: DatabaseStoreScope): Promise<string | null>;
   appendCheckpoint(scope: DatabaseStoreScope, checkpoint: Checkpoint): Promise<void>;
   replaceCheckpoints(scope: DatabaseStoreScope, values: Checkpoint[]): Promise<void>;
   loadUsage(scope: DatabaseStoreScope): Promise<UsageState | null>;
@@ -77,6 +78,12 @@ export class DrizzleDatabaseBackend implements DatabaseBackend {
     return rows.map((row) => row.state as Checkpoint);
   }
 
+  async latestCheckpointFingerprint(scope: DatabaseStoreScope) {
+    const rows = await this.database.select({ fingerprint: checkpoints.taskFingerprint }).from(checkpoints)
+      .where(runScope(checkpoints, scope)).orderBy(desc(checkpoints.version)).limit(1);
+    return rows[0]?.fingerprint ?? null;
+  }
+
   async appendCheckpoint(scope: DatabaseStoreScope, checkpoint: Checkpoint) {
     await this.database.insert(checkpoints).values(checkpointRow(scope, checkpoint));
   }
@@ -92,6 +99,7 @@ export class DrizzleDatabaseBackend implements DatabaseBackend {
   }
 
   async saveUsage(scope: DatabaseStoreScope, state: UsageState) {
+    if (JSON.stringify(await this.loadUsage(scope)) === JSON.stringify(state)) return;
     await this.database.insert(usageRecords).values({ ...scope, agent: "__store_state__", credentialSource: "store", provider: "store", model: "aggregate", inputTokens: state.overall.input, outputTokens: state.overall.output, cost: String(state.overall.cost_usd), latencyMs: 0, state });
   }
 
@@ -113,10 +121,11 @@ export class MemoryDatabaseBackend implements DatabaseBackend {
   async appendRuntime(scope: DatabaseStoreScope, item: RuntimeQueueItem) { const rows = this.rows<RuntimeQueueItem>("run_events", scope); const value = { ...item, seq: (rows.at(-1)?.value.seq ?? 0) + 1, time: item.time || new Date().toISOString() }; this.tables.run_events.push({ ...scope, value }); return value; }
   async clearRuntime(scope: DatabaseStoreScope) { this.tables.run_events = this.tables.run_events.filter((row) => !matches(row, scope)); }
   async loadCheckpoints(scope: DatabaseStoreScope) { return this.rows<Checkpoint>("checkpoints", scope).map((row) => row.value); }
+  async latestCheckpointFingerprint(scope: DatabaseStoreScope) { const row = this.rows<Checkpoint>("checkpoints", scope).at(-1); return row?.taskFingerprint ?? row?.value.digest ?? null; }
   async appendCheckpoint(scope: DatabaseStoreScope, value: Checkpoint) { this.tables.checkpoints.push({ ...scope, value: structuredClone(value) }); }
   async replaceCheckpoints(scope: DatabaseStoreScope, values: Checkpoint[]) { this.tables.checkpoints = this.tables.checkpoints.filter((row) => !matches(row, scope)); for (const value of values) await this.appendCheckpoint(scope, value); }
   async loadUsage(scope: DatabaseStoreScope) { return this.rows<UsageState>("usage_records", scope).at(-1)?.value ?? null; }
-  async saveUsage(scope: DatabaseStoreScope, value: UsageState) { this.tables.usage_records.push({ ...scope, value: structuredClone(value) }); }
+  async saveUsage(scope: DatabaseStoreScope, value: UsageState) { if (JSON.stringify(await this.loadUsage(scope)) !== JSON.stringify(value)) this.tables.usage_records.push({ ...scope, value: structuredClone(value) }); }
   async transaction<T>(operation: (backend: DatabaseBackend) => Promise<T>): Promise<T> { const staged = new MemoryDatabaseBackend(cloneValues(this.values), structuredClone(this.tables)); const result = await operation(staged); this.values = staged.values; this.tables = staged.tables; return result; }
   private rows<T>(table: DomainTableName, scope: DatabaseStoreScope) { return this.tables[table].filter((row) => matches(row, scope)) as Array<DatabaseStoreScope & { value: T }>; }
 }
@@ -125,7 +134,7 @@ export function scopedArtifactFilter(scope: DatabaseStoreScope) { return artifac
 function artifactScope(scope: DatabaseStoreScope) { return and(eq(artifacts.userId, scope.userId), eq(artifacts.projectId, scope.projectId), eq(artifacts.runId, scope.runId)); }
 function chapterScope(scope: DatabaseStoreScope, sequence: number) { return and(eq(chapters.userId, scope.userId), eq(chapters.projectId, scope.projectId), eq(chapters.runId, scope.runId), eq(chapters.sequence, sequence)); }
 function runScope(table: typeof runEvents | typeof checkpoints | typeof usageRecords, scope: DatabaseStoreScope) { return and(eq(table.userId, scope.userId), eq(table.projectId, scope.projectId), eq(table.runId, scope.runId)); }
-function checkpointRow(scope: DatabaseStoreScope, checkpoint: Checkpoint) { return { ...scope, version: checkpoint.seq, state: checkpoint, summary: checkpoint.step, taskFingerprint: checkpoint.digest ?? `${checkpoint.scope.kind}:${checkpoint.step}:${checkpoint.seq}`, projectVersion: 1 }; }
+function checkpointRow(scope: DatabaseStoreScope, checkpoint: Checkpoint) { return { ...scope, version: checkpoint.seq, state: checkpoint, summary: checkpoint.step, taskFingerprint: scope.taskFingerprint ?? checkpoint.digest ?? `${checkpoint.scope.kind}:${checkpoint.step}:${checkpoint.seq}`, projectVersion: 1 }; }
 function key(scope: DatabaseStoreScope, path: string) { return `${scope.userId}\0${scope.projectId}\0${scope.runId}\0${path}`; }
 function matches(row: unknown, scope: DatabaseStoreScope) { const value = row as Partial<DatabaseStoreScope>; return value.userId === scope.userId && value.projectId === scope.projectId && value.runId === scope.runId; }
 function cloneValues(values: Map<string, Uint8Array>) { return new Map([...values].map(([path, content]) => [path, Buffer.from(content)])); }

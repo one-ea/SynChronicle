@@ -26,13 +26,16 @@ describe("DatabaseStore memory contract", () => {
   });
 
   it("maps runtime, checkpoints, and usage to domain tables", async () => {
-    const store = createMemoryDatabaseStore(scope());
+    const store = createMemoryDatabaseStore({ ...scope(), taskFingerprint: "task-fingerprint" });
     await store.runtime.appendQueue({ seq: 0, time: "", kind: "ui_event", priority: "background", summary: "event" });
     await store.checkpoints.append({ kind: "global" }, "checkpoint");
-    await store.usage.save({ schema: 1, updated_at: "now", overall: { input: 1, output: 2, cache_read: 0, cache_write: 0, cost_usd: 0, saved_usd: 0, cache_capable: false }, per_agent: {}, missing_assistant_usage: 0 });
+    const usage = { schema: 1 as const, updated_at: "now", overall: { input: 1, output: 2, cache_read: 0, cache_write: 0, cost_usd: 0, saved_usd: 0, cache_capable: false }, per_agent: {}, missing_assistant_usage: 0 };
+    await store.usage.save(usage);
+    await store.usage.save(usage);
     expect(store.backend.inspect("run_events")).toHaveLength(1);
     expect(store.backend.inspect("checkpoints")).toHaveLength(1);
     expect(store.backend.inspect("usage_records")).toHaveLength(1);
+    expect(await store.latestCheckpointFingerprint()).toBe("task-fingerprint");
   });
 
   it("commits selected candidate artifacts atomically", async () => {

@@ -15,6 +15,7 @@ export class DatabaseStore extends Store {
     this.runtime = new DatabaseRuntimeStore(io);
   }
   static artifactScope(scope: DatabaseStoreScope) { return scopedArtifactFilter(scope); }
+  latestCheckpointFingerprint() { return this.backend.latestCheckpointFingerprint(this.scope); }
   override resolveExportPath(_filename: string): string { throw new Error("DatabaseStore requires an explicit export path"); }
   override recordingTransaction() { return new DatabaseRecordingTransaction(this.databaseIo); }
   override async commitStaged(staging: StagingSession, candidateIds: string[]) { await commitDatabaseStaging(this.databaseIo, staging, candidateIds); await this.checkpoints.reload(); }
