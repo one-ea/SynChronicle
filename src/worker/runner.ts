@@ -1,37 +1,43 @@
 import { createHash } from "node:crypto";
-import type { ReleaseLeaseOutcome, RunResumeData, TaskRow } from "../scheduler/types.js";
-import { pendingSteer, TaskExecutionError, taskError, taskPrompt, type WorkerBoundary } from "./commands.js";
+import type { ClaimedTask as SchedulerClaimedTask, ReleaseLeaseOutcome, RunResumeData } from "../scheduler/types.js";
+import { TaskExecutionError, taskError, taskPrompt, type WorkerBoundary } from "./commands.js";
+
+export type ClaimedTask = SchedulerClaimedTask;
 
 export interface WorkerHost {
-  latestCheckpointFingerprint(): Promise<string | null>;
-  startPrepared(prompt: string): Promise<void>;
-  resume(): Promise<{ label: string | null; error?: Error }>;
-  steer(instruction: string): Promise<void>;
+  latestCheckpoint(): Promise<{ taskFingerprint: string; projectVersion: number } | null>;
+  startPrepared(prompt: string, signal?: AbortSignal): Promise<void>;
+  resume(signal?: AbortSignal): Promise<{ label: string | null; error?: Error }>;
+  steer(commandId: string, instruction: string): Promise<void>;
   abort(reason: string): void;
   close(): Promise<void>;
+  events?(): AsyncIterable<unknown>;
+  stream?(): AsyncIterable<string>;
   setBoundaryHandler(handler: (boundary?: WorkerBoundary) => Promise<void>): void;
 }
 
 export interface WorkerScheduler {
-  claimNextTask(workerId: string, leaseMs: number): Promise<TaskRow | null>;
-  startTask(taskId: string, workerId: string): Promise<boolean>;
-  renewLease(taskId: string, workerId: string, leaseMs: number): Promise<boolean>;
+  claimNextTask(workerId: string, leaseMs: number): Promise<ClaimedTask | null>;
+  startTask(taskId: string, workerId: string, leaseVersion: number): Promise<boolean>;
+  renewLease(taskId: string, workerId: string, leaseMs: number, leaseVersion: number): Promise<boolean>;
   readRunControl(runId: string): Promise<RunResumeData>;
-  applySteerCommands(runId: string, workerId: string, commandIds: string[]): Promise<boolean>;
-  finishTask(taskId: string, workerId: string, status: ReleaseLeaseOutcome["status"]): Promise<boolean>;
-  recordTaskError(taskId: string, workerId: string, error: { message: string; stack?: string; retryable: boolean }): Promise<boolean>;
+  claimSteerCommands(taskId: string, workerId: string, leaseVersion: number): Promise<Array<{ id: string; instruction: string }>>;
+  acknowledgeSteerCommands(taskId: string, workerId: string, leaseVersion: number, commandIds: string[]): Promise<boolean>;
+  finishTask(taskId: string, workerId: string, status: ReleaseLeaseOutcome["status"], leaseVersion: number): Promise<boolean>;
+  recordTaskError(taskId: string, workerId: string, error: { message: string; stack?: string; retryable: boolean; category: string }, leaseVersion: number): Promise<boolean>;
+  recordTaskControl(taskId: string, workerId: string, control: "paused" | "cancelled", leaseVersion: number): Promise<boolean>;
 }
 
 export interface WorkerRunnerDependencies {
   scheduler: WorkerScheduler;
-  createHost(task: TaskRow): Promise<WorkerHost>;
+  createHost(task: ClaimedTask): Promise<WorkerHost>;
   workerId: string;
   leaseMs?: number;
   idleMs?: number;
   clock?: Pick<typeof globalThis, "setTimeout" | "clearTimeout">;
 }
 
-export function taskFingerprint(task: TaskRow): string {
+export function taskFingerprint(task: ClaimedTask): string {
   return createHash("sha256").update(JSON.stringify({ type: task.type, payload: task.payload })).digest("hex");
 }
 
@@ -62,10 +68,10 @@ export class WorkerRunner {
     }
   }
 
-  async executeTask(task: TaskRow, signal?: AbortSignal): Promise<void> {
+  async executeTask(task: ClaimedTask, signal?: AbortSignal): Promise<void> {
     const { scheduler, workerId } = this.dependencies;
     const host = await this.dependencies.createHost(task);
-    const appliedCommands = new Set<string>();
+    const drains = [host.events?.(), host.stream?.()].filter((value): value is AsyncIterable<unknown> => Boolean(value)).map(drain);
     const executionState: { outcome: ReleaseLeaseOutcome["status"] } = { outcome: "completed" };
     let leaseLost: TaskExecutionError | null = null;
     let renewalTimer: ReturnType<typeof setTimeout> | undefined;
@@ -73,8 +79,8 @@ export class WorkerRunner {
     let hostClosed = false;
 
     const verifyLease = async () => {
-      if (!await scheduler.renewLease(task.id, workerId, this.leaseMs)) {
-        leaseLost = new TaskExecutionError("lease ownership lost", true);
+      if (!await scheduler.renewLease(task.id, workerId, this.leaseMs, task.leaseVersion)) {
+        leaseLost = new TaskExecutionError("lease ownership lost", true, { category: "lease_loss" });
         host.abort(leaseLost.message);
         throw leaseLost;
       }
@@ -95,54 +101,62 @@ export class WorkerRunner {
         executionState.outcome = control.desiredState === "paused" ? "paused" : "cancelled";
         const reason = control.desiredState === "paused" ? "run paused" : "run aborted";
         host.abort(reason);
-        throw new TaskExecutionError(reason, false);
+        throw new TaskExecutionError(reason, false, { category: "cancel" });
       }
-      const commands = pendingSteer(control, appliedCommands);
+      const commands = await scheduler.claimSteerCommands(task.id, workerId, task.leaseVersion);
       for (const command of commands) {
-        await host.steer(command.instruction);
-        appliedCommands.add(command.id);
+        await host.steer(command.id, command.instruction);
       }
-      if (commands.length && !await scheduler.applySteerCommands(task.runId, workerId, commands.map(({ id }) => id))) {
-        throw new TaskExecutionError("lease ownership lost while applying steer", true);
+      if (commands.length && !await scheduler.acknowledgeSteerCommands(task.id, workerId, task.leaseVersion, commands.map(({ id }) => id))) {
+        throw new TaskExecutionError("lease ownership lost while applying steer", true, { category: "lease_loss" });
       }
     };
 
     host.setBoundaryHandler(handleBoundary);
+    const abortHost = () => { stopped = true; if (renewalTimer !== undefined) this.clock.clearTimeout(renewalTimer); host.abort(signal?.reason instanceof Error ? signal.reason.message : "worker shutdown"); };
+    signal?.addEventListener("abort", abortHost, { once: true });
     try {
-      if (!await scheduler.startTask(task.id, workerId)) throw new TaskExecutionError("lease ownership lost before task start", true);
+      if (!await scheduler.startTask(task.id, workerId, task.leaseVersion)) throw new TaskExecutionError("lease ownership lost before task start", true, { category: "lease_loss" });
       scheduleRenewal();
-      const checkpoint = await host.latestCheckpointFingerprint();
-      if (checkpoint === taskFingerprint(task)) {
-        const resumed = await host.resume();
+      const checkpoint = await host.latestCheckpoint();
+      if (checkpoint?.taskFingerprint === taskFingerprint(task) && checkpoint.projectVersion === task.projectVersion) {
+        const resumed = await host.resume(signal);
         if (resumed.error) throw resumed.error;
       } else {
-        await host.startPrepared(taskPrompt(task.payload));
+        await host.startPrepared(taskPrompt(task.payload), signal);
       }
       await verifyLease();
       await host.close();
       hostClosed = true;
+      await Promise.all(drains);
       await verifyLease();
-      if (!await scheduler.finishTask(task.id, workerId, "completed")) throw new TaskExecutionError("lease ownership lost before final commit", true);
+      if (!await scheduler.finishTask(task.id, workerId, "completed", task.leaseVersion)) throw new TaskExecutionError("lease ownership lost before final commit", true, { category: "lease_loss" });
     } catch (error) {
       let failure = leaseLost ?? taskError(error, task.attempts, task.maxAttempts);
       if (!hostClosed) {
         try { await host.close(); hostClosed = true; } catch (closeError) { failure = taskError(closeError, task.attempts, task.maxAttempts); }
       }
+      await Promise.all(drains);
+      if (signal?.aborted) throw signal.reason;
       const outcome = executionState.outcome;
       const controlled = outcome === "paused" || outcome === "cancelled";
-      await scheduler.recordTaskError(task.id, workerId, { message: failure.message, stack: failure.stack, retryable: controlled ? false : failure.retryable });
-      if (controlled) await scheduler.finishTask(task.id, workerId, outcome);
+      const recorded = controlled
+        ? await scheduler.recordTaskControl(task.id, workerId, outcome as "paused" | "cancelled", task.leaseVersion)
+        : await scheduler.recordTaskError(task.id, workerId, { message: failure.message, stack: failure.stack, retryable: failure.retryable, category: failure.category }, task.leaseVersion);
+      if (!recorded) throw new TaskExecutionError("lease ownership lost while recording failure", true, { category: "lease_loss" });
+      if (controlled && !await scheduler.finishTask(task.id, workerId, outcome, task.leaseVersion)) throw new TaskExecutionError("lease ownership lost while applying control", true, { category: "lease_loss" });
       else if (failure.message.includes("lease ownership lost")) throw failure;
-      else await scheduler.finishTask(task.id, workerId, failure.retryable ? "queued" : "failed");
+      else if (!controlled && !await scheduler.finishTask(task.id, workerId, failure.retryable ? "queued" : "failed", task.leaseVersion)) throw new TaskExecutionError("lease ownership lost while finishing failure", true, { category: "lease_loss" });
     } finally {
       stopped = true;
       if (renewalTimer !== undefined) this.clock.clearTimeout(renewalTimer);
+      signal?.removeEventListener("abort", abortHost);
       if (!hostClosed) await host.close().catch(() => undefined);
     }
   }
 }
 
-export async function executeTask(task: TaskRow, signal: AbortSignal | undefined, dependencies: WorkerRunnerDependencies): Promise<void> {
+export async function executeTask(task: ClaimedTask, signal: AbortSignal | undefined, dependencies: WorkerRunnerDependencies): Promise<void> {
   await new WorkerRunner(dependencies).executeTask(task, signal);
 }
 
@@ -152,3 +166,5 @@ function delay(ms: number, signal: AbortSignal, clock: Pick<typeof globalThis, "
     signal.addEventListener("abort", () => { clock.clearTimeout(timer); reject(signal.reason); }, { once: true });
   });
 }
+
+async function drain(iterable: AsyncIterable<unknown>): Promise<void> { for await (const _value of iterable) { /* drain */ } }

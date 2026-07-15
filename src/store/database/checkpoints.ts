@@ -8,7 +8,7 @@ export class DatabaseRecordingTransaction extends RecordingTransaction {
 }
 
 export async function commitDatabaseStaging(io: DatabaseFileIO, staging: StagingSession, candidateIds: string[]): Promise<void> {
-  await io.backend.transaction(async (backend) => {
+  await io.backend.transaction(io.scope, async (backend) => {
     const transactionIo = io.withBackend(backend);
     const transactionStaging = staging.bind(transactionIo);
     const state = await transactionStaging.loadState<{ completion?: unknown }>();

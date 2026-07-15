@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { createDatabase } from "../../db/client.js";
 import { migrateDatabase } from "../../db/migrate.js";
-import { artifacts, chapters, checkpoints, projects, runEvents, runs, usageRecords, users } from "../../db/schema/index.js";
+import { and, eq } from "drizzle-orm";
+import { artifacts, chapters, checkpoints, projects, runEvents, runs, tasks, usageRecords, users } from "../../db/schema/index.js";
 import { storeContract } from "../store.contract.js";
 import { DatabaseStore, createMemoryDatabaseStore } from "./index.js";
 
@@ -31,11 +32,11 @@ describe("DatabaseStore memory contract", () => {
     await store.checkpoints.append({ kind: "global" }, "checkpoint");
     const usage = { schema: 1 as const, updated_at: "now", overall: { input: 1, output: 2, cache_read: 0, cache_write: 0, cost_usd: 0, saved_usd: 0, cache_capable: false }, per_agent: {}, missing_assistant_usage: 0 };
     await store.usage.save(usage);
-    await store.usage.save(usage);
+    await store.usage.save({ ...usage, updated_at: "later" });
     expect(store.backend.inspect("run_events")).toHaveLength(1);
     expect(store.backend.inspect("checkpoints")).toHaveLength(1);
     expect(store.backend.inspect("usage_records")).toHaveLength(1);
-    expect(await store.latestCheckpointFingerprint()).toBe("task-fingerprint");
+    expect(await store.latestCheckpoint()).toEqual({ taskFingerprint: "task-fingerprint", projectVersion: 1 });
   });
 
   it("commits selected candidate artifacts atomically", async () => {
@@ -67,6 +68,38 @@ describe("DatabaseStore memory contract", () => {
     await expect(store.commitStaged(staging, ids)).rejects.toThrow("constraint");
 
     expect(await store.outline.loadPremise()).toBe("");
+  });
+
+  it("fences all durable writes with the active lease version", async () => {
+    const owner = { ...scope(), taskFingerprint: "task", projectVersion: 7, lease: { taskId: randomUUID(), owner: "worker-a", version: 2 } };
+    const store = createMemoryDatabaseStore(owner);
+    store.backend.setLease(owner.lease);
+    await store.drafts.saveFinalChapter(1, "owned");
+    store.backend.setLease({ ...owner.lease, owner: "worker-b", version: 3 });
+
+    await expect(store.drafts.saveFinalChapter(2, "stale")).rejects.toThrow("lease ownership lost");
+    await expect(store.checkpoints.append({ kind: "global" }, "stale")).rejects.toThrow("lease ownership lost");
+    await expect(store.runtime.appendQueue({ seq: 0, time: "", kind: "ui_event", priority: "control", summary: "stale" })).rejects.toThrow("lease ownership lost");
+    expect(await store.drafts.loadChapterText(2)).toBe("");
+  });
+
+  it("stores the real project version with recovery checkpoints", async () => {
+    const owner = { ...scope(), taskFingerprint: "task", projectVersion: 9 };
+    const store = createMemoryDatabaseStore(owner);
+    await store.checkpoints.append({ kind: "global" }, "checkpoint");
+
+    await expect(store.latestCheckpoint()).resolves.toEqual({ taskFingerprint: "task", projectVersion: 9 });
+  });
+
+  it("applies a durable steer command once across a crash window", async () => {
+    const owner = { ...scope(), lease: { taskId: randomUUID(), owner: "worker-a", version: 1 } };
+    const store = createMemoryDatabaseStore(owner);
+    store.backend.setLease(owner.lease);
+    const fallback = { started_at: "now", provider: "test", style: "", model: "test", planning_tier: "mid" as const, steer_history: [], pending_steer: "", pause_point: null };
+
+    await expect(store.applySteerCommand("steer-1", "Raise tension", fallback)).resolves.toBe(true);
+    await expect(store.applySteerCommand("steer-1", "Raise tension", fallback)).resolves.toBe(false);
+    expect(await store.runMeta.load()).toMatchObject({ pending_steer: "Raise tension", steer_history: [{ input: "Raise tension" }] });
   });
 });
 
@@ -139,5 +172,38 @@ describe.skipIf(!databaseUrl)("DatabaseStore PostgreSQL contract", () => {
     expect(await store.outline.loadPremise()).toBe("");
     expect(await database.select().from(artifacts)).not.toEqual(expect.arrayContaining([expect.objectContaining({ runId: owner.runId, type: "premise.md" })]));
     expect(await database.select().from(chapters)).not.toEqual(expect.arrayContaining([expect.objectContaining({ runId: owner.runId, sequence: 0 })]));
+  });
+
+  it("rejects an old worker durable commit after lease reclaim", async () => {
+    if (!databaseUrl || !database) return;
+    await migrateDatabase(databaseUrl);
+    const owner = scope();
+    await database.insert(users).values({ id: owner.userId, username: owner.userId, passwordHash: "test" });
+    const [project] = await database.insert(projects).values({ id: owner.projectId, userId: owner.userId, title: "fencing", version: 4 }).returning();
+    await database.insert(runs).values({ id: owner.runId, userId: owner.userId, projectId: owner.projectId });
+    const [task] = await database.insert(tasks).values({ ...owner, type: "write", status: "running", leaseOwner: "worker-a", leaseVersion: 1, leaseExpiresAt: new Date(Date.now() + 30_000) }).returning();
+    const oldStore = new DatabaseStore(database, { ...owner, projectVersion: project!.version, taskFingerprint: "task", lease: { taskId: task!.id, owner: "worker-a", version: 1 } });
+    const transaction = oldStore.recordingTransaction();
+    await transaction.store.drafts.saveFinalChapter(1, "stale chapter");
+    const staging = await oldStore.staging.createSession(randomUUID());
+    const ids = await transaction.stage(staging, 1);
+    await database.update(tasks).set({ leaseOwner: "worker-b", leaseVersion: 2, leaseExpiresAt: new Date(Date.now() + 30_000) }).where(eq(tasks.id, task!.id));
+
+    await expect(oldStore.commitStaged(staging, ids)).rejects.toThrow("lease ownership lost");
+    expect(await oldStore.drafts.loadChapterText(1)).toBe("");
+  });
+
+  it("upserts concurrent usage snapshots by stable billing content", async () => {
+    if (!databaseUrl || !database) return;
+    await migrateDatabase(databaseUrl);
+    const owner = scope();
+    await database.insert(users).values({ id: owner.userId, username: owner.userId, passwordHash: "test" });
+    await database.insert(projects).values({ id: owner.projectId, userId: owner.userId, title: "usage" });
+    await database.insert(runs).values({ id: owner.runId, userId: owner.userId, projectId: owner.projectId });
+    const store = new DatabaseStore(database, owner);
+    const base = { schema: 1 as const, overall: { input: 5, output: 7, cache_read: 0, cache_write: 0, cost_usd: 0.2, saved_usd: 0, cache_capable: false }, per_agent: {}, missing_assistant_usage: 0 };
+    await Promise.all([store.usage.save({ ...base, updated_at: "first" }), store.usage.save({ ...base, updated_at: "second" })]);
+    const rows = await database.select().from(usageRecords).where(and(eq(usageRecords.runId, owner.runId), eq(usageRecords.agent, "__store_state__")));
+    expect(rows).toHaveLength(1);
   });
 });

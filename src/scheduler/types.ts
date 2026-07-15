@@ -4,6 +4,7 @@ export const LEGACY_COMMAND_ID_PREFIX = "legacy:";
 
 export type RunRow = typeof runs.$inferSelect;
 export type TaskRow = typeof tasks.$inferSelect;
+export type ClaimedTask = TaskRow & { projectVersion: number };
 export type TaskType = TaskRow["type"];
 export type TaskTerminalStatus = Extract<TaskRow["status"], "completed" | "failed" | "cancelled">;
 

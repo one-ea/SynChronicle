@@ -20,6 +20,7 @@ const requiredTables = [
   "stream_chunks",
   "checkpoints",
   "usage_records",
+  "run_commands",
   "provider_credentials",
   "platform_models",
   "quota_ledger",
@@ -63,6 +64,7 @@ describe("database schema", () => {
       schema.streamChunks,
       schema.checkpoints,
       schema.usageRecords,
+      schema.runCommands,
       schema.providerCredentials,
       schema.platformModels,
       schema.quotaLedger,
@@ -80,6 +82,7 @@ describe("database schema", () => {
     const runEvents = getTableConfig(schema.runEvents);
     const tasks = getTableConfig(schema.tasks);
     const runs = getTableConfig(schema.runs);
+    const usageRecords = getTableConfig(schema.usageRecords);
 
     expect(users.indexes.map((index) => index.config.name)).toContain("users_username_uq");
     expect(users.columns.find((column) => column.name === "auth_version")?.getSQLType()).toBe("integer");
@@ -103,6 +106,11 @@ describe("database schema", () => {
     expect(activeWriteIndex?.config.where).toBeDefined();
     expect(runs.columns.find((column) => column.name === "idempotency_key")?.getSQLType()).toBe("text");
     expect(runs.indexes.find((index) => index.config.name === "runs_start_idempotency_uq")?.config.unique).toBe(true);
+    expect(tasks.columns.find((column) => column.name === "lease_version")?.getSQLType()).toBe("integer");
+    expect(usageRecords.columns.find((column) => column.name === "snapshot_id")?.getSQLType()).toBe("text");
+    expect(indexShape(schema.usageRecords, "usage_records_run_snapshot_uq")).toEqual(["run_id", "snapshot_id"]);
+    expect(indexShape(schema.runEvents, "run_events_run_stable_id_uq")).toEqual(["run_id", "stable_id"]);
+    expect(indexShape(schema.runCommands, "run_commands_run_command_uq")).toEqual(["run_id", "command_id"]);
     expect(indexShape(schema.runs, "runs_start_idempotency_uq")).toEqual([
       "user_id",
       "project_id",
@@ -188,7 +196,9 @@ describe("database schema", () => {
     );
     const storeScopeSql = await readFile(new URL("../../drizzle/0003_lonely_shiva.sql", import.meta.url), "utf8");
     const schedulerSql = await readFile(new URL("../../drizzle/0004_redundant_magma.sql", import.meta.url), "utf8");
-    const sql = `${foundationSql}\n${ownershipSql}\n${authenticationSql}\n${storeScopeSql}\n${schedulerSql}`;
+    const workerSql = await readFile(new URL("../../drizzle/0005_empty_hex.sql", import.meta.url), "utf8");
+    const workerUsageSql = await readFile(new URL("../../drizzle/0006_busy_lightspeed.sql", import.meta.url), "utf8");
+    const sql = `${foundationSql}\n${ownershipSql}\n${authenticationSql}\n${storeScopeSql}\n${schedulerSql}\n${workerSql}\n${workerUsageSql}`;
 
     for (const table of requiredTables) {
       expect(sql).toContain(`CREATE TABLE \"${table}\"`);
@@ -203,6 +213,8 @@ describe("database schema", () => {
     expect(sql).toContain('CREATE UNIQUE INDEX "run_events_run_sequence_uq"');
     expect(sql).toContain('ALTER TABLE "runs" ADD COLUMN "idempotency_key" text');
     expect(sql).toContain('CREATE UNIQUE INDEX "runs_start_idempotency_uq"');
+    expect(workerUsageSql).toContain('UPDATE "usage_records" SET "snapshot_id" = "id"::text');
+    expect(workerUsageSql).toContain('ALTER TABLE "usage_records" ALTER COLUMN "snapshot_id" SET NOT NULL');
     expect(sql).toMatch(
       /CREATE UNIQUE INDEX "tasks_active_write_project_uq"[\s\S]+WHERE .*"type" = 'write'.*"status" in \('leased', 'running'\)/i,
     );

@@ -46,3 +46,57 @@
 ## 顾虑
 
 - PostgreSQL 集成测试依赖 `TEST_DATABASE_URL`，当前环境跳过 29 个数据库相关测试；内存合同测试、SQL 构造测试和全量非 PostgreSQL 测试均通过。
+
+## 独立审查整改项
+
+- Critical: durable commit 必须在同一数据库事务中锁定并校验 task lease owner/expiry，提供真正 fencing。
+- Critical: resume 必须将 paused task 重新排队并可恢复执行。
+- Important: checkpoint 恢复同时校验任务指纹和作品版本。
+- Important: shutdown 信号需传播到运行中 Host/provider 调用。
+- Important: steer command 使用数据库持久 claim/applied 状态实现崩溃安全去重。
+- Important: 错误按瞬时、输入、配置、lease loss、取消和内部错误分类。
+- Important: usage 使用稳定 snapshot ID 与数据库唯一约束/upsert 幂等。
+- Important: 增加真实 PostgreSQL 双 Worker、commit 中途 lease loss、pause/resume、crash recovery 条件测试。
+- Minor: 控制事件与错误事件分离，检查所有 fencing 返回值，生命周期事件使用稳定幂等 ID。
+
+## 整改 RED / GREEN
+
+- RED 1: `pnpm vitest run src/db/schema.test.ts src/store/database/database-store.test.ts`，缺少 `lease_version`、`run_commands`、`snapshot_id`、stable event ID、Memory fencing API 和 project version checkpoint。
+- GREEN 1: Memory Store 合同通过，旧 lease 无法写章节、checkpoint、usage、event；checkpoint 返回真实 task fingerprint 和 project version。
+- RED 2: `pnpm vitest run src/worker/runner.test.ts`，恢复 API、project version、AbortSignal、durable steer claim/ack 和 fencing 返回值处理缺失。
+- GREEN 2: Worker/Host 目标测试通过，覆盖版本不匹配安全重启、SIGTERM 类中止、steer crash window、pause commit 边界和所有 finish/record 返回值。
+- RED 3: Host events/stream 未消费，`drains Host events and stream while executing` 失败。
+- GREEN 3: Worker 并发 drain Host events/stream，并在 Host close 后等待 drain 完成。
+
+## 整改设计证明
+
+- task 每次 claim 原子递增 `lease_version`。Worker Store scope 固定携带 task ID、owner、lease version 和 project version。
+- `DatabaseBackend.transaction(scope, operation)` 在 PostgreSQL 同一事务内 `FOR UPDATE` 锁 task 行，验证 owner、lease version、active status、expiry，并验证项目当前版本；durable staging commit、章节、checkpoint、usage 和 event 均通过该入口。
+- Memory backend 实现相同 lease version 合同，测试模拟 worker-a 被 worker-b reclaim 后全部 durable 写入被拒绝。
+- pause 将 queued task 原子改为 paused；运行中 task 在 Worker agent 边界通过 fenced finish 持久为 paused。resume 在 run 事务内将 paused task 原子恢复 queued，保留 checkpoint，重复命令幂等。
+- checkpoint 写入 claim 时读取的真实 `projects.version`；恢复要求 task fingerprint 和 project version 同时匹配。
+- Host 将外部 AbortSignal 连接到内部 controller/provider signal；shutdown 立即停止续租、abort Host，并让 lease expiry 后由其他 Worker reclaim。
+- steer 使用 `run_commands` pending/claimed/applied 状态和 lease version claim。Host 通过 fenced transaction 原子写入 run meta pending steer 与 durable command marker；ack crash window 可由新 Worker reclaim，Host marker 防止重复应用。
+- usage snapshot ID 仅哈希计费状态，排除 `updated_at`；数据库唯一约束 `(run_id, snapshot_id)` 并使用 upsert，migration 回填历史行后设置非空。
+- Worker 错误分类为 transient、invalid_input、invalid_config、lease_loss、cancel、internal，并结合 attempt 上限决定 retryable。
+- WORKER.CONTROL 与 WORKER.ERROR 分离；控制、错误和 Host lifecycle 均使用稳定 ID，重复持久化由唯一约束抑制。
+
+## PostgreSQL 条件测试
+
+- 双 Worker claim、lease expiry/reclaim、旧 Worker durable commit 拒绝、pause/resume 幂等、steer claim crash recovery、usage 并发 upsert 均有 `TEST_DATABASE_URL` 条件测试。
+- 当前环境未提供 `TEST_DATABASE_URL` 时，这些测试保持 skip；Memory 合同持续执行同等核心语义。
+
+## 整改提交
+
+- `fix(worker): fence durable run execution`，本报告随整改提交入库。
+
+## 整改验证证据
+
+- 目标测试: 10 files passed，119 passed，27 PostgreSQL 条件测试 skipped。
+- 全量测试: 48 files passed，2 files skipped；365 passed，33 skipped。
+- `pnpm typecheck`: passed。
+- `pnpm build`: passed，CLI/Web/Worker 三入口构建成功。
+- `pnpm exec drizzle-kit check`: passed。
+- `pnpm exec drizzle-kit generate`: no schema changes。
+- `git diff --check`: passed。
+- 首次将全量测试与 build/Drizzle 并行执行时，Argon2 用例因 CPU 争用触发 20 秒测试超时；独立重跑全量测试后 365 tests passed。

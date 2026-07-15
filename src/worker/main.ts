@@ -28,6 +28,8 @@ export async function startWorker(): Promise<void> {
         projectId: task.projectId,
         runId: task.runId,
         taskFingerprint: taskFingerprint(task),
+        projectVersion: task.projectVersion,
+        lease: { taskId: task.id, owner: workerId, version: task.leaseVersion },
       }),
     }),
   });

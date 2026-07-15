@@ -8,6 +8,7 @@ export const taskType = pgEnum("task_type", ["write", "review", "maintenance"]);
 export const taskStatus = pgEnum("task_status", ["queued", "leased", "running", "paused", "completed", "failed", "cancelled"]);
 export const artifactStatus = pgEnum("artifact_status", ["draft", "committed"]);
 export const chapterStatus = pgEnum("chapter_status", ["planned", "draft", "review", "complete"]);
+export const runCommandStatus = pgEnum("run_command_status", ["pending", "claimed", "applied"]);
 
 type RunOwnershipColumns = [
   AnyPgColumn<{ tableName: "runs" }>,
@@ -100,6 +101,7 @@ export const tasks = pgTable(
     priority: integer("priority").notNull().default(0),
     leaseOwner: text("lease_owner"),
     leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+    leaseVersion: integer("lease_version").notNull().default(0),
     attempts: integer("attempts").notNull().default(0),
     maxAttempts: integer("max_attempts").notNull().default(3),
     scheduledAt: timestamp("scheduled_at", { withTimezone: true }).notNull().defaultNow(),
@@ -129,6 +131,7 @@ export const runEvents = pgTable(
     projectId: uuid("project_id").notNull(),
     runId: uuid("run_id").notNull(),
     sequence: integer("sequence").notNull(),
+    stableId: text("stable_id"),
     type: text("type").notNull(),
     payload: jsonb("payload").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -140,6 +143,7 @@ export const runEvents = pgTable(
       foreignColumns: runOwnershipColumns(),
     }).onDelete("cascade"),
     uniqueIndex("run_events_run_sequence_uq").on(table.runId, table.sequence),
+    uniqueIndex("run_events_run_stable_id_uq").on(table.runId, table.stableId),
     index("run_events_user_project_idx").on(table.userId, table.projectId),
   ],
 );
@@ -205,6 +209,7 @@ export const usageRecords = pgTable(
     userId: uuid("user_id").notNull(),
     projectId: uuid("project_id").notNull(),
     runId: uuid("run_id").notNull(),
+    snapshotId: text("snapshot_id").notNull(),
     agent: text("agent").notNull(),
     credentialSource: text("credential_source").notNull(),
     provider: text("provider").notNull(),
@@ -223,5 +228,29 @@ export const usageRecords = pgTable(
       foreignColumns: runOwnershipColumns(),
     }).onDelete("cascade"),
     index("usage_records_user_created_idx").on(table.userId, table.createdAt),
+    uniqueIndex("usage_records_run_snapshot_uq").on(table.runId, table.snapshotId),
+  ],
+);
+
+export const runCommands = pgTable(
+  "run_commands",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id").notNull(),
+    projectId: uuid("project_id").notNull(),
+    runId: uuid("run_id").notNull(),
+    commandId: text("command_id").notNull(),
+    instruction: text("instruction").notNull(),
+    status: runCommandStatus("status").notNull().default("pending"),
+    claimedBy: text("claimed_by"),
+    claimedLeaseVersion: integer("claimed_lease_version"),
+    appliedAt: timestamp("applied_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    foreignKey({ name: "run_commands_user_project_run_fk", columns: [table.userId, table.projectId, table.runId], foreignColumns: runOwnershipColumns() }).onDelete("cascade"),
+    uniqueIndex("run_commands_run_command_uq").on(table.runId, table.commandId),
+    index("run_commands_run_status_idx").on(table.runId, table.status),
   ],
 );

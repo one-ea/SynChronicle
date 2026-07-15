@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { count, eq, inArray } from "drizzle-orm";
 import { createDatabase, type Database } from "../db/client.js";
 import { migrateDatabase } from "../db/migrate.js";
-import { projects, runs, tasks, users } from "../db/schema/index.js";
+import { projects, runCommands, runs, tasks, users } from "../db/schema/index.js";
 import type { RequestAuth } from "../web/auth/plugin.js";
 import { buildEligibleTaskQuery, buildReleaseLeaseQuery, normalizeRunResumeData, SchedulerRepository } from "./repository.js";
 import { SchedulerService } from "./service.js";
@@ -449,6 +449,34 @@ postgres("PostgreSQL leased scheduler", () => {
     const normalized = await repository.command(auth, project!.id, run!.id, "pause");
     if (typeof normalized === "string") throw new Error(`Unexpected command result: ${normalized}`);
     expect(normalized.resumeData).toMatchObject({ legacy: true, desiredState: "paused", steerCommands: [] });
+    await settleTasks([auth.userId]);
+  });
+
+  it("pauses and resumes the same task atomically and idempotently", async () => {
+    const [project] = await database.insert(projects).values({ userId: auth.userId, title: `Pause resume ${randomUUID()}` }).returning();
+    const run = await repository.enqueueRun(auth, project!.id, { idempotencyKey: randomUUID(), type: "review" });
+    await repository.command(auth, project!.id, run!.id, "pause");
+    await repository.command(auth, project!.id, run!.id, "pause");
+    expect((await database.select().from(tasks).where(eq(tasks.runId, run!.id)))[0]?.status).toBe("paused");
+
+    await repository.command(auth, project!.id, run!.id, "resume");
+    await repository.command(auth, project!.id, run!.id, "resume");
+    expect((await database.select().from(tasks).where(eq(tasks.runId, run!.id)))[0]).toMatchObject({ status: "queued", leaseOwner: null, leaseExpiresAt: null });
+    await settleTasks([auth.userId]);
+  });
+
+  it("reclaims a steer claim after a worker crash and acknowledges once", async () => {
+    const [project] = await database.insert(projects).values({ userId: auth.userId, title: `Steer recovery ${randomUUID()}` }).returning();
+    const run = await repository.enqueueRun(auth, project!.id, { idempotencyKey: randomUUID(), type: "review", priority: 3_000_000 });
+    await repository.command(auth, project!.id, run!.id, "steer", { commandId: "durable-steer", instruction: "Raise tension" });
+    const first = await repository.claimNextTask("steer-worker-a", 30_000);
+    expect(first?.runId).toBe(run!.id);
+    expect(await repository.claimSteerCommands(first!.id, "steer-worker-a", first!.leaseVersion)).toEqual([{ id: "durable-steer", instruction: "Raise tension" }]);
+    await database.update(tasks).set({ status: "queued", leaseOwner: null, leaseExpiresAt: null }).where(eq(tasks.id, first!.id));
+    const second = await repository.claimNextTask("steer-worker-b", 30_000);
+    expect(await repository.claimSteerCommands(second!.id, "steer-worker-b", second!.leaseVersion)).toEqual([{ id: "durable-steer", instruction: "Raise tension" }]);
+    expect(await repository.acknowledgeSteerCommands(second!.id, "steer-worker-b", second!.leaseVersion, ["durable-steer"])).toBe(true);
+    expect((await database.select().from(runCommands).where(eq(runCommands.runId, run!.id)))[0]?.status).toBe("applied");
     await settleTasks([auth.userId]);
   });
 });

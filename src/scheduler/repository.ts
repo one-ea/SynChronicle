@@ -1,17 +1,17 @@
 import { createHash } from "node:crypto";
-import { and, asc, count, eq, inArray, lte, sql } from "drizzle-orm";
+import { and, asc, count, eq, inArray, lte, or, sql } from "drizzle-orm";
 import type { Database } from "../db/client.js";
-import { projects, runEvents, runs, tasks, users } from "../db/schema/index.js";
+import { projects, runCommands, runEvents, runs, tasks, users } from "../db/schema/index.js";
 import type { RequestAuth } from "../web/auth/plugin.js";
 import { LEGACY_COMMAND_ID_PREFIX } from "./types.js";
 import type {
   EnqueueRunInput,
+  ClaimedTask,
   ReleaseLeaseOutcome,
   RunCommand,
   RunCommandResult,
   RunResumeData,
   RunRow,
-  TaskRow,
 } from "./types.js";
 
 const activeTaskStatuses = ["leased", "running"] as const;
@@ -84,9 +84,10 @@ export function buildReleaseLeaseQuery(
 }
 
 export function buildEligibleTaskQuery(executor: SchedulerExecutor, now: Date) {
-  return executor.select({ task: tasks })
+  return executor.select({ task: tasks, projectVersion: projects.version })
     .from(tasks)
     .innerJoin(users, eq(tasks.userId, users.id))
+    .innerJoin(projects, and(eq(tasks.projectId, projects.id), eq(tasks.userId, projects.userId)))
     .innerJoin(runs, and(
       eq(tasks.runId, runs.id),
       eq(tasks.userId, runs.userId),
@@ -152,7 +153,7 @@ export class SchedulerRepository {
     });
   }
 
-  async claimNextTask(workerId: string, leaseMs: number): Promise<TaskRow | null> {
+  async claimNextTask(workerId: string, leaseMs: number): Promise<ClaimedTask | null> {
     if (!workerId.trim()) throw new Error("workerId must not be empty");
     if (!Number.isInteger(leaseMs) || leaseMs <= 0) throw new Error("leaseMs must be a positive integer");
     return this.db.transaction(async (transaction) => {
@@ -201,14 +202,15 @@ export class SchedulerRepository {
         status: "leased",
         leaseOwner: workerId,
         leaseExpiresAt: new Date(now.getTime() + leaseMs),
+        leaseVersion: sql`${tasks.leaseVersion} + 1`,
         attempts: sql`${tasks.attempts} + 1`,
         updatedAt: now,
       }).where(and(eq(tasks.id, candidate.task.id), eq(tasks.status, "queued"))).returning();
-      return claimed ?? null;
+      return claimed ? { ...claimed, projectVersion: candidate.projectVersion } : null;
     });
   }
 
-  async renewLease(taskId: string, workerId: string, leaseMs: number): Promise<boolean> {
+  async renewLease(taskId: string, workerId: string, leaseMs: number, leaseVersion?: number): Promise<boolean> {
     if (!Number.isInteger(leaseMs) || leaseMs <= 0) throw new Error("leaseMs must be a positive integer");
     const now = new Date();
     const [renewed] = await this.db.update(tasks).set({
@@ -217,18 +219,20 @@ export class SchedulerRepository {
     }).where(and(
       eq(tasks.id, taskId),
       eq(tasks.leaseOwner, workerId),
+      leaseVersion === undefined ? undefined : eq(tasks.leaseVersion, leaseVersion),
       inArray(tasks.status, activeTaskStatuses),
       sql`${tasks.leaseExpiresAt} > ${now}`,
     )).returning({ id: tasks.id });
     return Boolean(renewed);
   }
 
-  async startTask(taskId: string, workerId: string): Promise<boolean> {
+  async startTask(taskId: string, workerId: string, leaseVersion?: number): Promise<boolean> {
     const now = new Date();
     return this.db.transaction(async (transaction) => {
       const [started] = await transaction.update(tasks).set({ status: "running", updatedAt: now }).where(and(
         eq(tasks.id, taskId),
         eq(tasks.leaseOwner, workerId),
+        leaseVersion === undefined ? undefined : eq(tasks.leaseVersion, leaseVersion),
         eq(tasks.status, "leased"),
         sql`${tasks.leaseExpiresAt} > ${now}`,
       )).returning({ runId: tasks.runId });
@@ -243,6 +247,32 @@ export class SchedulerRepository {
     const [run] = await this.db.select({ resumeData: runs.resumeData }).from(runs).where(eq(runs.id, runId)).limit(1);
     if (!run) throw new Error(`run ${runId} is missing`);
     return normalizeRunResumeData(run.resumeData);
+  }
+
+  async claimSteerCommands(taskId: string, workerId: string, leaseVersion: number): Promise<Array<{ id: string; instruction: string }>> {
+    const now = new Date();
+    return this.db.transaction(async (transaction) => {
+      const [owned] = await transaction.select({ runId: tasks.runId }).from(tasks).where(and(eq(tasks.id, taskId), eq(tasks.leaseOwner, workerId), eq(tasks.leaseVersion, leaseVersion), inArray(tasks.status, activeTaskStatuses), sql`${tasks.leaseExpiresAt} > ${now}`)).limit(1).for("update");
+      if (!owned) return [];
+      const commands = await transaction.select().from(runCommands).where(and(eq(runCommands.runId, owned.runId), or(eq(runCommands.status, "pending"), and(eq(runCommands.status, "claimed"), or(sql`${runCommands.claimedBy} is distinct from ${workerId}`, sql`${runCommands.claimedLeaseVersion} is distinct from ${leaseVersion}`))))).orderBy(asc(runCommands.createdAt)).for("update");
+      if (!commands.length) return [];
+      await transaction.update(runCommands).set({ status: "claimed", claimedBy: workerId, claimedLeaseVersion: leaseVersion, updatedAt: now }).where(inArray(runCommands.id, commands.map(({ id }) => id)));
+      return commands.map(({ commandId: id, instruction }) => ({ id, instruction }));
+    });
+  }
+
+  async acknowledgeSteerCommands(taskId: string, workerId: string, leaseVersion: number, commandIds: string[]): Promise<boolean> {
+    if (!commandIds.length) return true;
+    const now = new Date();
+    return this.db.transaction(async (transaction) => {
+      const [owned] = await transaction.select({ runId: tasks.runId }).from(tasks).where(and(eq(tasks.id, taskId), eq(tasks.leaseOwner, workerId), eq(tasks.leaseVersion, leaseVersion), inArray(tasks.status, activeTaskStatuses), sql`${tasks.leaseExpiresAt} > ${now}`)).limit(1).for("update");
+      if (!owned) return false;
+      const applied = await transaction.update(runCommands).set({ status: "applied", appliedAt: now, updatedAt: now }).where(and(eq(runCommands.runId, owned.runId), inArray(runCommands.commandId, commandIds), eq(runCommands.status, "claimed"), eq(runCommands.claimedBy, workerId), eq(runCommands.claimedLeaseVersion, leaseVersion))).returning({ id: runCommands.id });
+      if (applied.length !== commandIds.length) return false;
+      const [run] = await transaction.select().from(runs).where(eq(runs.id, owned.runId)).limit(1).for("update");
+      if (run) { const resumeData = normalizeRunResumeData(run.resumeData); await transaction.update(runs).set({ resumeData: { ...resumeData, steerCommands: resumeData.steerCommands.filter(({ id }) => !commandIds.includes(id)) }, updatedAt: now }).where(eq(runs.id, owned.runId)); }
+      return true;
+    });
   }
 
   async applySteerCommands(runId: string, workerId: string, commandIds: string[]): Promise<boolean> {
@@ -267,13 +297,14 @@ export class SchedulerRepository {
     });
   }
 
-  async finishTask(taskId: string, workerId: string, status: ReleaseLeaseOutcome["status"]): Promise<boolean> {
+  async finishTask(taskId: string, workerId: string, status: ReleaseLeaseOutcome["status"], leaseVersion?: number): Promise<boolean> {
     const now = new Date();
     return this.db.transaction(async (transaction) => {
       await transaction.execute(sql`select pg_advisory_xact_lock(${schedulerAdvisoryLock})`);
       const [task] = await transaction.select({ runId: tasks.runId }).from(tasks).where(and(
         eq(tasks.id, taskId),
         eq(tasks.leaseOwner, workerId),
+        leaseVersion === undefined ? undefined : eq(tasks.leaseVersion, leaseVersion),
         inArray(tasks.status, activeTaskStatuses),
         sql`${tasks.leaseExpiresAt} > ${now}`,
       )).limit(1).for("update");
@@ -290,12 +321,13 @@ export class SchedulerRepository {
     });
   }
 
-  async recordTaskError(taskId: string, workerId: string, error: { message: string; stack?: string; retryable: boolean }): Promise<boolean> {
+  async recordTaskError(taskId: string, workerId: string, error: { message: string; stack?: string; retryable: boolean; category?: string }, leaseVersion?: number): Promise<boolean> {
     const now = new Date();
     return this.db.transaction(async (transaction) => {
       const [task] = await transaction.select().from(tasks).where(and(
         eq(tasks.id, taskId),
         eq(tasks.leaseOwner, workerId),
+        leaseVersion === undefined ? undefined : eq(tasks.leaseVersion, leaseVersion),
         inArray(tasks.status, activeTaskStatuses),
         sql`${tasks.leaseExpiresAt} > ${now}`,
       )).limit(1).for("update");
@@ -304,6 +336,7 @@ export class SchedulerRepository {
       const rows = await transaction.select({ sequence: sql<number>`coalesce(max(${runEvents.sequence}), 0)` })
         .from(runEvents).where(eq(runEvents.runId, task.runId));
       const sequence = Number(rows[0]?.sequence ?? 0) + 1;
+      const stableId = `error:${task.id}:${leaseVersion ?? task.leaseVersion}:${error.category ?? "internal"}`;
       const payload = {
         seq: sequence,
         time: now.toISOString(),
@@ -311,16 +344,31 @@ export class SchedulerRepository {
         priority: "control",
         category: "WORKER.ERROR",
         summary: error.message,
-        payload: { type: "error", message: error.message, stack: error.stack, retryable: error.retryable, taskId },
+        payload: { id: stableId, type: "error", message: error.message, stack: error.stack, retryable: error.retryable, category: error.category, taskId },
       };
       await transaction.insert(runEvents).values({
         userId: task.userId,
         projectId: task.projectId,
         runId: task.runId,
         sequence,
+        stableId,
         type: "ui_event",
         payload,
       });
+      return true;
+    });
+  }
+
+  async recordTaskControl(taskId: string, workerId: string, control: "paused" | "cancelled", leaseVersion: number): Promise<boolean> {
+    const now = new Date();
+    return this.db.transaction(async (transaction) => {
+      const [task] = await transaction.select().from(tasks).where(and(eq(tasks.id, taskId), eq(tasks.leaseOwner, workerId), eq(tasks.leaseVersion, leaseVersion), inArray(tasks.status, activeTaskStatuses), sql`${tasks.leaseExpiresAt} > ${now}`)).limit(1).for("update");
+      if (!task) return false;
+      await transaction.execute(sql`select pg_advisory_xact_lock(hashtext(${task.runId}))`);
+      const rows = await transaction.select({ sequence: sql<number>`coalesce(max(${runEvents.sequence}), 0)` }).from(runEvents).where(eq(runEvents.runId, task.runId));
+      const sequence = Number(rows[0]?.sequence ?? 0) + 1;
+      const stableId = `control:${task.id}:${leaseVersion}:${control}`;
+      await transaction.insert(runEvents).values({ userId: task.userId, projectId: task.projectId, runId: task.runId, sequence, stableId, type: "ui_event", payload: { seq: sequence, time: now.toISOString(), kind: "ui_event", priority: "control", category: "WORKER.CONTROL", summary: control, payload: { id: stableId, type: "control", control, taskId } } }).onConflictDoNothing();
       return true;
     });
   }
@@ -368,10 +416,15 @@ export class SchedulerRepository {
         next = commands.some((candidate) => candidate.id === commandId)
           ? resumeData
           : { ...resumeData, steerCommands: [...commands, { id: commandId, instruction }] };
+        await transaction.insert(runCommands).values({ userId: run.userId, projectId: run.projectId, runId: run.id, commandId, instruction }).onConflictDoNothing();
       } else {
         const desiredState = command === "pause" ? "paused" : command === "abort" ? "cancelled" : "running";
         next = resumeData.desiredState === desiredState ? resumeData : { ...resumeData, desiredState };
       }
+      const now = new Date();
+      if (command === "resume") await transaction.update(tasks).set({ status: "queued", leaseOwner: null, leaseExpiresAt: null, scheduledAt: now, updatedAt: now }).where(and(eq(tasks.runId, run.id), eq(tasks.status, "paused")));
+      if (command === "pause") await transaction.update(tasks).set({ status: "paused", updatedAt: now }).where(and(eq(tasks.runId, run.id), eq(tasks.status, "queued")));
+      if (command === "abort") await transaction.update(tasks).set({ status: "cancelled", leaseOwner: null, leaseExpiresAt: null, updatedAt: now }).where(and(eq(tasks.runId, run.id), inArray(tasks.status, ["queued", "paused"])));
       if (next === resumeData && !normalizationChanged) return run;
       const [updated] = await transaction.update(runs).set({ resumeData: next, updatedAt: new Date() })
         .where(eq(runs.id, run.id)).returning();

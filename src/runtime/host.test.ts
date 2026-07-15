@@ -45,6 +45,21 @@ describe("Host", () => {
     expect(boundaries).toEqual(["agent", "commit:enter", "commit:exit", "agent"]);
   });
 
+  it("deduplicates lifecycle events with stable IDs after recovery", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "runtime-host-lifecycle-"));
+    const store = new Store(dir);
+    const config = { provider: "mock", model: "mock", providers: { mock: { api_key: "test" } }, roles: {}, output_dir: dir } as const;
+    const first = await Host.new(config, {}, { agent: agent(), store });
+    await first.startPrepared("write");
+    await first.close();
+    const second = await Host.new(config, {}, { agent: agent(), store });
+    await second.startPrepared("write");
+    await second.close();
+
+    const lifecycle = (await store.runtime.loadQueue()).filter((item) => (item.payload as { id?: string })?.id?.startsWith("lifecycle:"));
+    expect(lifecycle.map((item) => item.summary)).toEqual(["启动创作", "运行完成"]);
+  });
+
   it("registers an injected agent observer once across multiple runs", async () => {
     const setObserver = vi.fn();
     const runtimeAgent = { ...agent(), setObserver };
