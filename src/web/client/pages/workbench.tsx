@@ -36,6 +36,7 @@ function initialPanel(): WorkbenchPanel {
   const panel = new URL(window.location.href).searchParams.get("panel");
   return panel === "project" || panel === "status" ? panel : "writing";
 }
+function commandStorageKey(projectId: string, runId: string) { return `synchronicle:command:${projectId}:${runId}`; }
 
 export function WorkbenchPage({ api, project, initialEvents, subscribe, connectionOverride }: WorkbenchPageProps) {
   const url = new URL(window.location.href);
@@ -52,7 +53,7 @@ export function WorkbenchPage({ api, project, initialEvents, subscribe, connecti
   const [pendingQuestion, setPendingQuestion] = useState(project.pendingQuestion);
   const [abortWaiting, setAbortWaiting] = useState(Boolean(project.latestRun?.waiting_for_durable_commit));
   const [commandFeedback, setCommandFeedback] = useState<string | null>(null);
-  const [pendingCommandId, setPendingCommandId] = useState<string | null>(null);
+  const [pendingCommandId, setPendingCommandId] = useState<string | null>(() => initialRunId ? sessionStorage.getItem(commandStorageKey(project.id, initialRunId)) : null);
   const [lastModelSwitch, setLastModelSwitch] = useState<{ role: string; provider: string; model: string; credentialId?: string; parameters?: Record<string, unknown> } | null>(null);
   const scrollPositions = useRef<Record<WorkbenchPanel, number>>({ project: 0, writing: 0, status: 0 });
   const { state, connection } = useRunEvents({ runId, initialEvents, subscribe });
@@ -67,8 +68,33 @@ export function WorkbenchPage({ api, project, initialEvents, subscribe, connecti
     const command = state.commands[pendingCommandId];
     if (!command) return;
     setCommandFeedback(command.status === "applied" ? "模型切换已在安全边界应用。" : `模型切换失败：${command.message ?? command.category ?? "未知错误"}`);
-    if (command.status === "applied") setPendingCommandId(null);
+    if (runId) sessionStorage.removeItem(commandStorageKey(project.id, runId));
+    setPendingCommandId(null);
   }, [pendingCommandId, state.commands]);
+  useEffect(() => {
+    if (!runId) { setPendingCommandId(null); return; }
+    setPendingCommandId(sessionStorage.getItem(commandStorageKey(project.id, runId)));
+  }, [project.id, runId]);
+  useEffect(() => {
+    if (!runId || !pendingCommandId) return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      try {
+        const result = await api.request<{ command: { status: string; retryable: boolean; failureCategory: string | null; errorMessage: string | null } }>(`/api/projects/${project.id}/runs/${runId}/commands/${encodeURIComponent(pendingCommandId)}`);
+        if (!active) return;
+        if (result.command.status === "applied" || result.command.status === "failed") {
+          setCommandFeedback(result.command.status === "applied" ? "模型切换已在安全边界应用。" : `模型切换失败：${result.command.errorMessage ?? result.command.failureCategory ?? "未知错误"}`);
+          sessionStorage.removeItem(commandStorageKey(project.id, runId));
+          setPendingCommandId(null);
+          return;
+        }
+      } catch { /* WS may still deliver the terminal state. */ }
+      if (active) timer = setTimeout(() => void poll(), 5_000);
+    };
+    void poll();
+    return () => { active = false; if (timer) clearTimeout(timer); };
+  }, [api, connection, connectionOverride, pendingCommandId, project.id, runId]);
 
   useEffect(() => {
     const current = document.querySelector<HTMLElement>(`[data-panel='${panel}'] .activity-scroll, [data-panel='${panel}']`);
@@ -144,6 +170,7 @@ export function WorkbenchPage({ api, project, initialEvents, subscribe, connecti
     const selection = { role, provider, model, credentialId, parameters };
     const result = await api.request<{ command: { commandId: string } }>(`/api/projects/${project.id}/runs/${runId}/model`, { method: "POST", body: JSON.stringify(selection) });
     setPendingCommandId(result.command.commandId);
+    sessionStorage.setItem(commandStorageKey(project.id, runId), result.command.commandId);
     setLastModelSwitch(selection);
     setCommandFeedback("模型切换已排队，将在下一个 Agent 安全边界生效。");
   }

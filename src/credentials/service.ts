@@ -72,13 +72,18 @@ export class CredentialService {
     let plaintext: string | undefined;
     try {
       plaintext = decryptCredential(this.keys, row.envelope, { userId, credentialId: id, provider: row.provider });
-      const secret = { provider: row.provider, ...JSON.parse(plaintext) as CredentialSecret };
-      await this.validateBaseUrl(secret.baseUrl);
+    } catch (error) {
+      await this.auditResolution({ userId, credentialId: id, provider: row.provider, runId: context.runId, result: "rejected", reason: "decrypt_failed" });
+      throw error;
+    }
+    try {
+      let secret: CredentialSecret & { provider: string };
+      try { secret = { provider: row.provider, ...JSON.parse(plaintext) as CredentialSecret }; }
+      catch (error) { await this.auditResolution({ userId, credentialId: id, provider: row.provider, runId: context.runId, result: "rejected", reason: "invalid_payload" }); throw error; }
+      try { await this.validateBaseUrl(secret.baseUrl); }
+      catch (error) { await this.auditResolution({ userId, credentialId: id, provider: row.provider, runId: context.runId, result: "rejected", reason: error instanceof CredentialServiceError ? error.code.toLowerCase() : "validation_failed" }); throw error; }
       await this.auditResolution({ userId, credentialId: id, provider: row.provider, runId: context.runId, result: "success" });
       return secret;
-    } catch (error) {
-      await this.auditResolution({ userId, credentialId: id, provider: row.provider, runId: context.runId, result: "rejected", reason: error instanceof CredentialServiceError ? error.code.toLowerCase() : "decrypt_failed" });
-      throw error;
     } finally {
       if (plaintext) Buffer.from(plaintext).fill(0);
     }

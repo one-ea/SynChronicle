@@ -93,7 +93,31 @@ describe("CredentialService", () => {
       expect.objectContaining({ credentialId: saved.id, runId: "run-2", result: "rejected", reason: "not_found" }),
     ]);
     expect(JSON.stringify(repository.resolutionAudits)).not.toContain("audit-secret");
-    repository.auditResolution = async () => { throw new Error("audit unavailable"); };
+    const auditFailure = vi.fn(async () => { throw new Error("audit unavailable"); });
+    repository.auditResolution = auditFailure;
     await expect(service.resolve(userId, saved.id, { runId: "run-3" })).rejects.toThrow("audit unavailable");
+    expect(auditFailure).toHaveBeenCalledOnce();
+    expect(auditFailure).toHaveBeenCalledWith(expect.objectContaining({ result: "success", runId: "run-3" }));
+  });
+
+  it("classifies invalid payloads and unsafe URLs independently from audit failures", async () => {
+    const repository = new MemoryCredentials();
+    const service = new CredentialService(repository, keys, async () => [{ address: "127.0.0.1", family: 4 }]);
+    const userId = randomUUID();
+    const malformed = await service.create(userId, { provider: "openai", apiKey: "secret" }, "req-1");
+    repository.rows.get(malformed.id)!.envelope = encryptCredential(keys, "not-json", { userId, credentialId: malformed.id, provider: "openai" });
+
+    await expect(service.resolve(userId, malformed.id, { runId: "run-invalid" })).rejects.toBeInstanceOf(SyntaxError);
+    expect(repository.resolutionAudits.at(-1)).toMatchObject({ result: "rejected", reason: "invalid_payload" });
+
+    const unsafe = await service.create(userId, { provider: "openai", apiKey: "secret" }, "req-2");
+    repository.rows.get(unsafe.id)!.envelope = encryptCredential(keys, JSON.stringify({ apiKey: "secret", baseUrl: "https://internal.example" }), { userId, credentialId: unsafe.id, provider: "openai" });
+    await expect(service.resolve(userId, unsafe.id, { runId: "run-unsafe" })).rejects.toMatchObject({ code: "CREDENTIAL_URL_UNSAFE" });
+    expect(repository.resolutionAudits.at(-1)).toMatchObject({ result: "rejected", reason: "credential_url_unsafe" });
+
+    const auditCount = repository.resolutionAudits.length;
+    repository.auditResolution = async () => { throw new Error("audit unavailable"); };
+    await expect(service.resolve(userId, unsafe.id, { runId: "run-audit" })).rejects.toThrow("audit unavailable");
+    expect(repository.resolutionAudits).toHaveLength(auditCount);
   });
 });

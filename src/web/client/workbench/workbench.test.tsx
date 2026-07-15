@@ -77,6 +77,8 @@ describe("run event projection", () => {
 });
 
 describe("WorkbenchPage", () => {
+  beforeEach(() => sessionStorage.clear());
+
   it("renders chapter text and reflection progress and sends a steering instruction", async () => {
     const client = api();
     const user = userEvent.setup();
@@ -191,6 +193,31 @@ describe("WorkbenchPage", () => {
     await user.click(screen.getByRole("button", { name: "切换模型" }));
     expect(await screen.findByText(/安全边界/)).toBeVisible();
     expect(client.request).toHaveBeenCalledWith(expect.stringMatching(/\/model$/), expect.objectContaining({ body: expect.stringContaining("credential-1") }));
+  });
+
+  it("restores a run-scoped pending command and queries final status after reconnect", async () => {
+    sessionStorage.setItem("synchronicle:command:project-1:11111111-1111-4111-8111-111111111111", "model:persisted");
+    sessionStorage.setItem("synchronicle:command:project-1:other-run", "model:foreign");
+    const request = vi.fn(async (path: string) => path.includes("/commands/model%3Apersisted") ? { command: { commandId: "model:persisted", status: "applied", retryable: false, failureCategory: null, errorMessage: null } } : { run: project.latestRun });
+    render(<WorkbenchPage api={{ request: request as ApiClient["request"] }} project={project} initialEvents={[]} connectionOverride="connected" />);
+    expect(await screen.findByText("模型切换已在安全边界应用。")).toBeVisible();
+    expect(request).toHaveBeenCalledWith(expect.stringContaining("/commands/model%3Apersisted"));
+    expect(request).not.toHaveBeenCalledWith(expect.stringContaining("model%3Aforeign"));
+    expect(sessionStorage.getItem("synchronicle:command:project-1:11111111-1111-4111-8111-111111111111")).toBeNull();
+  });
+
+  it("refreshes a pending command immediately when the connection recovers", async () => {
+    sessionStorage.setItem("synchronicle:command:project-1:11111111-1111-4111-8111-111111111111", "model:reconnect");
+    const request = vi.fn().mockResolvedValue({ command: { commandId: "model:reconnect", status: "pending", retryable: false, failureCategory: null, errorMessage: null } });
+    const client = { request: request as ApiClient["request"] };
+    const { rerender } = render(<WorkbenchPage api={client} project={project} initialEvents={[]} connectionOverride="reconnecting" />);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+
+    request.mockResolvedValueOnce({ command: { commandId: "model:reconnect", status: "applied", retryable: false, failureCategory: null, errorMessage: null } });
+    rerender(<WorkbenchPage api={client} project={project} initialEvents={[]} connectionOverride="connected" />);
+
+    expect(await screen.findByText("模型切换已在安全边界应用。")).toBeVisible();
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("restores panel, focus, chapter, and scroll on popstate", async () => {
