@@ -1,5 +1,7 @@
-import { index, integer, jsonb, numeric, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { check, foreignKey, index, integer, jsonb, numeric, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { users } from "./auth.js";
+import { projects } from "./projects.js";
 import { runs } from "./runtime.js";
 
 export const credentialStatus = pgEnum("credential_status", ["active", "revoked", "invalid"]);
@@ -47,13 +49,27 @@ export const quotaLedger = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-    runId: uuid("run_id").references(() => runs.id, { onDelete: "set null" }),
+    projectId: uuid("project_id"),
+    runId: uuid("run_id"),
     source: text("source").notNull(),
     amount: numeric("amount", { precision: 18, scale: 8 }).notNull(),
     balance: numeric("balance", { precision: 18, scale: 8 }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [index("quota_ledger_user_created_idx").on(table.userId, table.createdAt)],
+  (table) => [
+    foreignKey({
+      name: "quota_ledger_user_project_fk",
+      columns: [table.userId, table.projectId],
+      foreignColumns: [projects.userId, projects.id],
+    }),
+    foreignKey({
+      name: "quota_ledger_user_project_run_fk",
+      columns: [table.userId, table.projectId, table.runId],
+      foreignColumns: [runs.userId, runs.projectId, runs.id],
+    }),
+    check("quota_ledger_run_requires_project_ck", sql`${table.runId} is null or ${table.projectId} is not null`),
+    index("quota_ledger_user_created_idx").on(table.userId, table.createdAt),
+  ],
 );
 
 export const auditEvents = pgTable(

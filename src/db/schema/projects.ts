@@ -1,4 +1,4 @@
-import { index, integer, jsonb, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { foreignKey, index, integer, jsonb, pgEnum, pgTable, text, timestamp, unique, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { users } from "./auth.js";
 
 export const projectStatus = pgEnum("project_status", ["active", "archived"]);
@@ -17,15 +17,18 @@ export const projects = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [index("projects_user_status_idx").on(table.userId, table.status)],
+  (table) => [
+    unique("projects_user_id_id_uq").on(table.userId, table.id),
+    index("projects_user_status_idx").on(table.userId, table.status),
+  ],
 );
 
 export const artifacts = pgTable(
   "artifacts",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-    projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull(),
+    projectId: uuid("project_id").notNull(),
     type: text("type").notNull(),
     contentJson: jsonb("content_json"),
     contentText: text("content_text"),
@@ -36,6 +39,11 @@ export const artifacts = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
+    foreignKey({
+      name: "artifacts_user_project_fk",
+      columns: [table.userId, table.projectId],
+      foreignColumns: [projects.userId, projects.id],
+    }).onDelete("cascade"),
     uniqueIndex("artifacts_project_type_version_uq").on(table.projectId, table.type, table.version),
     index("artifacts_user_project_idx").on(table.userId, table.projectId),
   ],
@@ -45,8 +53,8 @@ export const chapters = pgTable(
   "chapters",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-    projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull(),
+    projectId: uuid("project_id").notNull(),
     sequence: integer("sequence").notNull(),
     title: text("title").notNull(),
     body: text("body").notNull().default(""),
@@ -56,6 +64,11 @@ export const chapters = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
+    foreignKey({
+      name: "chapters_user_project_fk",
+      columns: [table.userId, table.projectId],
+      foreignColumns: [projects.userId, projects.id],
+    }).onDelete("cascade"),
     uniqueIndex("chapters_project_sequence_uq").on(table.projectId, table.sequence),
     index("chapters_user_project_idx").on(table.userId, table.projectId),
   ],
