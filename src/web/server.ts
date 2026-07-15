@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import Fastify, { type FastifyInstance } from "fastify";
 import { createDatabase, type Database } from "../db/client.js";
+import { SchedulerRepository } from "../scheduler/repository.js";
 import { authPlugin } from "./auth/plugin.js";
 import { AuditRepository } from "./audit/repository.js";
 import type { WebConfig } from "./config.js";
@@ -11,6 +12,7 @@ import {
   databaseTransactionRunner,
   ProjectMutationService,
 } from "./projects/service.js";
+import { runRoutes } from "./runs/routes.js";
 
 type WebServerCommonOptions = Partial<Pick<WebConfig, "publicUrl" | "trustProxy">>;
 
@@ -51,6 +53,10 @@ export async function buildWebServer(options: WebServerOptions): Promise<Fastify
     repository: new ProjectRepository(database),
     audit,
     mutations,
+  });
+  await app.register(runRoutes, {
+    prefix: "/api/projects/:projectId/runs",
+    repository: new SchedulerRepository(database),
   });
   app.get("/api/health", async () => ({ status: "ok" as const }));
   return app;
