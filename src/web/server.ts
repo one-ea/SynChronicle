@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
+import staticFiles from "@fastify/static";
 import { createDatabase, type Database } from "../db/client.js";
 import websocket from "@fastify/websocket";
 import { PostgresEventBroker } from "../realtime/broker.js";
@@ -70,5 +73,15 @@ export async function buildWebServer(options: WebServerOptions): Promise<Fastify
     repository: new SchedulerRepository(database),
   });
   app.get("/api/health", async () => ({ status: "ok" as const }));
+  const clientRoot = resolve(process.cwd(), "dist/web/client");
+  if (existsSync(clientRoot)) {
+    await app.register(staticFiles, { root: clientRoot, prefix: "/" });
+    app.setNotFoundHandler(async (request, reply) => {
+      if (request.url.startsWith("/api/") || request.url.startsWith("/ws/")) {
+        return reply.code(404).send({ error: "Not Found" });
+      }
+      return reply.type("text/html").sendFile("index.html");
+    });
+  }
   return app;
 }

@@ -16,6 +16,16 @@ describe("buildWebServer", () => {
     await app.close();
   });
 
+  it("serves the built React application for browser routes", async () => {
+    const app = await buildWebServer({ databaseUrl: "postgres://test:test@localhost/test" });
+    const response = await app.inject({ method: "GET", url: "/login" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/html");
+    expect(response.body).toContain("<div id=\"root\"></div>");
+    await app.close();
+  });
+
   it("disables trusted proxy handling by default", async () => {
     const config = WebConfigSchema.parse({
       databaseUrl: "postgres://test:test@localhost/test",

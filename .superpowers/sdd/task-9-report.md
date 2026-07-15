@@ -1,0 +1,57 @@
+# Task 9 Report
+
+## Status
+
+Implemented the React/Vite application shell, cookie-session authentication flow, and active project management UI. Fastify serves the production client and returns the SPA entry point for browser routes while preserving API and WebSocket 404 behavior.
+
+## RED / GREEN
+
+- RED: `src/web/client/app.test.tsx` and `app.a11y.test.tsx` failed because the React application did not exist.
+- GREEN: login, cookie-session restoration, logout, project loading, creation, optimistic rename, archive, 409 rollback feedback, uniform authentication errors, request IDs, empty/error/loading states, keyboard focus, and WCAG AA axe checks pass.
+- RED: the Fastify browser-route test returned 404 because the static root resolved to the TypeScript source directory.
+- GREEN: Fastify resolves `dist/web/client`, serves built assets, and returns `index.html` for `/login` and other non-API browser routes.
+
+## Design System
+
+- Direction: AI-native literary editorial with content-led hierarchy, restrained rules, paper surfaces, and a single purple accent family.
+- Typography: Cormorant Garamond for display and Libre Baskerville for body copy, with serif fallbacks and `font-display` behavior supplied by Google Fonts CSS.
+- Components use editorial rows and typographic hierarchy instead of repeated gradient cards.
+- Icons are inline monochrome SVG with consistent stroke treatment; the UI contains no emoji icons.
+
+## Responsive And Accessibility
+
+- Mobile-first rules cover 375, 768, 1024, and 1440 widths with adaptive gutters, stacked mobile actions, split login layout at desktop widths, and no fixed-width content overflow.
+- Native forms, visible labels, autocomplete metadata, semantic headings, skip link, nav landmarks, dialog semantics, live loading text, and alert regions support keyboard and assistive technology use.
+- Interactive controls have at least 44px targets, visible focus rings, AA-oriented color tokens, and `prefers-reduced-motion` overrides.
+- Axe WCAG 2 A/AA test reports zero detectable violations on the login page.
+
+## API And Security
+
+- The centralized client sends same-origin credentials and per-request `x-request-id`, reads response request IDs, and classifies 401, 403, 409, network, and general request failures.
+- Browser JavaScript stores no session token. Session restoration uses the protected project-list endpoint and the HttpOnly cookie managed by Fastify.
+- State-changing requests remain same-origin so the browser supplies the Origin used by the existing server CSRF check.
+
+## Self Review
+
+- Scope remains limited to authentication and project management; Task 10 workbench components and realtime UI are absent.
+- Rename and archive update the list optimistically and restore the previous list after API failure. Conflict messages identify concurrent modification and include the server request ID.
+- Project list state represents active projects only, matching the repository's archive filter.
+- Production build order keeps the server bundle and Vite assets together under `dist/web`.
+
+## Verification
+
+- Component and a11y: 8 passed.
+- Target frontend/auth/projects: 32 passed, 6 PostgreSQL-conditional skipped.
+- Full suite: 400 passed, 43 PostgreSQL-conditional skipped.
+- TypeScript: passed.
+- Production build: passed; Vite emitted HTML, CSS, and JS under `dist/web/client`.
+- Drizzle migration check: passed.
+- Git diff check: passed.
+- Vite preview started successfully on port 5173 and the platform preview connection returned the application HTML.
+
+## Concerns
+
+- PostgreSQL-conditional tests remain skipped without `TEST_DATABASE_URL`, consistent with prior task reports.
+- Session restoration infers authentication through `/api/projects/`; a future dedicated session endpoint can restore display identity without coupling shell startup to project availability.
+- Google Fonts require network access; Georgia fallbacks preserve the literary layout when font delivery is unavailable.
+- Fastify static serving resolves from the process working directory, so production launch must continue from the repository/application root as the package scripts do.

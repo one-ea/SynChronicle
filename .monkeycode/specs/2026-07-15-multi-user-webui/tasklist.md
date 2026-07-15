@@ -575,7 +575,7 @@ git commit -m "feat(web): stream recoverable run events"
 - Produces browser routes `/login`, `/projects`, `/projects/:projectId`。
 - Consumes REST APIs from Tasks 3 and 4。
 
-- [ ] **Step 1: Write failing UI tests**
+- [x] **Step 1: Write failing UI tests**
 
 ```tsx
 it("logs in and renders the current user's projects", async () => {
@@ -588,13 +588,13 @@ it("logs in and renders the current user's projects", async () => {
 });
 ```
 
-- [ ] **Step 2: Run UI test and verify failure**
+- [x] **Step 2: Run UI test and verify failure**
 
 Run: `pnpm vitest run src/web/client/app.test.tsx`
 
 Expected: FAIL because the React application is missing.
 
-- [ ] **Step 3: Configure Vite and production static serving**
+- [x] **Step 3: Configure Vite and production static serving**
 
 ```ts
 export default defineConfig({
@@ -612,17 +612,17 @@ export default defineConfig({
 
 Fastify serves `dist/web/client` and returns `index.html` for non-API browser routes.
 
-- [ ] **Step 4: Implement accessible login and project pages**
+- [x] **Step 4: Implement accessible login and project pages**
 
 Use native forms, visible labels, keyboard focus states, loading states, uniform authentication errors, responsive project cards, and archive filtering. Keep credentials in HttpOnly cookies; browser JavaScript stores no session token.
 
-- [ ] **Step 5: Run frontend, API, and build tests**
+- [x] **Step 5: Run frontend, API, and build tests**
 
 Run: `pnpm vitest run src/web/client src/web/auth src/web/projects && pnpm typecheck && pnpm build`
 
 Expected: PASS; Vite assets exist under `dist/web/client`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add vite.config.ts index.html tsconfig.json src/web/client src/web/server.ts package.json pnpm-lock.yaml
