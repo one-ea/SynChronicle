@@ -1,4 +1,5 @@
-import { and, asc, count, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { createHash } from "node:crypto";
+import { and, asc, count, eq, inArray, lte, sql } from "drizzle-orm";
 import type { Database } from "../db/client.js";
 import { projects, runs, tasks, users } from "../db/schema/index.js";
 import type { RequestAuth } from "../web/auth/plugin.js";
@@ -21,6 +22,44 @@ export interface SchedulerRepositoryOptions {
 }
 
 type SchedulerExecutor = Database | Parameters<Parameters<Database["transaction"]>[0]>[0];
+
+function legacyCommandId(index: number, instruction: string): string {
+  const digest = createHash("sha256").update(`${index}\0${instruction}`).digest("hex").slice(0, 16);
+  return `legacy-${index}-${digest}`;
+}
+
+export function normalizeRunResumeData(value: unknown): RunResumeData {
+  const source = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  const desiredState = source.desiredState === "paused" || source.desiredState === "cancelled"
+    ? source.desiredState
+    : "running";
+  const commands: RunResumeData["steerCommands"] = [];
+  const seen = new Set<string>();
+  if (Array.isArray(source.steerCommands)) {
+    source.steerCommands.forEach((candidate, index) => {
+      let id: string | undefined;
+      let instruction: string | undefined;
+      if (typeof candidate === "string" && candidate.trim()) {
+        id = legacyCommandId(index, candidate);
+        instruction = candidate;
+      } else if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
+        const record = candidate as Record<string, unknown>;
+        const candidateId = typeof record.id === "string" ? record.id : record.commandId;
+        if (typeof candidateId === "string" && candidateId.trim() && typeof record.instruction === "string" && record.instruction.trim()) {
+          id = candidateId;
+          instruction = record.instruction;
+        }
+      }
+      if (id && instruction && !seen.has(id)) {
+        seen.add(id);
+        commands.push({ id, instruction });
+      }
+    });
+  }
+  return { ...source, desiredState, steerCommands: commands };
+}
 
 export function buildReleaseLeaseQuery(
   executor: SchedulerExecutor,
@@ -57,7 +96,7 @@ export function buildEligibleTaskQuery(executor: SchedulerExecutor, now: Date) {
       sql`${tasks.attempts} < ${tasks.maxAttempts}`,
       lte(tasks.scheduledAt, now),
       eq(users.status, "active"),
-      or(isNull(runs.resumeData), sql`${runs.resumeData}->>'desiredState' = 'running'`),
+      sql`coalesce(${runs.resumeData}->>'desiredState', 'running') = 'running'`,
       sql`(select count(*) from tasks active_user where active_user.user_id = ${tasks.userId} and active_user.status in ('leased', 'running')) < ${users.concurrencyLimit}`,
       sql`(${tasks.type} <> 'write' or not exists (select 1 from tasks active_write where active_write.project_id = ${tasks.projectId} and active_write.type = 'write' and active_write.status in ('leased', 'running')))`,
     ))
@@ -97,7 +136,7 @@ export class SchedulerRepository {
         projectId,
         idempotencyKey: input.idempotencyKey,
         budgetSnapshot: input.budgetSnapshot ?? {},
-        resumeData: { desiredState: "running" } satisfies RunResumeData,
+        resumeData: { desiredState: "running", steerCommands: [] } satisfies RunResumeData,
       }).returning();
       if (!run) throw new Error("Run insert returned no row");
       await transaction.insert(tasks).values({
@@ -208,22 +247,23 @@ export class SchedulerRepository {
       if (run.status === "cancelled" && command === "abort") return run;
       if (terminalRunStatuses.includes(run.status as typeof terminalRunStatuses[number])) return "conflict";
 
-      const resumeData = (run.resumeData && typeof run.resumeData === "object" ? run.resumeData : {}) as RunResumeData;
+      const resumeData = normalizeRunResumeData(run.resumeData);
+      const normalizationChanged = JSON.stringify(resumeData) !== JSON.stringify(run.resumeData);
       if (resumeData.desiredState === "cancelled" && command !== "abort") return "conflict";
       let next: RunResumeData;
       if (command === "steer") {
         if (!payload || typeof payload !== "object") return "conflict";
         const { commandId, instruction } = payload as { commandId?: unknown; instruction?: unknown };
         if (typeof commandId !== "string" || !commandId.trim() || typeof instruction !== "string" || !instruction.trim()) return "conflict";
-        const commands = resumeData.steerCommands ?? [];
-        next = commands.some((candidate) => candidate.commandId === commandId)
+        const commands = resumeData.steerCommands;
+        next = commands.some((candidate) => candidate.id === commandId)
           ? resumeData
-          : { ...resumeData, steerCommands: [...commands, { commandId, instruction }] };
+          : { ...resumeData, steerCommands: [...commands, { id: commandId, instruction }] };
       } else {
         const desiredState = command === "pause" ? "paused" : command === "abort" ? "cancelled" : "running";
         next = resumeData.desiredState === desiredState ? resumeData : { ...resumeData, desiredState };
       }
-      if (next === resumeData) return run;
+      if (next === resumeData && !normalizationChanged) return run;
       const [updated] = await transaction.update(runs).set({ resumeData: next, updatedAt: new Date() })
         .where(eq(runs.id, run.id)).returning();
       if (!updated) throw new Error("Run update returned no row");

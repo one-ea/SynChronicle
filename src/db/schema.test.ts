@@ -103,6 +103,11 @@ describe("database schema", () => {
     expect(activeWriteIndex?.config.where).toBeDefined();
     expect(runs.columns.find((column) => column.name === "idempotency_key")?.getSQLType()).toBe("text");
     expect(runs.indexes.find((index) => index.config.name === "runs_start_idempotency_uq")?.config.unique).toBe(true);
+    expect(indexShape(schema.runs, "runs_start_idempotency_uq")).toEqual([
+      "user_id",
+      "project_id",
+      "idempotency_key",
+    ]);
   });
 
   it("enforces tenant ownership through composite keys", () => {

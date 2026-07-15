@@ -5,7 +5,7 @@ import { createDatabase, type Database } from "../db/client.js";
 import { migrateDatabase } from "../db/migrate.js";
 import { projects, runs, tasks, users } from "../db/schema/index.js";
 import type { RequestAuth } from "../web/auth/plugin.js";
-import { buildEligibleTaskQuery, buildReleaseLeaseQuery, SchedulerRepository } from "./repository.js";
+import { buildEligibleTaskQuery, buildReleaseLeaseQuery, normalizeRunResumeData, SchedulerRepository } from "./repository.js";
 import { SchedulerService } from "./service.js";
 
 describe("scheduler service", () => {
@@ -36,11 +36,49 @@ describe("scheduler service", () => {
       expect(query.params.at(-1)).toBe(1);
       expect(query.sql).toContain("concurrency_limit");
       expect(query.sql).toContain("not exists");
+      expect(query.sql).toContain("coalesce");
+      expect(query.sql).toContain("desiredState");
       expect(query.sql).toMatch(/"tasks"\."attempts" < "tasks"\."max_attempts"/);
       expect(query.params).not.toContain(100);
     } finally {
       await database.$client.end();
     }
+  });
+
+  it("normalizes legacy resume data deterministically while preserving other fields", () => {
+    const legacy = {
+      checkpoint: { chapter: 3 },
+      steerCommands: [
+        "Revise pacing",
+        { commandId: "old-object", instruction: "Keep tone" },
+        { id: "current", instruction: "Add detail" },
+        null,
+        { id: 42, instruction: "invalid" },
+      ],
+    };
+
+    const first = normalizeRunResumeData(legacy);
+    const second = normalizeRunResumeData(legacy);
+
+    expect(first).toEqual(second);
+    expect(first).toMatchObject({
+      desiredState: "running",
+      checkpoint: { chapter: 3 },
+      steerCommands: [
+        { id: expect.stringMatching(/^legacy-/), instruction: "Revise pacing" },
+        { id: "old-object", instruction: "Keep tone" },
+        { id: "current", instruction: "Add detail" },
+      ],
+    });
+  });
+
+  it("normalizes malformed resume data to safe runnable defaults", () => {
+    expect(normalizeRunResumeData({ desiredState: 12, steerCommands: "broken", legacy: true })).toEqual({
+      desiredState: "running",
+      steerCommands: [],
+      legacy: true,
+    });
+    expect(normalizeRunResumeData("broken")).toEqual({ desiredState: "running", steerCommands: [] });
   });
 });
 
@@ -316,13 +354,79 @@ postgres("PostgreSQL leased scheduler", () => {
     expect(secondSteer.resumeData).toMatchObject({
       desiredState: "running",
       steerCommands: [
-        { commandId: "steer-1", instruction: "Revise" },
-        { commandId: "steer-2", instruction: "Revise" },
+        { id: "steer-1", instruction: "Revise" },
+        { id: "steer-2", instruction: "Revise" },
       ],
     });
     const aborted = await repository.command(auth, project!.id, run!.id, "abort");
     expect(await repository.command(auth, project!.id, run!.id, "abort")).toEqual(aborted);
     expect(await repository.command(auth, project!.id, run!.id, "resume")).toBe("conflict");
+    await settleTasks([auth.userId]);
+  });
+
+  it("claims historical null, empty, and legacy-field resume data while respecting pause and cancel", async () => {
+    const suffix = randomUUID();
+    const [legacyUser] = await database.insert(users).values({
+      username: `legacy-eligible-${suffix}`,
+      passwordHash: "test",
+      concurrencyLimit: 10,
+    }).returning();
+    const [legacyProject] = await database.insert(projects).values({ userId: legacyUser!.id, title: "Legacy eligibility" }).returning();
+    const states = [null, {}, { checkpoint: { chapter: 2 } }, { desiredState: "paused" }, { desiredState: "cancelled" }] as const;
+    const legacyRuns = await database.insert(runs).values(states.map((resumeData, index) => ({
+      userId: legacyUser!.id,
+      projectId: legacyProject!.id,
+      idempotencyKey: `legacy-state-${suffix}-${index}`,
+      resumeData,
+    }))).returning();
+    await database.insert(tasks).values(legacyRuns.map((run) => ({
+      userId: legacyUser!.id,
+      projectId: legacyProject!.id,
+      runId: run.id,
+      type: "review" as const,
+      priority: 2_000_000,
+    })));
+
+    const claimed = await Promise.all([
+      repository.claimNextTask("legacy-worker-1", 30_000),
+      repository.claimNextTask("legacy-worker-2", 30_000),
+      repository.claimNextTask("legacy-worker-3", 30_000),
+    ]);
+    const claimedRunIds = new Set(claimed.map((task) => task?.runId));
+
+    expect(claimedRunIds).toEqual(new Set(legacyRuns.slice(0, 3).map((run) => run.id)));
+    expect(claimedRunIds.has(legacyRuns[3]!.id)).toBe(false);
+    expect(claimedRunIds.has(legacyRuns[4]!.id)).toBe(false);
+    await settleTasks([legacyUser!.id]);
+  });
+
+  it("normalizes historical command data through the real repository", async () => {
+    const [project] = await database.insert(projects).values({ userId: auth.userId, title: `Legacy commands ${randomUUID()}` }).returning();
+    const run = await repository.enqueueRun(auth, project!.id, { idempotencyKey: randomUUID(), type: "review" });
+    const historical = {
+      checkpoint: { chapter: 7 },
+      steerCommands: ["Legacy direction", { commandId: "old-id", instruction: "Keep voice" }, { broken: true }],
+    };
+    await database.update(runs).set({ resumeData: historical }).where(eq(runs.id, run!.id));
+
+    const first = await repository.command(auth, project!.id, run!.id, "steer", { commandId: "new-id", instruction: "Add tension" });
+    const retry = await repository.command(auth, project!.id, run!.id, "steer", { commandId: "new-id", instruction: "Ignored retry" });
+
+    if (typeof first === "string" || typeof retry === "string") throw new Error("Unexpected command result");
+    expect(retry).toEqual(first);
+    expect(first.resumeData).toMatchObject({
+      desiredState: "running",
+      checkpoint: { chapter: 7 },
+      steerCommands: [
+        { id: expect.stringMatching(/^legacy-0-/), instruction: "Legacy direction" },
+        { id: "old-id", instruction: "Keep voice" },
+        { id: "new-id", instruction: "Add tension" },
+      ],
+    });
+    await database.update(runs).set({ resumeData: { legacy: true, steerCommands: { broken: true } } }).where(eq(runs.id, run!.id));
+    const normalized = await repository.command(auth, project!.id, run!.id, "pause");
+    if (typeof normalized === "string") throw new Error(`Unexpected command result: ${normalized}`);
+    expect(normalized.resumeData).toMatchObject({ legacy: true, desiredState: "paused", steerCommands: [] });
     await settleTasks([auth.userId]);
   });
 });

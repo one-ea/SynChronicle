@@ -23,6 +23,6 @@ export type RunCommandResult = RunRow | "missing" | "conflict";
 
 export interface RunResumeData {
   desiredState: "running" | "paused" | "cancelled";
-  steerCommands?: Array<{ commandId: string; instruction: string }>;
+  steerCommands: Array<{ id: string; instruction: string }>;
   [key: string]: unknown;
 }

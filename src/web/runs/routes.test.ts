@@ -36,11 +36,11 @@ class MemoryRuns implements RunCommandRepository {
     if (command === "abort" && desiredState === "cancelled") return run;
     if (command === "steer" && (!payload || typeof payload !== "object")) return "conflict" as const;
     const steer = payload as { commandId: string; instruction: string };
-    const existingCommands = ((run.resumeData as { steerCommands?: Array<{ commandId: string; instruction: string }> }).steerCommands ?? []);
+    const existingCommands = ((run.resumeData as { steerCommands?: Array<{ id: string; instruction: string }> }).steerCommands ?? []);
     const next = {
       ...run,
       resumeData: command === "steer"
-        ? { ...(run.resumeData as object), steerCommands: existingCommands.some(({ commandId }) => commandId === steer.commandId) ? existingCommands : [...existingCommands, steer] }
+        ? { ...(run.resumeData as object), steerCommands: existingCommands.some(({ id }) => id === steer.commandId) ? existingCommands : [...existingCommands, { id: steer.commandId, instruction: steer.instruction }] }
         : { ...(run.resumeData as object), desiredState: command === "pause" ? "paused" : command === "abort" ? "cancelled" : "running" },
     };
     this.runs.set(run.id, next);
@@ -76,7 +76,7 @@ describe("run command routes", () => {
     expect(pause.json().run.resumeData.desiredState).toBe("paused");
     expect(repeated.json()).toEqual(pause.json());
     expect(resume.json().run.resumeData.desiredState).toBe("running");
-    expect(steer.json().run.resumeData.steerCommands).toEqual([{ commandId: "steer-1", instruction: "Focus on pacing" }]);
+    expect(steer.json().run.resumeData.steerCommands).toEqual([{ id: "steer-1", instruction: "Focus on pacing" }]);
     await app.close();
   });
 
@@ -139,8 +139,8 @@ describe("run command routes", () => {
 
     expect(retry.json()).toEqual(first.json());
     expect(repeatedText.json().run.resumeData.steerCommands).toEqual([
-      { commandId: "command-1", instruction: "Revise" },
-      { commandId: "command-2", instruction: "Revise" },
+      { id: "command-1", instruction: "Revise" },
+      { id: "command-2", instruction: "Revise" },
     ]);
     await app.close();
   });

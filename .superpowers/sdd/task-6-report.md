@@ -126,3 +126,50 @@ DONE_WITH_CONCERNS
 
 - 当前环境未设置 `TEST_DATABASE_URL`，新增 11 个真实 PostgreSQL Scheduler 用例完成收集并明确跳过；数据库运行时证据需由带隔离 PostgreSQL 的 CI 补齐。
 - 全局 advisory lock 保证 claim/recovery/release 正确性，并发 claimant 吞吐仍受单临界区约束。
+
+## 最终复审整改结果 2026-07-15
+
+### 状态
+
+DONE_WITH_CONCERNS
+
+### 修复
+
+- eligible SQL 使用 `coalesce(resume_data->>'desiredState', 'running') = 'running'`，兼容 SQL null、JSON 空对象、缺少 desiredState 的历史对象和显式 running；paused/cancelled 保持不可领取。
+- 新增 `normalizeRunResumeData()` 安全解析入口，非对象 resume data 规范为 runnable 默认值，同时保留对象中的其他字段。
+- 当前 steer 持久格式统一为 `{ id, instruction }`。
+- 历史字符串命令转换为 `legacy-{index}-{sha256}` 稳定 ID；历史 `{ commandId, instruction }` 转换为当前 `{ id, instruction }`；异常数组项和异常 steerCommands 类型安全过滤。
+- command 在租户行锁事务中规范化并持久化 resume data；重复 command ID 保持幂等，相同文本的新 ID 继续追加。
+- Schema metadata 测试精确断言 `runs_start_idempotency_uq` 列顺序为 `user_id, project_id, idempotency_key`。
+
+### RED
+
+- 命令：`pnpm vitest run src/scheduler/scheduler.test.ts src/db/schema.test.ts`
+- 结果：3 failed，8 passed，13 skipped。
+- eligible SQL 断言因缺少 `coalesce` 失败。
+- 两个 resume data 规范化测试因 `normalizeRunResumeData is not a function` 失败。
+
+### GREEN
+
+- 目标命令：`pnpm vitest run src/scheduler/scheduler.test.ts src/web/runs src/db/schema.test.ts`
+- 结果：16 passed，15 skipped，共 31 项。
+- 全量命令：`pnpm test`
+- 结果：337 passed，29 skipped，共 366 项。
+- `pnpm typecheck`：退出码 0。
+- `pnpm build`：退出码 0，CLI/Web/Worker ESM 构建成功。
+- `pnpm exec drizzle-kit check`：通过。
+- `pnpm exec drizzle-kit generate`：`No schema changes, nothing to migrate`。
+- `git diff --check`：退出码 0。
+
+### PostgreSQL 条件覆盖
+
+- 新增真实 eligible 测试，构造 resume_data 为 null、`{}`、仅历史字段、paused、cancelled 的运行；前三类可领取，后两类不可领取。
+- 新增真实 `SchedulerRepository.command()` 历史数据测试，覆盖字符串数组、旧 commandId 对象、异常项、异常 steerCommands 类型、额外 checkpoint/legacy 字段保留及重复命令稳定性。
+
+### 提交
+
+- Message: `fix(runtime): support legacy run resume data`
+
+### 顾虑
+
+- 当前环境未设置 `TEST_DATABASE_URL`，13 个 Scheduler PostgreSQL 条件测试完成收集并明确跳过；历史 JSONB 与真实 claim/command 行锁路径仍需由 PostgreSQL CI 执行。
