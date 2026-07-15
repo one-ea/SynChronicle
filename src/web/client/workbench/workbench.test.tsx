@@ -17,6 +17,11 @@ const project: WorkbenchProject = {
   agents: [{ name: "Writer", state: "stream.delta", summary: "正在续写", sequence: 9 }],
   usage: { inputTokens: 100, outputTokens: 60, totalTokens: 160, cost: "0.01200000", byAgent: [{ agent: "Writer", inputTokens: 100, outputTokens: 60, totalTokens: 160, cost: "0.01200000" }] },
   pendingQuestion: { id: "event-8", questions: [{ header: "篇幅", question: "希望多长？", options: ["短篇", "长篇"] }] },
+  modelConfiguration: {
+    activeModelSetId: "set-1",
+    modelSets: [{ id: "set-1", name: "主力模型", version: 2, agents: { writer: { provider: "openai", model: "gpt-5", credentialId: "credential-1", parameters: { temperature: 0.4 } } } }],
+    providers: [{ provider: "openai", models: ["gpt-5"], credentials: [{ id: "credential-1", label: "OpenAI personal" }] }],
+  },
 };
 
 function api(): ApiClient {
@@ -147,9 +152,9 @@ describe("WorkbenchPage", () => {
     await user.selectOptions(screen.getByLabelText("希望多长？"), "长篇");
     await user.click(screen.getByRole("button", { name: "提交回答" }));
     expect(screen.queryByRole("button", { name: "提交回答" })).not.toBeInTheDocument();
-    await user.type(screen.getByLabelText("角色"), "writer");
-    await user.type(screen.getByLabelText("Provider"), "openai");
-    await user.type(screen.getByLabelText("模型"), "gpt-5");
+    await user.selectOptions(screen.getByLabelText("Agent"), "writer");
+    await user.selectOptions(screen.getByLabelText("Provider"), "openai");
+    await user.selectOptions(screen.getByLabelText("模型"), "gpt-5");
     await user.click(screen.getByRole("button", { name: "切换模型" }));
     await user.click(screen.getByRole("button", { name: "运行诊断" }));
 
@@ -169,6 +174,18 @@ describe("WorkbenchPage", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("req-control");
     await user.click(screen.getByRole("button", { name: "重试" }));
     expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses configured model choices and announces command state", async () => {
+    const client = api();
+    const user = userEvent.setup();
+    render(<WorkbenchPage api={client} project={project} initialEvents={[]} />);
+    await user.selectOptions(screen.getByLabelText("Agent"), "writer");
+    await user.selectOptions(screen.getByLabelText("Provider"), "openai");
+    await user.selectOptions(screen.getByLabelText("模型"), "gpt-5");
+    await user.click(screen.getByRole("button", { name: "切换模型" }));
+    expect(await screen.findByText(/安全边界/)).toBeVisible();
+    expect(client.request).toHaveBeenCalledWith(expect.stringMatching(/\/model$/), expect.objectContaining({ body: expect.stringContaining("credential-1") }));
   });
 
   it("restores panel, focus, chapter, and scroll on popstate", async () => {

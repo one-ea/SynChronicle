@@ -16,6 +16,7 @@ export interface WorkbenchProjection {
   agents: Array<{ name: string; state: string; summary?: string; sequence?: number }>;
   usage: { inputTokens: number; outputTokens: number; totalTokens: number; cost: string; byAgent: Array<{ agent: string; inputTokens: number; outputTokens: number; totalTokens: number; cost: string }> };
   pendingQuestion: { id: string; questions: Array<{ header: string; question: string; options: string[] }> } | null;
+  modelConfiguration?: unknown;
 }
 
 export interface WorkbenchRepositoryLike {

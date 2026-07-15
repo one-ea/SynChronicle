@@ -8,6 +8,7 @@ import { DatabaseEventRepository } from "../realtime/eventRepository.js";
 import { SchedulerRepository } from "../scheduler/repository.js";
 import { DatabaseStore } from "../store/database/index.js";
 import { WorkerRunner, taskFingerprint } from "./runner.js";
+import { applyRunConfiguration } from "./configuration.js";
 
 export async function startWorker(): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL?.trim();
@@ -30,7 +31,7 @@ export async function startWorker(): Promise<void> {
       appendEvent: (scope, event) => events.appendEvent(scope, event),
       publish: (wakeup) => eventBroker.publish(wakeup),
     },
-    createHost: async (task) => Host.new(config, bundle, {
+    createHost: async (task) => Host.new(applyRunConfiguration(config, task.payload), bundle, {
       persistStreamDelta: async (chunkSequence, text) => {
         const event = await events.appendEvent({ userId: task.userId, projectId: task.projectId, runId: task.runId }, {
           stableId: `stream:${task.runId}:${task.id}:${task.type}:${chunkSequence}`,

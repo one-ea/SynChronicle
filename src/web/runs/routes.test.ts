@@ -8,7 +8,7 @@ class MemoryRuns implements RunCommandRepository {
   readonly runs = new Map<string, RunRecord>();
   readonly starts = new Map<string, string>();
 
-  async enqueueRun(auth: RequestAuth, projectId: string, input: { idempotencyKey: string }): Promise<RunRecord | null> {
+  async enqueueRun(auth: RequestAuth, projectId: string, input: { idempotencyKey: string; configuration?: Record<string, unknown> }): Promise<RunRecord | null> {
     if (projectId === "missing") return null;
     const existingId = this.starts.get(`${auth.userId}:${projectId}:${input.idempotencyKey}`);
     if (existingId) return this.runs.get(existingId)!;
@@ -16,7 +16,7 @@ class MemoryRuns implements RunCommandRepository {
     const run: RunRecord = {
       id: randomUUID(), userId: auth.userId, projectId, status: "queued", latestCheckpointId: null,
       idempotencyKey: input.idempotencyKey,
-      budgetSnapshot: {}, resumeData: { desiredState: "running" }, startedAt: null, completedAt: null,
+       budgetSnapshot: {}, resumeData: { desiredState: "running", configurationSnapshot: input.configuration }, startedAt: null, completedAt: null,
       createdAt: now, updatedAt: now,
     };
     this.runs.set(run.id, run);
@@ -187,6 +187,19 @@ describe("run command routes", () => {
       expect.objectContaining({ instruction: "[AskUser] {\"questionId\":\"event-8\",\"answers\":{\"希望多长？\":\"长篇\"}}" }),
       expect.objectContaining({ instruction: "[ModelSwitch] {\"role\":\"writer\",\"provider\":\"openai\",\"model\":\"gpt-5\"}" }),
     ]));
+    await app.close();
+  });
+
+  it("accepts a versioned model-set snapshot and returns queued command feedback", async () => {
+    const { app, repository } = await testApp();
+    const headers = { "x-user-id": "alice" };
+    const snapshot = { modelSetId: "11111111-1111-4111-8111-111111111111", version: 3, agents: { writer: { provider: "openai", model: "gpt-5", credentialId: "22222222-2222-4222-8222-222222222222", parameters: { temperature: 0.3 } } } };
+    const start = await app.inject({ method: "POST", url: "/api/projects/project-a/runs", headers, payload: { idempotencyKey: "configured-start", configuration: snapshot } });
+    const run = start.json().run as RunRecord;
+    expect(repository.runs.get(run.id)?.resumeData).toMatchObject({ configurationSnapshot: snapshot });
+
+    const model = await app.inject({ method: "POST", url: `/api/projects/project-a/runs/${run.id}/model`, headers, payload: { role: "writer", provider: "openai", model: "gpt-5", credentialId: "22222222-2222-4222-8222-222222222222", parameters: { temperature: 0.2 } } });
+    expect(model.json()).toMatchObject({ command: { status: "queued", appliesAfter: "agent_boundary" } });
     await app.close();
   });
 });

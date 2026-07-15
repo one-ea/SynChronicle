@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { and, asc, count, eq, inArray, lte, or, sql } from "drizzle-orm";
 import type { Database } from "../db/client.js";
-import { projects, runCommands, runs, tasks, users } from "../db/schema/index.js";
+import { platformModels, projects, providerCredentials, runCommands, runs, tasks, userModelSets, users } from "../db/schema/index.js";
 import { appendRunEventInTransaction } from "../realtime/append.js";
 import type { RequestAuth } from "../web/auth/plugin.js";
 import { LEGACY_COMMAND_ID_PREFIX } from "./types.js";
@@ -118,6 +118,15 @@ export class SchedulerRepository {
     this.platformConcurrency = options.platformConcurrency;
   }
 
+  async validateModelSelection(auth: RequestAuth, selection: { provider: string; model: string; credentialId?: string }): Promise<boolean> {
+    if (selection.credentialId) {
+      const [credential] = await this.db.select({ id: providerCredentials.id }).from(providerCredentials).where(and(eq(providerCredentials.id, selection.credentialId), eq(providerCredentials.userId, auth.userId), eq(providerCredentials.provider, selection.provider), eq(providerCredentials.status, "active"))).limit(1);
+      return Boolean(credential);
+    }
+    const [model] = await this.db.select({ id: platformModels.id }).from(platformModels).where(and(eq(platformModels.provider, selection.provider), eq(platformModels.model, selection.model), eq(platformModels.status, "active"))).limit(1);
+    return Boolean(model);
+  }
+
   async enqueueRun(auth: RequestAuth, projectId: string, input: EnqueueRunInput): Promise<RunRow | null> {
     return this.db.transaction(async (transaction) => {
       const [project] = await transaction.select({ id: projects.id }).from(projects).where(and(
@@ -134,12 +143,21 @@ export class SchedulerRepository {
       )).limit(1);
       if (existing) return existing;
 
+      let configurationSnapshot: Record<string, unknown> | undefined;
+      if (input.configuration) {
+        const modelSetId = typeof input.configuration.modelSetId === "string" ? input.configuration.modelSetId : "";
+        const version = typeof input.configuration.version === "number" ? input.configuration.version : 0;
+        const [modelSet] = await transaction.select({ id: userModelSets.modelSetId, name: userModelSets.name, version: userModelSets.version, agents: userModelSets.agents }).from(userModelSets).where(and(eq(userModelSets.userId, auth.userId), eq(userModelSets.modelSetId, modelSetId), eq(userModelSets.version, version))).limit(1);
+        if (!modelSet) return null;
+        configurationSnapshot = { modelSetId: modelSet.id, name: modelSet.name, version: modelSet.version, agents: modelSet.agents };
+      }
+
       const [run] = await transaction.insert(runs).values({
         userId: auth.userId,
         projectId,
         idempotencyKey: input.idempotencyKey,
         budgetSnapshot: input.budgetSnapshot ?? {},
-        resumeData: { desiredState: "running", steerCommands: [] } satisfies RunResumeData,
+        resumeData: { desiredState: "running", steerCommands: [], configurationSnapshot } satisfies RunResumeData,
       }).returning();
       if (!run) throw new Error("Run insert returned no row");
       await transaction.insert(tasks).values({
@@ -148,7 +166,7 @@ export class SchedulerRepository {
         runId: run.id,
         type: input.type ?? "write",
         priority: input.priority ?? 0,
-        payload: input.payload ?? {},
+        payload: { ...(input.payload ?? {}), configurationSnapshot },
       });
       return run;
     });

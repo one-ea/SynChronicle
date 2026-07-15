@@ -7,6 +7,24 @@ import { runs } from "./runtime.js";
 export const credentialStatus = pgEnum("credential_status", ["active", "revoked", "invalid"]);
 export const modelStatus = pgEnum("model_status", ["active", "disabled"]);
 
+export const userModelSets = pgTable(
+  "user_model_sets",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    modelSetId: uuid("model_set_id").notNull().defaultRandom(),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    version: integer("version").notNull(),
+    agents: jsonb("agents").notNull(),
+    active: integer("active").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("user_model_sets_user_set_version_uq").on(table.userId, table.modelSetId, table.version),
+    index("user_model_sets_user_active_idx").on(table.userId, table.active),
+  ],
+);
+
 export const providerCredentials = pgTable(
   "provider_credentials",
   {

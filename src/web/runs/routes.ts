@@ -10,6 +10,11 @@ const StartSchema = z.object({
   priority: z.number().int().optional(),
   payload: z.record(z.string(), z.unknown()).optional(),
   budgetSnapshot: z.record(z.string(), z.unknown()).optional(),
+  configuration: z.object({
+    modelSetId: z.string().uuid(),
+    version: z.number().int().positive(),
+    agents: z.record(z.string(), z.object({ provider: z.string(), model: z.string(), credentialId: z.string().uuid().optional(), parameters: z.record(z.string(), z.unknown()).optional() }).strict()),
+  }).strict().optional(),
 }).strict();
 const SteerSchema = z.object({
   commandId: z.string().trim().min(1).max(200).refine(
@@ -26,6 +31,8 @@ const ModelSchema = z.object({
   role: z.string().trim().min(1).max(100),
   provider: z.string().trim().min(1).max(100),
   model: z.string().trim().min(1).max(200),
+  credentialId: z.string().uuid().optional(),
+  parameters: z.record(z.string(), z.unknown()).optional(),
 }).strict();
 
 export type RunRecord = RunRow;
@@ -33,6 +40,7 @@ export type RunRecord = RunRow;
 export interface RunCommandRepository {
   enqueueRun(auth: RequestAuth, projectId: string, input: EnqueueRunInput): Promise<RunRecord | null>;
   command(auth: RequestAuth, projectId: string, runId: string, command: RunCommand, payload?: unknown): Promise<RunCommandResult>;
+  validateModelSelection?(auth: RequestAuth, selection: z.infer<typeof ModelSchema>): Promise<boolean>;
 }
 
 interface RunRoutesOptions {
@@ -89,10 +97,11 @@ export const runRoutes: FastifyPluginAsync<RunRoutesOptions> = async (app, optio
     const params = ParamsSchema.safeParse(request.params);
     const input = ModelSchema.safeParse(request.body);
     if (!params.success || !params.data.runId || !input.success) return reply.code(400).send(invalidBody);
+    if (options.repository.validateModelSelection && !await options.repository.validateModelSelection(request.auth, input.data)) return reply.code(400).send({ error: "Invalid model selection" });
     const instruction = `[ModelSwitch] ${JSON.stringify(input.data)}`;
     const result = await options.repository.command(request.auth, params.data.projectId, params.data.runId, "steer", { commandId: `model:${request.id}`, instruction });
     if (result === "missing") return reply.code(404).send(notFoundBody);
     if (result === "conflict") return reply.code(409).send(conflictBody);
-    return reply.code(200).send({ run: result });
+    return reply.code(200).send({ run: result, command: { status: "queued", appliesAfter: "agent_boundary" } });
   });
 };

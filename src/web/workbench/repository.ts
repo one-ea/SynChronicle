@@ -3,6 +3,7 @@ import type { Database } from "../../db/client.js";
 import { chapters, checkpoints, projects, runCommands, runEvents, runs, tasks, usageRecords } from "../../db/schema/index.js";
 import type { RequestAuth } from "../auth/plugin.js";
 import type { WorkbenchProjection, WorkbenchRepositoryLike } from "./routes.js";
+import { ModelConfigurationRepository } from "../providers/repository.js";
 
 const emptyUsage: WorkbenchProjection["usage"] = { inputTokens: 0, outputTokens: 0, totalTokens: 0, cost: "0.00000000", byAgent: [] };
 
@@ -14,7 +15,8 @@ export class WorkbenchRepository implements WorkbenchRepositoryLike {
       .from(projects).where(and(eq(projects.userId, auth.userId), eq(projects.id, projectId))).limit(1);
     if (!project) return null;
     const [run] = await this.db.select().from(runs).where(and(eq(runs.userId, auth.userId), eq(runs.projectId, projectId))).orderBy(desc(runs.createdAt)).limit(1);
-    if (!run) return { ...project, chapters: [], latestRun: null, agents: [], usage: emptyUsage, pendingQuestion: null };
+    const modelConfiguration = await new ModelConfigurationRepository(this.db).projection(auth);
+    if (!run) return { ...project, chapters: [], latestRun: null, agents: [], usage: emptyUsage, pendingQuestion: null, modelConfiguration };
 
     const [chapterRows, taskRows, checkpointRows, eventRows, usageRows, answerRows] = await Promise.all([
       this.db.selectDistinctOn([chapters.sequence], { id: chapters.id, runId: chapters.runId, sequence: chapters.sequence, title: chapters.title, body: chapters.body, status: chapters.status, version: chapters.version })
@@ -39,6 +41,7 @@ export class WorkbenchRepository implements WorkbenchRepositoryLike {
       agents: projectAgents(eventRows, task, checkpoint?.state),
       usage,
       pendingQuestion: pendingQuestion(eventRows, new Set(answerRows.map(({ commandId }) => commandId.slice("answer:".length)))),
+      modelConfiguration,
     };
   }
 

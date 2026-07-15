@@ -14,6 +14,7 @@ export interface EnqueueRunInput {
   priority?: number;
   payload?: Record<string, unknown>;
   budgetSnapshot?: Record<string, unknown>;
+  configuration?: Record<string, unknown>;
 }
 
 export interface ReleaseLeaseOutcome {
