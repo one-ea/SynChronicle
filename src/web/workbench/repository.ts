@@ -25,7 +25,7 @@ export class WorkbenchRepository implements WorkbenchRepositoryLike {
         .where(and(eq(checkpoints.userId, auth.userId), eq(checkpoints.projectId, projectId), eq(checkpoints.runId, run.id))).orderBy(desc(checkpoints.version)).limit(1),
       this.db.select({ sequence: runEvents.sequence, type: runEvents.type, payload: runEvents.payload }).from(runEvents)
         .where(and(eq(runEvents.userId, auth.userId), eq(runEvents.projectId, projectId), eq(runEvents.runId, run.id))).orderBy(desc(runEvents.sequence)).limit(200),
-      this.db.select({ snapshotId: usageRecords.snapshotId, agent: usageRecords.agent, credentialSource: usageRecords.credentialSource, provider: usageRecords.provider, model: usageRecords.model, inputTokens: usageRecords.inputTokens, outputTokens: usageRecords.outputTokens, cost: usageRecords.cost, createdAt: usageRecords.createdAt }).from(usageRecords)
+      this.db.select({ snapshotId: usageRecords.snapshotId, agent: usageRecords.agent, credentialSource: usageRecords.credentialSource, provider: usageRecords.provider, model: usageRecords.model, inputTokens: usageRecords.inputTokens, outputTokens: usageRecords.outputTokens, cost: usageRecords.cost, createdAt: usageRecords.createdAt, state: usageRecords.state }).from(usageRecords)
         .where(and(eq(usageRecords.userId, auth.userId), eq(usageRecords.projectId, projectId), eq(usageRecords.runId, run.id))).orderBy(desc(usageRecords.createdAt), desc(usageRecords.snapshotId)),
       this.db.select({ commandId: runCommands.commandId }).from(runCommands).where(and(eq(runCommands.userId, auth.userId), eq(runCommands.projectId, projectId), eq(runCommands.runId, run.id), sql`${runCommands.commandId} like 'answer:%'`, eq(runCommands.status, "applied"))),
     ]);
@@ -52,7 +52,14 @@ export class WorkbenchRepository implements WorkbenchRepositoryLike {
   }
 }
 
-export function projectUsage(rows: Array<{ snapshotId: string; agent: string; credentialSource: string; provider: string; model: string; inputTokens: string | number | null; outputTokens: string | number | null; cost: string | null; createdAt: Date }>): WorkbenchProjection["usage"] {
+export function projectUsage(rows: Array<{ snapshotId: string; agent: string; credentialSource: string; provider: string; model: string; inputTokens: string | number | null; outputTokens: string | number | null; cost: string | null; createdAt: Date; state?: unknown }>): WorkbenchProjection["usage"] {
+  const stateRow = [...rows].sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime() || right.snapshotId.localeCompare(left.snapshotId)).find((row) => row.agent === "__store_state__" && row.state && typeof row.state === "object");
+  if (stateRow) {
+    const state = stateRow.state as { overall?: Record<string, unknown>; per_agent?: Record<string, Record<string, unknown>> };
+    const byAgent = Object.entries(state.per_agent ?? {}).sort(([left], [right]) => left.localeCompare(right)).map(([agent, value]) => { const inputTokens = Number(value.input ?? 0), outputTokens = Number(value.output ?? 0); return { agent, inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, cost: Number(value.cost_usd ?? 0).toFixed(8) }; });
+    const inputTokens = Number(state.overall?.input ?? stateRow.inputTokens ?? 0), outputTokens = Number(state.overall?.output ?? stateRow.outputTokens ?? 0);
+    return { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, cost: Number(state.overall?.cost_usd ?? stateRow.cost ?? 0).toFixed(8), byAgent };
+  }
   const latest = new Map<string, typeof rows[number]>();
   for (const row of [...rows].sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime() || right.snapshotId.localeCompare(left.snapshotId))) {
     const dimension = [row.agent, row.credentialSource, row.provider, row.model].join("\0");

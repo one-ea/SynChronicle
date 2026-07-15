@@ -8,7 +8,7 @@ export const taskType = pgEnum("task_type", ["write", "review", "maintenance"]);
 export const taskStatus = pgEnum("task_status", ["queued", "leased", "running", "paused", "completed", "failed", "cancelled"]);
 export const artifactStatus = pgEnum("artifact_status", ["draft", "committed"]);
 export const chapterStatus = pgEnum("chapter_status", ["planned", "draft", "review", "complete"]);
-export const runCommandStatus = pgEnum("run_command_status", ["pending", "claimed", "applied"]);
+export const runCommandStatus = pgEnum("run_command_status", ["pending", "claimed", "applied", "failed"]);
 
 type RunOwnershipColumns = [
   AnyPgColumn<{ tableName: "runs" }>,
@@ -245,6 +245,10 @@ export const runCommands = pgTable(
     claimedBy: text("claimed_by"),
     claimedLeaseVersion: integer("claimed_lease_version"),
     appliedAt: timestamp("applied_at", { withTimezone: true }),
+    attempts: integer("attempts").notNull().default(0),
+    retryable: integer("retryable").notNull().default(0),
+    failureCategory: text("failure_category"),
+    errorMessage: text("error_message"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

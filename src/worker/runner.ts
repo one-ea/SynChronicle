@@ -32,6 +32,7 @@ export interface WorkerScheduler {
   recordTaskError(taskId: string, workerId: string, error: { message: string; stack?: string; retryable: boolean; category: string }, leaseVersion: number): Promise<boolean>;
   recordTaskControl(taskId: string, workerId: string, control: "paused" | "cancelled", leaseVersion: number): Promise<boolean>;
   setDurableCommit?(taskId: string, workerId: string, leaseVersion: number, active: boolean): Promise<boolean>;
+  recordCommandFailure?(taskId: string, workerId: string, leaseVersion: number, commandId: string, error: { message: string; category: string; retryable: boolean }): Promise<boolean>;
 }
 
 export interface WorkerRunnerDependencies {
@@ -106,18 +107,23 @@ export class WorkerRunner {
     const deliverCommands = async () => {
       const commands = await scheduler.claimSteerCommands(task.id, workerId, task.leaseVersion);
       for (const command of commands) {
-        const interactive = parseInteractiveCommand(command.instruction);
-        if (interactive?.kind === "answer" && host.answerUser) await host.answerUser(interactive.questionId, interactive.answers);
-        else if (interactive?.kind === "model" && host.switchModel) await host.switchModel(interactive.role, interactive.provider, interactive.model);
-        else await host.steer(command.id, command.instruction);
+        try { const interactive = parseInteractiveCommand(command.instruction); if (interactive?.kind === "answer" && host.answerUser) await host.answerUser(interactive.questionId, interactive.answers); else if (interactive?.kind === "model" && host.switchModel) await host.switchModel(interactive.role, interactive.provider, interactive.model); else await host.steer(command.id, command.instruction); if (!await scheduler.acknowledgeSteerCommands(task.id, workerId, task.leaseVersion, [command.id])) throw new TaskExecutionError("lease ownership lost while applying command", true, { category: "lease_loss" }); }
+        catch (error) {
+          const failure = taskError(error, 1, 3);
+          if (failure.category === "lease_loss") { leaseLost = failure; host.abort(failure.message); throw failure; }
+          if (scheduler.recordCommandFailure && !await scheduler.recordCommandFailure(task.id, workerId, task.leaseVersion, command.id, { message: failure.message, category: failure.category, retryable: failure.retryable })) {
+            leaseLost = new TaskExecutionError("lease ownership lost while recording command failure", true, { category: "lease_loss" });
+            host.abort(leaseLost.message);
+            throw leaseLost;
+          }
+        }
       }
-      if (commands.length && !await scheduler.acknowledgeSteerCommands(task.id, workerId, task.leaseVersion, commands.map(({ id }) => id))) throw new TaskExecutionError("lease ownership lost while applying command", true, { category: "lease_loss" });
     };
     const scheduleRenewal = () => {
       renewalTimer = this.clock.setTimeout(async () => {
         if (stopped) return;
-        try { await verifyLease(); await deliverCommands(); } catch { return; }
-        scheduleRenewal();
+        try { await verifyLease(); } catch { return; }
+        try { await deliverCommands(); } finally { if (!stopped) scheduleRenewal(); }
       }, Math.max(1, Math.floor(this.leaseMs / 3))) as ReturnType<typeof setTimeout>;
     };
     const handleBoundary = async (boundary: WorkerBoundary = "agent") => {

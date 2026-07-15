@@ -114,3 +114,26 @@ Implemented the literary AI-native creative workbench with a responsive three-co
 - Vitest: 439 passed, 45 PostgreSQL-conditional skipped.
 - Playwright Chromium: 8 passed across 375, 768, 1024, and 1440 pixel viewports. One initial Vite startup timing failure was non-reproducible; the isolated retry and complete rerun passed.
 - TypeScript, production build, Drizzle migration check, and Git diff check passed.
+
+## Interactive Command Failure Isolation
+
+- AskUser IDs now identify individual call instances. Repeated questions receive new sequence-prefixed IDs, concurrent identical calls remain distinct, and an unanswered persisted call keeps its ID after Host reconstruction.
+- Worker command delivery acknowledges each command independently. A rejected interactive command is classified and persisted without stopping lease renewal or blocking later commands.
+- Command acknowledgement and failure-record ownership loss propagate as lease failures and abort the Host instead of being downgraded to command errors.
+- Failed commands persist status, attempts, retryability, failure category, and error message. Retryable failures can be reclaimed up to the bounded attempt limit; terminal failures remain durable and unclaimable.
+- Workbench usage projection selects the latest persisted `__store_state__` snapshot and projects its `state.overall` and `state.per_agent` values.
+- Migration `0007_conscious_slapstick.sql` is required for the durable command failure fields and `failed` enum value. Drizzle check passed and a second generate reported no schema changes.
+
+## Interactive Isolation Verification
+
+- Target tests: 48 passed, 18 PostgreSQL-conditional skipped.
+- Full Vitest suite: 444 passed, 46 PostgreSQL-conditional skipped.
+- TypeScript typecheck: passed.
+- Production build: passed.
+- Drizzle check: passed.
+- Drizzle generate: no schema changes.
+- Git diff check: passed.
+
+## Interactive Isolation Concerns
+
+- PostgreSQL-conditional coverage remains skipped without `TEST_DATABASE_URL`, including the command failure persistence and workbench projection integration paths.

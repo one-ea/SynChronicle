@@ -42,9 +42,49 @@ describe("Host", () => {
 
     store.backend.setLease(scope.lease);
     const recovered = await Host.new(config, {}, { agent, store: createMemoryDatabaseStore(scope, store.backend) });
-    await expect(recovered.askUser([{ header: "篇幅", question: "希望多长？", options: [{ label: "长篇", description: "" }] }])).resolves.toEqual({ answers: { "希望多长？": "长篇" }, notes: {} });
     expect(recovered.snapshot()).toMatchObject({ roleModels: { writer: { provider: "other", model: "two" } } });
     await recovered.close();
+  });
+
+  it("uses a new interaction ID for repeated questions and preserves a pending ID after reconstruction", async () => {
+    const scope = { userId: "u2", projectId: "p2", runId: "r2", taskFingerprint: "fp", projectVersion: 1, lease: { taskId: "t2", owner: "w", version: 1 } };
+    const store = createMemoryDatabaseStore(scope); store.backend.setLease(scope.lease);
+    const config = { provider: "mock", model: "one", providers: { mock: { api_key: "x" } }, roles: {} } as const;
+    const questions = [{ header: "篇幅", question: "希望多长？", options: [{ label: "长篇", description: "" }] }];
+    const first = await Host.new(config, {}, { agent: agent(), store });
+    const one = first.askUser(questions); const firstEvent = await first.events()[Symbol.asyncIterator]().next(); const firstId = (firstEvent.value?.payload as { questionId: string }).questionId;
+    await first.answerUser(firstId, { "希望多长？": "长篇" }); await one;
+    void first.askUser(questions); const secondEvent = await first.events()[Symbol.asyncIterator]().next(); const secondId = (secondEvent.value?.payload as { questionId: string }).questionId;
+    expect(secondId).not.toBe(firstId);
+    await first.close();
+    store.backend.setLease(scope.lease);
+    const recovered = await Host.new(config, {}, { agent: agent(), store: createMemoryDatabaseStore(scope, store.backend) });
+    const resumed = recovered.askUser(questions);
+    const recoveredEvent = await recovered.events()[Symbol.asyncIterator]().next();
+    expect((recoveredEvent.value?.payload as { questionId: string }).questionId).toBe(secondId);
+    await recovered.answerUser(secondId, { "希望多长？": "长篇" }); await resumed;
+    await recovered.close();
+  });
+
+  it("assigns distinct call-instance IDs to concurrent identical questions", async () => {
+    const scope = { userId: "u3", projectId: "p3", runId: "r3", taskFingerprint: "fp", projectVersion: 1, lease: { taskId: "t3", owner: "w", version: 1 } };
+    const store = createMemoryDatabaseStore(scope); store.backend.setLease(scope.lease);
+    const config = { provider: "mock", model: "one", providers: { mock: { api_key: "x" } }, roles: {} } as const;
+    const questions = [{ header: "篇幅", question: "希望多长？", options: [{ label: "长篇", description: "" }] }];
+    const value = await Host.new(config, {}, { agent: agent(), store });
+
+    const first = value.askUser(questions);
+    const second = value.askUser(questions);
+    const events = value.events()[Symbol.asyncIterator]();
+    const firstId = ((await events.next()).value?.payload as { questionId: string }).questionId;
+    const secondId = ((await events.next()).value?.payload as { questionId: string }).questionId;
+
+    expect(secondId).not.toBe(firstId);
+    await value.answerUser(firstId, { "希望多长？": "长篇" });
+    await value.answerUser(secondId, { "希望多长？": "短篇" });
+    await expect(first).resolves.toEqual({ answers: { "希望多长？": "长篇" }, notes: {} });
+    await expect(second).resolves.toEqual({ answers: { "希望多长？": "短篇" }, notes: {} });
+    await value.close();
   });
   it("reports agent and durable commit boundaries", async () => {
     const dir = await mkdtemp(join(tmpdir(), "runtime-host-boundaries-"));

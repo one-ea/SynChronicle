@@ -39,6 +39,7 @@ function scheduler(claimed: ClaimedTask | null, control: RunResumeData = { desir
     finishTask: vi.fn().mockResolvedValue(true),
     recordTaskError: vi.fn().mockResolvedValue(true),
     recordTaskControl: vi.fn().mockResolvedValue(true),
+    recordCommandFailure: vi.fn().mockResolvedValue(true),
   };
   return value;
 }
@@ -148,7 +149,38 @@ describe("WorkerRunner", () => {
     expect(fakeHost.answerUser).toHaveBeenCalledWith("event-8", { "希望多长？": "长篇" });
     expect(fakeHost.switchModel).toHaveBeenCalledWith("writer", "openai", "gpt-5");
     expect(fakeHost.steer).not.toHaveBeenCalled();
-    expect(repository.acknowledgeSteerCommands).toHaveBeenCalledWith(claimed.id, "worker-1", 1, commands.map(({ id }) => id));
+    expect(repository.acknowledgeSteerCommands).toHaveBeenCalledWith(claimed.id, "worker-1", 1, ["answer:event-8"]);
+    expect(repository.acknowledgeSteerCommands).toHaveBeenCalledWith(claimed.id, "worker-1", 1, ["model:req-1"]);
+  });
+
+  it("keeps heartbeats running when an interactive command is rejected", async () => {
+    vi.useFakeTimers();
+    try {
+      const claimed = task();
+      const repository = scheduler(claimed, { desiredState: "running", steerCommands: [{ id: "model-bad", instruction: "[ModelSwitch] {\"role\":\"writer\",\"provider\":\"missing\",\"model\":\"x\"}" }] });
+      let finish!: () => void;
+      const execution = new Promise<void>((resolve) => { finish = resolve; });
+      const fakeHost = host({ execute: () => execution }).value;
+      fakeHost.switchModel = vi.fn().mockRejectedValue(new Error("provider missing is not configured"));
+      const running = new WorkerRunner({ scheduler: repository, createHost: async () => fakeHost, workerId: "worker-1", leaseMs: 300 }).runOnce();
+      await vi.advanceTimersByTimeAsync(210);
+      expect(repository.renewLease).toHaveBeenCalledTimes(2);
+      expect(repository.recordCommandFailure).toHaveBeenCalledWith(claimed.id, "worker-1", 1, "model-bad", expect.objectContaining({ category: "invalid_config", retryable: false }));
+      finish(); await running;
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("treats command acknowledgement failure as lease loss", async () => {
+    const claimed = task();
+    const repository = scheduler(claimed, { desiredState: "running", steerCommands: [{ id: "answer-1", instruction: "[AskUser] {\"questionId\":\"question-1\",\"answers\":{\"篇幅\":\"长篇\"}}" }] });
+    vi.mocked(repository.acknowledgeSteerCommands).mockResolvedValue(false);
+    let boundary!: () => Promise<void>;
+    const fakeHost = host({ onBoundary: (handler) => { boundary = handler; }, execute: async () => boundary() }).value;
+
+    await expect(new WorkerRunner({ scheduler: repository, createHost: async () => fakeHost, workerId: "worker-1" }).runOnce()).rejects.toThrow("lease ownership lost while applying command");
+
+    expect(repository.recordCommandFailure).not.toHaveBeenCalled();
+    expect(fakeHost.abort).toHaveBeenCalledWith("lease ownership lost while applying command");
   });
 
   it("delivers each same-boundary steer command exactly once", async () => {
@@ -167,7 +199,8 @@ describe("WorkerRunner", () => {
     expect(prompts).toHaveLength(1);
     expect(prompts[0]?.match(/Direction A/g)).toHaveLength(1);
     expect(prompts[0]?.match(/Direction B/g)).toHaveLength(1);
-    expect(repository.acknowledgeSteerCommands).toHaveBeenCalledWith(claimed.id, "worker-1", 1, ["steer-a", "steer-b"]);
+    expect(repository.acknowledgeSteerCommands).toHaveBeenCalledWith(claimed.id, "worker-1", 1, ["steer-a"]);
+    expect(repository.acknowledgeSteerCommands).toHaveBeenCalledWith(claimed.id, "worker-1", 1, ["steer-b"]);
   });
 
   it("delivers durable steer commands once after marker write and pre-ack crash", async () => {
@@ -193,7 +226,8 @@ describe("WorkerRunner", () => {
     expect(prompts).toHaveLength(1);
     expect(prompts[0]?.match(/Raise the tension/g)).toHaveLength(1);
     expect(prompts[0]?.match(/Shorten the scene/g)).toHaveLength(1);
-    expect(repository.acknowledgeSteerCommands).toHaveBeenCalledWith(secondTask.id, "worker-b", 2, ["steer-crash-a", "steer-crash-b"]);
+    expect(repository.acknowledgeSteerCommands).toHaveBeenCalledWith(secondTask.id, "worker-b", 2, ["steer-crash-a"]);
+    expect(repository.acknowledgeSteerCommands).toHaveBeenCalledWith(secondTask.id, "worker-b", 2, ["steer-crash-b"]);
   });
 
   it("restarts from a safe boundary when the project version changed", async () => {

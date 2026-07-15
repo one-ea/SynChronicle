@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { count, eq, inArray } from "drizzle-orm";
 import { createDatabase, type Database } from "../db/client.js";
 import { migrateDatabase } from "../db/migrate.js";
-import { projects, runCommands, runs, tasks, users } from "../db/schema/index.js";
+import { projects, runCommands, runEvents, runs, tasks, users } from "../db/schema/index.js";
 import type { RequestAuth } from "../web/auth/plugin.js";
 import { buildEligibleTaskQuery, buildReleaseLeaseQuery, normalizeRunResumeData, SchedulerRepository } from "./repository.js";
 import { SchedulerService } from "./service.js";
@@ -143,6 +143,21 @@ postgres("PostgreSQL leased scheduler", () => {
     const stored = await database.select().from(tasks).where(eq(tasks.runId, result!.id));
     expect(stored).toHaveLength(1);
     expect(stored[0]).toMatchObject({ type: "write", status: "queued", payload: { chapter: 1 } });
+    await settleTasks([auth.userId]);
+  });
+
+  it("persists classified command failures and rejects non-retryable commands", async () => {
+    await settleTasks([auth.userId]);
+    const run = await repository.enqueueRun(auth, projectId, { idempotencyKey: randomUUID(), type: "write", payload: { prompt: "x" } });
+    const claimed = await repository.claimNextTask("command-worker", 30_000);
+    expect(claimed?.runId).toBe(run!.id);
+    await repository.startTask(claimed!.id, "command-worker", claimed!.leaseVersion);
+    await repository.command(auth, projectId, run!.id, "steer", { commandId: "bad-model", instruction: "bad" });
+    expect(await repository.claimSteerCommands(claimed!.id, "command-worker", claimed!.leaseVersion)).toEqual([{ id: "bad-model", instruction: "bad" }]);
+    expect(await repository.recordCommandFailure(claimed!.id, "command-worker", claimed!.leaseVersion, "bad-model", { message: "provider missing", category: "invalid_config", retryable: false })).toBe(true);
+    expect(await database.select().from(runCommands).where(eq(runCommands.commandId, "bad-model"))).toEqual([expect.objectContaining({ status: "failed", retryable: 0, failureCategory: "invalid_config", errorMessage: "provider missing", attempts: 1 })]);
+    expect(await database.select().from(runEvents).where(eq(runEvents.runId, run!.id))).toEqual(expect.arrayContaining([expect.objectContaining({ type: "command.error" })]));
+    expect(await repository.claimSteerCommands(claimed!.id, "command-worker", claimed!.leaseVersion)).toEqual([]);
     await settleTasks([auth.userId]);
   });
 

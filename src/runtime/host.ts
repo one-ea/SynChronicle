@@ -36,6 +36,7 @@ export class Host {
   private seenEventIds = new Set<string>();
   private boundaryHandler: ((boundary: HostBoundary) => Promise<void>) | null = null;
   private readonly askWaiters = new Map<string, (response: AskUserResponse) => void>();
+  private askAllocation: Promise<void> = Promise.resolve();
   private readonly roleModels = new Map<string, { provider: string; model: string }>();
   private constructor(private readonly config: Config, private readonly agent: RuntimeAgent, store: StorePort, private readonly models: ModelSet, private readonly persistStreamDelta?: HostDependencies["persistStreamDelta"]) { this.store = store; const commitStaged = store.commitStaged.bind(store); store.commitStaged = async (staging, candidateIds) => { await this.boundary("commit:enter"); try { await commitStaged(staging, candidateIds); } finally { await this.boundary("commit:exit"); } }; this.usage = new UsageTracker((state) => this.store.usage.save(state)); this.agent.setObserver?.({ reflection: (event) => this.observeReflection(event), usage: (agent, usage, model) => this.recordUsage(agent, usage?.model ? usage : normalizeUsage(usage, model)) }); }
 
@@ -45,7 +46,37 @@ export class Host {
   async resume(signal?: AbortSignal): Promise<{ label: string | null; error?: Error }> { const data = buildResumePrompt(await this.store.progress.load(), await this.store.runMeta.load()); this.recoveryLabel = data.label; if (!data.label) return { label: null }; try { await this.run(data.prompt, data.label, signal); return { label: data.label }; } catch (error) { return { label: data.label, error: error instanceof Error ? error : new Error(String(error)) }; } }
   async continue(prompt: string): Promise<void> { if (!prompt.trim()) throw new Error("continue prompt is empty"); await this.run(prompt, "继续创作"); }
   async steer(commandId: string, instruction: string): Promise<void> { const value = instruction.trim(); if (!commandId.trim() || !value) throw new Error("steer command is invalid"); const fallback: RunMeta = { started_at: new Date().toISOString(), provider: this.config.provider, style: this.config.style ?? "", model: this.config.model, planning_tier: "mid", steer_history: [], pending_steer: "", pause_point: null }; await this.store.applySteerCommand(commandId, value, fallback); }
-  async askUser(questions: Parameters<AskUserHandler>[0]): Promise<AskUserResponse> { const questionId = createHash("sha256").update(JSON.stringify(questions)).digest("hex"); const items = await this.store.runtime.loadQueue(); for (const item of items.toReversed()) { const payload = item.payload as { type?: string; questionId?: string; answers?: Record<string, string>; notes?: Record<string, string> } | undefined; if (payload?.type === "ask_user_answer" && payload.questionId === questionId) return { answers: payload.answers ?? {}, notes: payload.notes ?? {} }; } const event = { type: "tool" as const, tool: "ask_user", id: `ask:${questionId}`, message: "等待用户回答", payload: { questionId, questions } }; this.emit(event); return new Promise((resolve) => this.askWaiters.set(questionId, resolve)); }
+  async askUser(questions: Parameters<AskUserHandler>[0]): Promise<AskUserResponse> {
+    let questionId = "";
+    const previous = this.askAllocation;
+    this.askAllocation = (async () => {
+      await previous;
+      const items = await this.store.runtime.loadQueue();
+      const answered = new Set<string>();
+      const pending: Array<{ questionId: string; questions: unknown }> = [];
+      for (const item of items) {
+        const outer = item.payload as { type?: string; questionId?: string; payload?: { questionId?: string; questions?: unknown } } | undefined;
+        if (outer?.type === "ask_user_answer" && outer.questionId) answered.add(outer.questionId);
+        if (outer?.type === "tool" && outer.payload?.questionId) pending.push({ questionId: outer.payload.questionId, questions: outer.payload.questions });
+      }
+      const recovered = pending.toReversed().find((candidate) => !answered.has(candidate.questionId) && !this.askWaiters.has(candidate.questionId) && JSON.stringify(candidate.questions) === JSON.stringify(questions));
+      if (recovered) {
+        questionId = recovered.questionId;
+        const event = { type: "tool" as const, tool: "ask_user", id: `ask:${questionId}`, message: "等待用户回答", payload: { questionId, questions } } as RuntimeEvent;
+        this.eventQueue.push(event);
+        return;
+      }
+      const current = await this.store.runMeta.load() as (RunMeta & { interaction_sequence?: number }) | null;
+      const sequence = (current?.interaction_sequence ?? 0) + 1;
+      questionId = `${sequence}:${createHash("sha256").update(JSON.stringify(questions)).digest("hex").slice(0, 20)}`;
+      const fallback: RunMeta = { started_at: new Date().toISOString(), provider: this.config.provider, style: this.config.style ?? "", model: this.config.model, planning_tier: "mid", steer_history: [], pending_steer: "", pause_point: null };
+      await this.store.runMeta.save({ ...fallback, ...current, interaction_sequence: sequence } as RunMeta);
+      const event = { type: "tool" as const, tool: "ask_user", id: `ask:${questionId}`, message: "等待用户回答", payload: { questionId, interactionSequence: sequence, questions } } as RuntimeEvent;
+      this.emit(event);
+    })();
+    await this.askAllocation;
+    return new Promise((resolve) => this.askWaiters.set(questionId, resolve));
+  }
   async answerUser(questionId: string, answers: Record<string, string>): Promise<void> { const response = { answers, notes: {} }; await this.store.runtime.appendQueue({ seq: 0, time: new Date().toISOString(), kind: "ui_event", priority: "control", category: "ASK_USER.ANSWER", summary: "用户已回答", payload: { type: "ask_user_answer", questionId, ...response } }); this.askWaiters.get(questionId)?.(response); this.askWaiters.delete(questionId); }
   async switchModel(role: string, provider: string, model: string): Promise<void> { await this.models.swap(role, provider, model); this.roleModels.set(role, { provider, model }); const current = await this.store.runMeta.load() as (RunMeta & { role_models?: Record<string, { provider: string; model: string }> }) | null; const fallback: RunMeta = { started_at: new Date().toISOString(), provider: this.config.provider, style: this.config.style ?? "", model: this.config.model, planning_tier: "mid", steer_history: [], pending_steer: "", pause_point: null }; await this.store.runMeta.save({ ...fallback, ...current, role_models: Object.fromEntries(this.roleModels) } as RunMeta); }
   abort(reason: string, level = "info"): void { if (this.state === "closed") return; this.runController?.abort(new Error(reason)); this.agent.abort(reason); this.state = "paused"; this.emit({ ...systemEvent(reason, level), payload: { level } }); }

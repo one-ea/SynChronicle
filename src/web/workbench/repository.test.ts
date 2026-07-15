@@ -27,4 +27,9 @@ describe("workbench projections", () => {
       ],
     });
   });
+
+  it("prefers the latest real usage state per_agent structure", () => {
+    const state = { overall: { input: 30, output: 12, cost_usd: 0.04 }, per_agent: { Writer: { input: 20, output: 7, cost_usd: 0.03 }, Reviewer: { input: 10, output: 5, cost_usd: 0.01 } } };
+    expect(projectUsage([{ snapshotId: "state-2", agent: "__store_state__", credentialSource: "store", provider: "store", model: "aggregate", inputTokens: 30, outputTokens: 12, cost: "0.04", createdAt: new Date(2), state }])).toEqual({ inputTokens: 30, outputTokens: 12, totalTokens: 42, cost: "0.04000000", byAgent: [{ agent: "Reviewer", inputTokens: 10, outputTokens: 5, totalTokens: 15, cost: "0.01000000" }, { agent: "Writer", inputTokens: 20, outputTokens: 7, totalTokens: 27, cost: "0.03000000" }] });
+  });
 });

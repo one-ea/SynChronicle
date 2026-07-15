@@ -255,9 +255,9 @@ export class SchedulerRepository {
     return this.db.transaction(async (transaction) => {
       const [owned] = await transaction.select({ runId: tasks.runId }).from(tasks).where(and(eq(tasks.id, taskId), eq(tasks.leaseOwner, workerId), eq(tasks.leaseVersion, leaseVersion), inArray(tasks.status, activeTaskStatuses), sql`${tasks.leaseExpiresAt} > ${now}`)).limit(1).for("update");
       if (!owned) return [];
-      const commands = await transaction.select().from(runCommands).where(and(eq(runCommands.runId, owned.runId), or(eq(runCommands.status, "pending"), and(eq(runCommands.status, "claimed"), or(sql`${runCommands.claimedBy} is distinct from ${workerId}`, sql`${runCommands.claimedLeaseVersion} is distinct from ${leaseVersion}`))))).orderBy(asc(runCommands.createdAt)).for("update");
+      const commands = await transaction.select().from(runCommands).where(and(eq(runCommands.runId, owned.runId), or(eq(runCommands.status, "pending"), and(eq(runCommands.status, "failed"), eq(runCommands.retryable, 1), sql`${runCommands.attempts} < 3`), and(eq(runCommands.status, "claimed"), or(sql`${runCommands.claimedBy} is distinct from ${workerId}`, sql`${runCommands.claimedLeaseVersion} is distinct from ${leaseVersion}`))))).orderBy(asc(runCommands.createdAt)).for("update");
       if (!commands.length) return [];
-      await transaction.update(runCommands).set({ status: "claimed", claimedBy: workerId, claimedLeaseVersion: leaseVersion, updatedAt: now }).where(inArray(runCommands.id, commands.map(({ id }) => id)));
+      await transaction.update(runCommands).set({ status: "claimed", claimedBy: workerId, claimedLeaseVersion: leaseVersion, attempts: sql`${runCommands.attempts} + 1`, updatedAt: now }).where(inArray(runCommands.id, commands.map(({ id }) => id)));
       return commands.map(({ commandId: id, instruction }) => ({ id, instruction }));
     });
   }
@@ -275,6 +275,8 @@ export class SchedulerRepository {
       return true;
     });
   }
+
+  async recordCommandFailure(taskId: string, workerId: string, leaseVersion: number, commandId: string, error: { message: string; category: string; retryable: boolean }): Promise<boolean> { const now = new Date(); return this.db.transaction(async (transaction) => { const [owned] = await transaction.select({ runId: tasks.runId, userId: tasks.userId, projectId: tasks.projectId }).from(tasks).where(and(eq(tasks.id, taskId), eq(tasks.leaseOwner, workerId), eq(tasks.leaseVersion, leaseVersion), inArray(tasks.status, activeTaskStatuses), sql`${tasks.leaseExpiresAt} > ${now}`)).limit(1); if (!owned) return false; const [failed] = await transaction.update(runCommands).set({ status: "failed", retryable: error.retryable ? 1 : 0, failureCategory: error.category, errorMessage: error.message, claimedBy: null, claimedLeaseVersion: null, updatedAt: now }).where(and(eq(runCommands.runId, owned.runId), eq(runCommands.commandId, commandId), eq(runCommands.status, "claimed"))).returning(); if (!failed) return false; await appendRunEventInTransaction(transaction as unknown as Database, owned, { stableId: `command-error:${commandId}:${failed.attempts}`, type: "command.error", payload: { commandId, category: error.category, retryable: error.retryable, message: error.message } }); return true; }); }
 
   async finishTask(taskId: string, workerId: string, status: ReleaseLeaseOutcome["status"], leaseVersion?: number): Promise<boolean> {
     const now = new Date();
