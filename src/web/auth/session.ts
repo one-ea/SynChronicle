@@ -115,7 +115,15 @@ export function buildCurrentCredentialsQuery(
     .limit(1);
 }
 
-export function createAuthRepository(db: Database): AuthRepository {
+export interface AuthRepositoryTransactionHooks {
+  afterSessionCredentialsLocked?(): void | Promise<void>;
+  afterPasswordSessionsRevoked?(): void | Promise<void>;
+}
+
+export function createAuthRepository(
+  db: Database,
+  hooks: AuthRepositoryTransactionHooks = {},
+): AuthRepository {
   const userSelection = {
     id: users.id,
     username: users.username,
@@ -138,6 +146,7 @@ export function createAuthRepository(db: Database): AuthRepository {
       return db.transaction(async (transaction) => {
         const [current] = await buildCurrentCredentialsQuery(transaction, input);
         if (!current) return undefined;
+        await hooks.afterSessionCredentialsLocked?.();
         const [session] = await transaction
           .insert(sessions)
           .values({
@@ -183,6 +192,7 @@ export function createAuthRepository(db: Database): AuthRepository {
           .update(sessions)
           .set({ revokedAt })
           .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)));
+        await hooks.afterPasswordSessionsRevoked?.();
         return true;
       });
     },
