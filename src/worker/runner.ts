@@ -13,7 +13,7 @@ export interface WorkerHost {
   resume(signal?: AbortSignal): Promise<{ label: string | null; error?: Error }>;
   steer(commandId: string, instruction: string): Promise<void>;
   answerUser?(questionId: string, answers: Record<string, string>): Promise<void>;
-  switchModel?(role: string, provider: string, model: string): Promise<void>;
+  switchModel?(role: string, provider: string, model: string, options?: { credentialId?: string; parameters?: Record<string, unknown> }): Promise<void>;
   abort(reason: string): void;
   close(): Promise<void>;
   events?(): AsyncIterable<unknown>;
@@ -110,7 +110,7 @@ export class WorkerRunner {
     const deliverCommands = async () => {
       const commands = await scheduler.claimSteerCommands(task.id, workerId, task.leaseVersion);
       for (const command of commands) {
-        try { const interactive = parseInteractiveCommand(command.instruction); if (interactive?.kind === "answer" && host.answerUser) await host.answerUser(interactive.questionId, interactive.answers); else if (interactive?.kind === "model" && host.switchModel) await host.switchModel(interactive.role, interactive.provider, interactive.model); else await host.steer(command.id, command.instruction); if (!await scheduler.acknowledgeSteerCommands(task.id, workerId, task.leaseVersion, [command.id])) throw new TaskExecutionError("lease ownership lost while applying command", true, { category: "lease_loss" }); }
+        try { const interactive = parseInteractiveCommand(command.instruction); if (interactive?.kind === "answer" && host.answerUser) await host.answerUser(interactive.questionId, interactive.answers); else if (interactive?.kind === "model" && host.switchModel) await host.switchModel(interactive.role, interactive.provider, interactive.model, { credentialId: interactive.credentialId, parameters: interactive.parameters }); else await host.steer(command.id, command.instruction); if (!await scheduler.acknowledgeSteerCommands(task.id, workerId, task.leaseVersion, [command.id])) throw new TaskExecutionError("lease ownership lost while applying command", true, { category: "lease_loss" }); }
         catch (error) {
           const failure = taskError(error, 1, 3);
           if (failure.category === "lease_loss") { leaseLost = failure; host.abort(failure.message); throw failure; }
@@ -204,7 +204,7 @@ export class WorkerRunner {
 
 function parseInteractiveCommand(instruction: string):
   | { kind: "answer"; questionId: string; answers: Record<string, string> }
-  | { kind: "model"; role: string; provider: string; model: string }
+  | { kind: "model"; role: string; provider: string; model: string; credentialId?: string; parameters?: Record<string, unknown> }
   | null {
   const answerPrefix = "[AskUser] ";
   const modelPrefix = "[ModelSwitch] ";
@@ -217,7 +217,7 @@ function parseInteractiveCommand(instruction: string):
     }
     if (instruction.startsWith(modelPrefix)) {
       const value = JSON.parse(instruction.slice(modelPrefix.length)) as Record<string, unknown>;
-      if (typeof value.role === "string" && typeof value.provider === "string" && typeof value.model === "string") return { kind: "model", role: value.role, provider: value.provider, model: value.model };
+      if (typeof value.role === "string" && typeof value.provider === "string" && typeof value.model === "string") return { kind: "model", role: value.role, provider: value.provider, model: value.model, ...(typeof value.credentialId === "string" ? { credentialId: value.credentialId } : {}), ...(value.parameters && typeof value.parameters === "object" && !Array.isArray(value.parameters) ? { parameters: value.parameters as Record<string, unknown> } : {}) };
     }
   } catch {
     return null;

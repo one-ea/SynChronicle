@@ -23,6 +23,7 @@ export interface AgentOptions {
   maxSteps?: number;
   onUsage?: (name: string, usage: unknown, model?: { provider: string; model: string }) => void;
   executor?: AgentExecutor;
+  generationOptions?: () => { temperature?: number; maxTokens?: number };
 }
 
 export class Agent {
@@ -34,11 +35,12 @@ export class Agent {
   private readonly maxSteps: number;
   private readonly onUsage?: AgentOptions["onUsage"];
   private readonly executor?: AgentExecutor;
+  private readonly generationOptions?: AgentOptions["generationOptions"];
   private lastReflection: { executionId?: string; status: "running" | "completed" | "failed"; qualityRisk?: unknown; finalReview?: unknown; rounds?: number } | null = null;
   private history: ModelMessage[] = [];
   private executionQueue: Promise<void> = Promise.resolve();
 
-  constructor({ name, model, system, tools = {}, context = new ContextManager({ window: 200000 }), maxSteps = 20, onUsage, executor }: AgentOptions) {
+  constructor({ name, model, system, tools = {}, context = new ContextManager({ window: 200000 }), maxSteps = 20, onUsage, executor, generationOptions }: AgentOptions) {
     this.name = name;
     this.model = model;
     this.system = system;
@@ -46,6 +48,7 @@ export class Agent {
     this.maxSteps = maxSteps;
     this.onUsage = onUsage;
     this.executor = executor;
+    this.generationOptions = generationOptions;
     this.tools = Object.fromEntries(Object.entries(tools).map(([toolName, definition]) => [toolName, tool({
       description: definition.description,
       inputSchema: definition.inputSchema,
@@ -105,7 +108,8 @@ export class Agent {
   private async generateDirect(prompt: string, signal?: AbortSignal) {
     const messages = await this.prepare(prompt);
     signal?.throwIfAborted();
-    const result = await generateText({ model: this.model, system: this.system, messages, tools: this.tools, stopWhen: stepCountIs(this.maxSteps), ...(signal ? { abortSignal: signal } : {}) });
+    const options = this.generationOptions?.() ?? {};
+    const result = await generateText({ model: this.model, system: this.system, messages, tools: this.tools, stopWhen: stepCountIs(this.maxSteps), ...(options.temperature === undefined ? {} : { temperature: options.temperature }), ...(options.maxTokens === undefined ? {} : { maxOutputTokens: options.maxTokens }), ...(signal ? { abortSignal: signal } : {}) });
     signal?.throwIfAborted();
     this.history.push({ role: "assistant", content: result.text });
     this.onUsage?.(this.name, result.usage, usageModelIdentity(result.usage) ?? modelIdentity(this.model));
@@ -122,7 +126,7 @@ export class Agent {
       return { textStream, completed };
     }
     const prepared = this.prepare(prompt);
-    const resultPromise = prepared.then((messages) => { signal?.throwIfAborted(); return streamText({ model: this.model, system: this.system, messages, tools: this.tools, stopWhen: stepCountIs(this.maxSteps), ...(signal ? { abortSignal: signal } : {}) }); });
+    const resultPromise = prepared.then((messages) => { signal?.throwIfAborted(); const options = this.generationOptions?.() ?? {}; return streamText({ model: this.model, system: this.system, messages, tools: this.tools, stopWhen: stepCountIs(this.maxSteps), ...(options.temperature === undefined ? {} : { temperature: options.temperature }), ...(options.maxTokens === undefined ? {} : { maxOutputTokens: options.maxTokens }), ...(signal ? { abortSignal: signal } : {}) }); });
     const textStream = (async function* () {
       const result = await resultPromise;
       yield* result.textStream;

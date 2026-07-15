@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,8 +25,13 @@ import { WorkbenchRepository } from "./workbench/repository.js";
 import { workbenchRoutes } from "./workbench/routes.js";
 import { ModelConfigurationRepository } from "./providers/repository.js";
 import { modelConfigurationRoutes } from "./providers/routes.js";
+import { CredentialService } from "../credentials/service.js";
+import { DatabaseCredentialRepository } from "../credentials/database.js";
+import { masterKeyRegistryFromEnvironment, type MasterKeyRegistry } from "../credentials/envelope.js";
+import { createLoginRateLimiter } from "./auth/plugin.js";
+import { redactSecrets } from "../credentials/redactor.js";
 
-type WebServerCommonOptions = Partial<Pick<WebConfig, "publicUrl" | "trustProxy">> & { staticRoot?: string | null };
+type WebServerCommonOptions = Partial<Pick<WebConfig, "publicUrl" | "trustProxy" | "credentialMasterKeys" | "credentialMasterKeyVersion">> & { staticRoot?: string | null; credentialRegistry?: MasterKeyRegistry };
 
 const requestIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -46,6 +51,11 @@ export async function buildWebServer(options: WebServerOptions): Promise<Fastify
   });
   app.addHook("onSend", async (request, reply) => {
     reply.header("x-request-id", request.id);
+  });
+  app.setErrorHandler((error, request, reply) => {
+    request.log.error(redactSecrets(error), "request failed");
+    const statusCode = error && typeof error === "object" && "statusCode" in error && typeof error.statusCode === "number" ? error.statusCode : 500;
+    void reply.code(statusCode < 500 ? statusCode : 500).send({ error: statusCode < 500 ? "Invalid request" : "Internal Server Error", requestId: request.id });
   });
   const database = options.database ?? createDatabase(options.databaseUrl);
   const ownsDatabase = options.database ? options.databaseOwnership === "owned" : true;
@@ -86,7 +96,11 @@ export async function buildWebServer(options: WebServerOptions): Promise<Fastify
     prefix: "/api/projects",
     repository: new WorkbenchRepository(database),
   });
-  await app.register(modelConfigurationRoutes, { prefix: "/api/providers", repository: new ModelConfigurationRepository(database) });
+  const credentialRegistry = options.credentialRegistry ?? (options.credentialMasterKeys
+    ? masterKeyRegistryFromEnvironment(options.credentialMasterKeys, options.credentialMasterKeyVersion)
+    : { currentVersion: "test", keys: new Map([["test", randomBytes(32)]]) });
+  const credentialLimiter = createLoginRateLimiter({ max: 20, windowMs: 60_000 });
+  await app.register(modelConfigurationRoutes, { prefix: "/api/providers", repository: new ModelConfigurationRepository(database), credentials: new CredentialService(new DatabaseCredentialRepository(database), credentialRegistry), consumeCredentialMutation: (userId) => credentialLimiter.consume(userId) });
   app.get("/api/health", async () => ({ status: "ok" as const }));
   const clientRoot = options.staticRoot === undefined
     ? resolve(dirname(fileURLToPath(import.meta.url)), "client")

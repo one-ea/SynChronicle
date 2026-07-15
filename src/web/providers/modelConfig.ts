@@ -21,7 +21,7 @@ export const ModelSetInputSchema = z.object({
 export type ModelSetInput = z.infer<typeof ModelSetInputSchema>;
 export type ModelConfigurationSnapshot = ModelSetInput & { modelSetId: string; version: number };
 export interface ModelCatalog {
-  credentials: Array<{ id: string; provider: string }>;
+  credentials: Array<{ id: string; provider: string; label?: string }>;
   platformModels: Array<{ provider: string; model: string }>;
 }
 
@@ -31,6 +31,8 @@ export function validateModelSetInput(input: unknown, catalog: ModelCatalog): Mo
     if (selection.credentialId) {
       const credential = catalog.credentials.find(({ id }) => id === selection.credentialId);
       if (!credential || credential.provider !== selection.provider) throw new Error("Invalid credential reference");
+      const providerModels = catalog.platformModels.filter(({ provider }) => provider === selection.provider);
+      if (providerModels.length && !providerModels.some(({ model }) => model === selection.model)) throw new Error("Invalid provider model");
       continue;
     }
     const knownProvider = catalog.platformModels.some(({ provider }) => provider === selection.provider);

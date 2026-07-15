@@ -4,7 +4,7 @@ import { users } from "./auth.js";
 import { projects } from "./projects.js";
 import { runs } from "./runtime.js";
 
-export const credentialStatus = pgEnum("credential_status", ["active", "revoked", "invalid"]);
+export const credentialStatus = pgEnum("credential_status", ["active", "disabled", "revoked", "invalid"]);
 export const modelStatus = pgEnum("model_status", ["active", "disabled"]);
 
 export const userModelSets = pgTable(
@@ -22,6 +22,7 @@ export const userModelSets = pgTable(
   (table) => [
     uniqueIndex("user_model_sets_user_set_version_uq").on(table.userId, table.modelSetId, table.version),
     index("user_model_sets_user_active_idx").on(table.userId, table.active),
+    uniqueIndex("user_model_sets_user_active_uq").on(table.userId).where(sql`${table.active} = 1`),
   ],
 );
 
@@ -31,16 +32,17 @@ export const providerCredentials = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
     provider: text("provider").notNull(),
+    label: text("label").notNull().default("Provider credential"),
     ciphertext: text("ciphertext").notNull(),
     encryptedDataKey: text("encrypted_data_key").notNull(),
     algorithmVersion: integer("algorithm_version").notNull(),
-    keyVersion: integer("key_version").notNull(),
+    keyVersion: text("key_version").notNull(),
     status: credentialStatus("status").notNull().default("active"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    uniqueIndex("provider_credentials_user_provider_uq").on(table.userId, table.provider),
+    index("provider_credentials_user_provider_idx").on(table.userId, table.provider),
     index("provider_credentials_user_status_idx").on(table.userId, table.status),
   ],
 );

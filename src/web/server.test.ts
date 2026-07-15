@@ -49,7 +49,8 @@ describe("buildWebServer", () => {
       databaseUrl: "postgres://test:test@localhost/test",
       publicUrl: "https://app.example.test",
       sessionSecret: "s".repeat(32),
-      credentialMasterKey: "k".repeat(32),
+      credentialMasterKeys: `v1:${Buffer.alloc(32, "k").toString("base64")}`,
+      credentialMasterKeyVersion: "v1",
     });
     expect(config.trustProxy).toBe(false);
     expect(WebConfigSchema.parse({ ...config, trustProxy: "true" }).trustProxy).toBe(true);

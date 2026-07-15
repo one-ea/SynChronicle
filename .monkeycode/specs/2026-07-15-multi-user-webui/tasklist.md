@@ -723,7 +723,7 @@ git commit -m "feat(web): add realtime creative workbench"
 - Produces: `encryptCredential(masterKey, plaintext)`, `decryptCredential(masterKey, envelope)`, `CredentialService.resolve(userId, credentialId)`。
 - Consumes existing Provider creation and failover logic without changing actual-model attribution。
 
-- [ ] **Step 1: Write encryption and redaction tests**
+- [x] **Step 1: Write encryption and redaction tests**
 
 ```ts
 it("stores ciphertext and never serializes plaintext", async () => {
@@ -735,13 +735,13 @@ it("stores ciphertext and never serializes plaintext", async () => {
 });
 ```
 
-- [ ] **Step 2: Run credential tests and verify failure**
+- [x] **Step 2: Run credential tests and verify failure**
 
 Run: `pnpm vitest run src/credentials src/web/providers`
 
 Expected: FAIL because encryption and credential routes are missing.
 
-- [ ] **Step 3: Implement AES-256-GCM envelope format**
+- [x] **Step 3: Implement AES-256-GCM envelope format**
 
 ```ts
 export interface CredentialEnvelope {
@@ -759,17 +759,17 @@ export interface CredentialEnvelope {
 
 Generate a random data key per credential, encrypt the payload with AES-256-GCM, then encrypt the data key with the versioned master key. Bind `userId`, `credentialId`, and Provider as additional authenticated data.
 
-- [ ] **Step 4: Add Provider routes and Worker resolution**
+- [x] **Step 4: Add Provider routes and Worker resolution**
 
 Routes support create, list metadata, replace, disable, and revoke. Worker resolves credentials immediately before Provider construction and releases references after the call. Logs and errors pass through a recursive secret redactor.
 
-- [ ] **Step 5: Run credential, Provider, and security regression tests**
+- [x] **Step 5: Run credential, Provider, and security regression tests**
 
 Run: `pnpm vitest run src/credentials src/web/providers src/providers && pnpm typecheck`
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/credentials src/web/providers src/providers/modelset.ts src/web/server.ts

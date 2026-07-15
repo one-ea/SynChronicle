@@ -1,0 +1,1 @@
+ALTER TABLE "provider_credentials" ALTER COLUMN "key_version" SET DATA TYPE text;

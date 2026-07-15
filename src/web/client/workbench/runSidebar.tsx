@@ -37,6 +37,7 @@ export function RunSidebar(props: RunSidebarProps) {
   const { state, connection, status, collapsed, onToggle } = props;
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<{ message: string; retry: () => Promise<void> } | null>(null);
+  const [selectedProvider, setSelectedProvider] = useState("");
   const configuredSet = props.modelConfiguration?.modelSets.find(({ id }) => id === props.modelConfiguration?.activeModelSetId) ?? props.modelConfiguration?.modelSets[0];
   async function run(action: () => Promise<void>) { setPending(true); setFailure(null); try { await action(); } catch (error) { const requestId = error instanceof ApiError && error.requestId ? ` 请求 ID：${error.requestId}` : ""; setFailure({ message: `${error instanceof ApiError && error.kind === "request" ? "网络或服务请求失败" : "操作失败"}。${requestId}`, retry: action }); } finally { setPending(false); } }
   async function answer(event: FormEvent<HTMLFormElement>) {
@@ -51,7 +52,8 @@ export function RunSidebar(props: RunSidebarProps) {
     const data = new FormData(event.currentTarget);
     const role = String(data.get("role"));
     const selection = configuredSet?.agents[role];
-    await run(() => props.onSwitchModel(role, String(data.get("provider")), String(data.get("model")), selection?.credentialId, selection?.parameters));
+    const credentialId = String(data.get("credentialId") ?? "") || selection?.credentialId;
+    await run(() => props.onSwitchModel(role, String(data.get("provider")), String(data.get("model")), credentialId, selection?.parameters));
   }
   async function start(event: FormEvent<HTMLFormElement>) { event.preventDefault(); const data = new FormData(event.currentTarget); await run(() => props.onStart(String(data.get("modelSetId")))); }
   const connectionRole = connection === "backpressure" || connection === "error" ? "alert" : "status";
@@ -75,7 +77,7 @@ export function RunSidebar(props: RunSidebarProps) {
       {props.commandFeedback && <p className="message" role="status">{props.commandFeedback}</p>}
       {failure && <p className="message message-error" role="alert">{failure.message}<button type="button" onClick={() => void run(failure.retry)}>重试</button></p>}
       {props.pendingQuestion && <form className="sidebar-form" onSubmit={(event) => void answer(event)}><h3>需要你的回答</h3>{props.pendingQuestion.questions.map((question) => <label key={question.question}>{question.question}<select name={question.question} required defaultValue=""><option value="" disabled>请选择</option>{question.options.map((option) => <option key={option}>{option}</option>)}</select></label>)}<button type="submit" disabled={pending}>提交回答</button></form>}
-      <form className="sidebar-form" onSubmit={(event) => void model(event)}><h3>模型切换</h3>{configuredSet && <p className="muted-copy">{configuredSet.name} · v{configuredSet.version}</p>}<label>Agent<select name="role" required defaultValue=""><option value="" disabled>请选择</option>{Object.keys(configuredSet?.agents ?? {}).map((role) => <option key={role}>{role}</option>)}</select></label><label>Provider<select name="provider" required defaultValue=""><option value="" disabled>请选择</option>{props.modelConfiguration?.providers.map(({ provider }) => <option key={provider}>{provider}</option>)}</select></label><label>模型<select name="model" required defaultValue=""><option value="" disabled>请选择</option>{props.modelConfiguration?.providers.flatMap(({ provider, models }) => models.map((model) => <option key={`${provider}:${model}`}>{model}</option>))}</select></label><button type="submit" disabled={props.controlsDisabled || pending}>切换模型</button></form>
+      <form className="sidebar-form" onSubmit={(event) => void model(event)}><h3>模型切换</h3>{configuredSet && <p className="muted-copy">{configuredSet.name} · v{configuredSet.version}</p>}<label>Agent<select name="role" required defaultValue=""><option value="" disabled>请选择</option>{Object.keys(configuredSet?.agents ?? {}).map((role) => <option key={role}>{role}</option>)}</select></label><label>Provider<select name="provider" required value={selectedProvider} onChange={(event) => setSelectedProvider(event.currentTarget.value)}><option value="" disabled>请选择</option>{props.modelConfiguration?.providers.map(({ provider }) => <option key={provider}>{provider}</option>)}</select></label><label>模型<select name="model" required defaultValue=""><option value="" disabled>请选择</option>{props.modelConfiguration?.providers.find(({ provider }) => provider === selectedProvider)?.models.map((model) => <option key={model}>{model}</option>)}</select></label><label>凭证<select name="credentialId" defaultValue=""><option value="">平台凭证</option>{props.modelConfiguration?.providers.find(({ provider }) => provider === selectedProvider)?.credentials.map((credential) => <option key={credential.id} value={credential.id}>{credential.label}</option>)}</select></label><button type="submit" disabled={props.controlsDisabled || pending}>切换模型</button></form>
       <section className="diagnostics-card"><button type="button" disabled={props.controlsDisabled || pending} onClick={() => void run(props.onDiagnose)}>运行诊断</button>{props.diagnostics && <p role="status">{props.diagnostics}</p>}</section>
     </div>}
   </aside>;

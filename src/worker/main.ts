@@ -9,6 +9,10 @@ import { SchedulerRepository } from "../scheduler/repository.js";
 import { DatabaseStore } from "../store/database/index.js";
 import { WorkerRunner, taskFingerprint } from "./runner.js";
 import { applyRunConfiguration } from "./configuration.js";
+import { CredentialService } from "../credentials/service.js";
+import { DatabaseCredentialRepository } from "../credentials/database.js";
+import { masterKeyRegistryFromEnvironment } from "../credentials/envelope.js";
+import { createProvider, credentialScopedModel } from "../providers/index.js";
 
 export async function startWorker(): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL?.trim();
@@ -17,6 +21,7 @@ export async function startWorker(): Promise<void> {
   const leaseMs = positiveInteger(process.env.WORKER_LEASE_MS, 30_000, "WORKER_LEASE_MS");
   const idleMs = positiveInteger(process.env.WORKER_IDLE_MS, 1_000, "WORKER_IDLE_MS");
   const database = createDatabase(databaseUrl);
+  const credentialService = new CredentialService(new DatabaseCredentialRepository(database), masterKeyRegistryFromEnvironment(process.env.PROJECT_CREDENTIAL_MASTER_KEYS, process.env.PROJECT_CREDENTIAL_MASTER_KEY_VERSION));
   const scheduler = new SchedulerRepository(database);
   const events = new DatabaseEventRepository(database);
   const eventBroker = new PostgresEventBroker(database);
@@ -31,24 +36,35 @@ export async function startWorker(): Promise<void> {
       appendEvent: (scope, event) => events.appendEvent(scope, event),
       publish: (wakeup) => eventBroker.publish(wakeup),
     },
-    createHost: async (task) => Host.new(applyRunConfiguration(config, task.payload), bundle, {
-      persistStreamDelta: async (chunkSequence, text) => {
-        const event = await events.appendEvent({ userId: task.userId, projectId: task.projectId, runId: task.runId }, {
-          stableId: `stream:${task.runId}:${task.id}:${task.type}:${chunkSequence}`,
-          type: "stream.delta",
-          payload: { taskId: task.id, agent: task.type, chunkSequence, text },
-        });
-        return { sequence: chunkSequence, text, eventSequence: event.sequence };
-      },
-      store: new DatabaseStore(database, {
-        userId: task.userId,
-        projectId: task.projectId,
-        runId: task.runId,
-        taskFingerprint: taskFingerprint(task),
-        projectVersion: task.projectVersion,
-        lease: { taskId: task.id, owner: workerId, version: task.leaseVersion },
-      }),
-    }),
+    createHost: async (task) => {
+      const runConfig = applyRunConfiguration(config, task.payload);
+      return Host.new(runConfig, bundle, {
+        modelFactory: (provider, model, selection) => selection?.credentialId
+          ? credentialScopedModel(provider, model, selection.credentialId, runConfig.providers?.[provider] ?? {}, async (credentialId, expectedProvider) => {
+            const secret = await credentialService.resolve(task.userId, credentialId);
+            if (!secret || secret.provider !== expectedProvider) throw new Error("credential is unavailable for this provider");
+            const lease = { apiKey: secret.apiKey, baseUrl: secret.baseUrl, release() { lease.apiKey = ""; lease.baseUrl = undefined; secret.apiKey = ""; secret.baseUrl = undefined; } };
+            return lease;
+          })
+          : createProvider(provider, runConfig.providers?.[provider] ?? {}, model),
+        persistStreamDelta: async (chunkSequence, text) => {
+          const event = await events.appendEvent({ userId: task.userId, projectId: task.projectId, runId: task.runId }, {
+            stableId: `stream:${task.runId}:${task.id}:${task.type}:${chunkSequence}`,
+            type: "stream.delta",
+            payload: { taskId: task.id, agent: task.type, chunkSequence, text },
+          });
+          return { sequence: chunkSequence, text, eventSequence: event.sequence };
+        },
+        store: new DatabaseStore(database, {
+          userId: task.userId,
+          projectId: task.projectId,
+          runId: task.runId,
+          taskFingerprint: taskFingerprint(task),
+          projectVersion: task.projectVersion,
+          lease: { taskId: task.id, owner: workerId, version: task.leaseVersion },
+        }),
+      });
+    },
   });
   const controller = new AbortController();
   const shutdown = () => controller.abort(new Error("worker shutdown"));

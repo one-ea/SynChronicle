@@ -23,6 +23,9 @@ export const RoleConfigSchema = z.object({
   model: z.string(),
   fallbacks: z.array(ModelRefSchema).optional(),
   reasoning_effort: z.string().optional(),
+  credential_id: z.string().optional(),
+  temperature: z.number().min(0).max(2).optional(),
+  max_tokens: z.number().int().positive().optional(),
 });
 
 export const BudgetConfigSchema = z.object({

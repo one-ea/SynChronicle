@@ -121,7 +121,9 @@ export class SchedulerRepository {
   async validateModelSelection(auth: RequestAuth, selection: { provider: string; model: string; credentialId?: string }): Promise<boolean> {
     if (selection.credentialId) {
       const [credential] = await this.db.select({ id: providerCredentials.id }).from(providerCredentials).where(and(eq(providerCredentials.id, selection.credentialId), eq(providerCredentials.userId, auth.userId), eq(providerCredentials.provider, selection.provider), eq(providerCredentials.status, "active"))).limit(1);
-      return Boolean(credential);
+      if (!credential) return false;
+      const configured = await this.db.select({ model: platformModels.model }).from(platformModels).where(and(eq(platformModels.provider, selection.provider), eq(platformModels.status, "active")));
+      return configured.length === 0 || configured.some(({ model }) => model === selection.model);
     }
     const [model] = await this.db.select({ id: platformModels.id }).from(platformModels).where(and(eq(platformModels.provider, selection.provider), eq(platformModels.model, selection.model), eq(platformModels.status, "active"))).limit(1);
     return Boolean(model);

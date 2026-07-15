@@ -102,6 +102,7 @@ export function buildCoordinator(
     return new ContextManager({ window: resolveContextWindow(cfg, selection.model).window });
   };
   const usage = recordUsage ? { onUsage: recordUsage } : {};
+  const generation = (role: string) => ({ generationOptions: () => models.currentParameters(role) });
   const makeExecutor = (name: string, role: AgentRole): AgentExecutor | undefined => {
     if (!reflection.enabled) return undefined;
     return {
@@ -157,14 +158,14 @@ export function buildCoordinator(
     };
   };
   const coordinatorCtxMgr = makeContext("coordinator");
-  const coordinator = createCoordinator(models.forRoleWithFailover("coordinator"), prompt(bundle, "coordinator"), registry, { context: coordinatorCtxMgr, ...usage });
+  const coordinator = createCoordinator(models.forRoleWithFailover("coordinator"), prompt(bundle, "coordinator"), registry, { context: coordinatorCtxMgr, ...generation("coordinator"), ...usage });
   const architectModel = models.forRoleWithFailover("architect");
-  const architectShort = createArchitect("architect_short", architectModel, prompt(bundle, "architect-short"), registry, { context: makeContext("architect_short"), executor: makeExecutor("architect_short", "architect"), ...usage });
-  const architectLong = createArchitect("architect_long", architectModel, prompt(bundle, "architect-long"), registry, { context: makeContext("architect_long"), executor: makeExecutor("architect_long", "architect"), ...usage });
+  const architectShort = createArchitect("architect_short", architectModel, prompt(bundle, "architect-short"), registry, { context: makeContext("architect_short"), executor: makeExecutor("architect_short", "architect"), ...generation("architect"), ...usage });
+  const architectLong = createArchitect("architect_long", architectModel, prompt(bundle, "architect-long"), registry, { context: makeContext("architect_long"), executor: makeExecutor("architect_long", "architect"), ...generation("architect"), ...usage });
   const style = cfg.style ? bundle.styles?.[cfg.style] : undefined;
   const writerSystem = [prompt(bundle, "writer"), style].filter(Boolean).join("\n\n");
-  const writer = createWriter(models.forRoleWithFailover("writer"), writerSystem, registry, { context: makeContext("writer"), maxSteps: 30, executor: makeExecutor("writer", "writer"), ...usage });
-  const editor = createEditor(models.forRoleWithFailover("editor"), prompt(bundle, "editor"), registry, { context: makeContext("editor"), executor: makeExecutor("editor", "editor"), ...usage });
+  const writer = createWriter(models.forRoleWithFailover("writer"), writerSystem, registry, { context: makeContext("writer"), maxSteps: 30, executor: makeExecutor("writer", "writer"), ...generation("writer"), ...usage });
+  const editor = createEditor(models.forRoleWithFailover("editor"), prompt(bundle, "editor"), registry, { context: makeContext("editor"), executor: makeExecutor("editor", "editor"), ...generation("editor"), ...usage });
   const agents = { coordinator, architect_short: architectShort, architect_long: architectLong, writer, editor };
   return {
     coordinator,

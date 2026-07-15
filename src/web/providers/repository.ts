@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import type { Database } from "../../db/client.js";
 import { platformModels, providerCredentials, userModelSets } from "../../db/schema/index.js";
 import type { RequestAuth } from "../auth/plugin.js";
@@ -9,7 +9,7 @@ export class ModelConfigurationRepository {
 
   async catalog(auth: RequestAuth): Promise<ModelCatalog> {
     const [credentials, models] = await Promise.all([
-      this.db.select({ id: providerCredentials.id, provider: providerCredentials.provider }).from(providerCredentials).where(and(eq(providerCredentials.userId, auth.userId), eq(providerCredentials.status, "active"))),
+      this.db.select({ id: providerCredentials.id, provider: providerCredentials.provider, label: providerCredentials.label }).from(providerCredentials).where(and(eq(providerCredentials.userId, auth.userId), eq(providerCredentials.status, "active"))),
       this.db.select({ provider: platformModels.provider, model: platformModels.model }).from(platformModels).where(eq(platformModels.status, "active")),
     ]);
     return { credentials, platformModels: models };
@@ -38,6 +38,7 @@ export class ModelConfigurationRepository {
 
   async activate(auth: RequestAuth, modelSetId: string) {
     return this.db.transaction(async (transaction) => {
+      await transaction.execute(sql`select pg_advisory_xact_lock(hashtext(${auth.userId}))`);
       const rows = await transaction.select({ id: userModelSets.id }).from(userModelSets).where(and(eq(userModelSets.userId, auth.userId), eq(userModelSets.modelSetId, modelSetId))).orderBy(desc(userModelSets.version)).limit(1).for("update");
       if (!rows[0]) return false;
       await transaction.update(userModelSets).set({ active: 0 }).where(eq(userModelSets.userId, auth.userId));
@@ -58,7 +59,7 @@ export class ModelConfigurationRepository {
     }
     for (const credential of catalog.credentials) {
       const entry = providers.get(credential.provider) ?? { provider: credential.provider, models: [], credentials: [] };
-      entry.credentials.push({ id: credential.id, label: `${credential.provider} credential` });
+      entry.credentials.push({ id: credential.id, label: credential.label ?? `${credential.provider} credential` });
       providers.set(credential.provider, entry);
     }
     return { activeModelSetId: sets.find(({ active }) => active === 1)?.id, modelSets: [...latest.values()], providers: [...providers.values()] };

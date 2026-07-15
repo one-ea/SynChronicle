@@ -4,12 +4,14 @@ type LanguageModelInstance = Exclude<LanguageModel, string>;
 import { createProvider } from "./adapter.js";
 import { failoverModel, type FailoverReporter, type ModelTarget } from "./failover.js";
 
-export type ModelFactory = (provider: string, model: string) => LanguageModelInstance;
+export interface ModelSelectionOptions { credentialId?: string; temperature?: number; maxTokens?: number }
+export type ModelFactory = (provider: string, model: string, options?: ModelSelectionOptions) => LanguageModelInstance;
 
 export class ModelSet {
   private defaultTarget: ModelTarget;
   private readonly roles = new Map<string, ModelTarget>();
   private readonly fallbacks = new Map<string, ModelTarget[]>();
+  private readonly parameters = new Map<string, ModelSelectionOptions>();
   private readonly config: ResolvedConfig;
   private readonly factory: ModelFactory;
   private readonly reviewerTarget?: ModelTarget;
@@ -26,13 +28,15 @@ export class ModelSet {
       this.reviewerTarget = this.target(provider, model);
     }
     for (const [role, roleConfig] of Object.entries(this.config.roles)) {
-      this.roles.set(role, this.target(roleConfig.provider, roleConfig.model));
+      const options = { ...(roleConfig.credential_id ? { credentialId: roleConfig.credential_id } : {}), ...(roleConfig.temperature === undefined ? {} : { temperature: roleConfig.temperature }), ...(roleConfig.max_tokens === undefined ? {} : { maxTokens: roleConfig.max_tokens }) };
+      this.parameters.set(role, options);
+      this.roles.set(role, this.target(roleConfig.provider, roleConfig.model, options));
       this.fallbacks.set(role, (roleConfig.fallbacks ?? []).map(ref => this.target(ref.provider, ref.model)));
       if (role === "reviewer") this.reviewerFallbacks = (roleConfig.fallbacks ?? []).map(ref => this.target(ref.provider, ref.model));
     }
   }
 
-  private target(provider: string, model: string): ModelTarget { return { provider, model, instance: this.factory(provider, model) }; }
+  private target(provider: string, model: string, options?: ModelSelectionOptions): ModelTarget { return { provider, model, instance: options && Object.keys(options).length ? this.factory(provider, model, options) : this.factory(provider, model) }; }
   forRole(role: string): LanguageModelInstance { return (this.roles.get(role) ?? this.defaultTarget).instance; }
   forReviewer(report?: FailoverReporter): LanguageModelInstance {
     const primary = this.roles.get("reviewer") ?? this.reviewerTarget ?? this.defaultTarget;
@@ -51,12 +55,13 @@ export class ModelSet {
       return primary && fallbacks.length ? failoverModel(role, primary, fallbacks, report) : (primary ?? this.defaultTarget).instance;
     });
   }
-  async swap(role: string, provider: string, model: string): Promise<void> {
+  async swap(role: string, provider: string, model: string, options: ModelSelectionOptions = {}): Promise<void> {
     if (!this.config.providers[provider]) throw new Error(`provider ${JSON.stringify(provider)} is not configured`);
-    const target = this.target(provider, model);
+    const target = this.target(provider, model, options);
     if (!role || role === "default") this.defaultTarget = target;
-    else this.roles.set(role, target);
+    else { this.roles.set(role, target); this.parameters.set(role, options); }
   }
+  currentParameters(role: string): ModelSelectionOptions { return { ...(this.parameters.get(role) ?? {}) }; }
   currentSelection(role: string): { provider: string; model: string; explicit: boolean } {
     if (!role || role === "default") return { provider: this.defaultTarget.provider, model: this.defaultTarget.model, explicit: true };
     const target = this.roles.get(role);

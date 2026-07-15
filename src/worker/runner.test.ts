@@ -136,7 +136,7 @@ describe("WorkerRunner", () => {
     const claimed = task();
     const commands = [
       { id: "answer:event-8", instruction: "[AskUser] {\"questionId\":\"event-8\",\"answers\":{\"希望多长？\":\"长篇\"}}" },
-      { id: "model:req-1", instruction: "[ModelSwitch] {\"role\":\"writer\",\"provider\":\"openai\",\"model\":\"gpt-5\"}" },
+      { id: "model:req-1", instruction: "[ModelSwitch] {\"role\":\"writer\",\"provider\":\"openai\",\"model\":\"gpt-5\",\"credentialId\":\"credential-1\",\"parameters\":{\"temperature\":0.3,\"maxTokens\":2048}}" },
     ];
     const repository = scheduler(claimed, { desiredState: "running", steerCommands: commands });
     let boundary!: () => Promise<void>;
@@ -147,7 +147,7 @@ describe("WorkerRunner", () => {
     await new WorkerRunner({ scheduler: repository, createHost: async () => fakeHost, workerId: "worker-1", leaseMs: 30_000 }).runOnce();
 
     expect(fakeHost.answerUser).toHaveBeenCalledWith("event-8", { "希望多长？": "长篇" });
-    expect(fakeHost.switchModel).toHaveBeenCalledWith("writer", "openai", "gpt-5");
+    expect(fakeHost.switchModel).toHaveBeenCalledWith("writer", "openai", "gpt-5", { credentialId: "credential-1", parameters: { temperature: 0.3, maxTokens: 2048 } });
     expect(fakeHost.steer).not.toHaveBeenCalled();
     expect(repository.acknowledgeSteerCommands).toHaveBeenCalledWith(claimed.id, "worker-1", 1, ["answer:event-8"]);
     expect(repository.acknowledgeSteerCommands).toHaveBeenCalledWith(claimed.id, "worker-1", 1, ["model:req-1"]);
