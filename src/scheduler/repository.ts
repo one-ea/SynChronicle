@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { and, asc, count, eq, inArray, lte, or, sql } from "drizzle-orm";
 import type { Database } from "../db/client.js";
-import { projects, runCommands, runEvents, runs, tasks, users } from "../db/schema/index.js";
+import { projects, runCommands, runs, tasks, users } from "../db/schema/index.js";
+import { appendRunEventInTransaction } from "../realtime/append.js";
 import type { RequestAuth } from "../web/auth/plugin.js";
 import { LEGACY_COMMAND_ID_PREFIX } from "./types.js";
 import type {
@@ -310,28 +311,11 @@ export class SchedulerRepository {
         sql`${tasks.leaseExpiresAt} > ${now}`,
       )).limit(1).for("update");
       if (!task) return false;
-      await transaction.execute(sql`select pg_advisory_xact_lock(hashtext(${task.runId}))`);
-      const rows = await transaction.select({ sequence: sql<number>`coalesce(max(${runEvents.sequence}), 0)` })
-        .from(runEvents).where(eq(runEvents.runId, task.runId));
-      const sequence = Number(rows[0]?.sequence ?? 0) + 1;
       const stableId = `error:${task.id}:${leaseVersion ?? task.leaseVersion}:${error.category ?? "internal"}`;
-      const payload = {
-        seq: sequence,
-        time: now.toISOString(),
-        kind: "ui_event",
-        priority: "control",
-        category: "WORKER.ERROR",
-        summary: error.message,
-        payload: { id: stableId, type: "error", message: error.message, stack: error.stack, retryable: error.retryable, category: error.category, taskId },
-      };
-      await transaction.insert(runEvents).values({
-        userId: task.userId,
-        projectId: task.projectId,
-        runId: task.runId,
-        sequence,
+      await appendRunEventInTransaction(transaction as unknown as Database, task, {
         stableId,
         type: "ui_event",
-        payload,
+        payload: (sequence: number) => ({ seq: sequence, time: now.toISOString(), kind: "ui_event", priority: "control", category: "WORKER.ERROR", summary: error.message, payload: { id: stableId, type: "error", message: error.message, stack: error.stack, retryable: error.retryable, category: error.category, taskId } }),
       });
       return true;
     });
@@ -342,11 +326,8 @@ export class SchedulerRepository {
     return this.db.transaction(async (transaction) => {
       const [task] = await transaction.select().from(tasks).where(and(eq(tasks.id, taskId), eq(tasks.leaseOwner, workerId), eq(tasks.leaseVersion, leaseVersion), inArray(tasks.status, activeTaskStatuses), sql`${tasks.leaseExpiresAt} > ${now}`)).limit(1).for("update");
       if (!task) return false;
-      await transaction.execute(sql`select pg_advisory_xact_lock(hashtext(${task.runId}))`);
-      const rows = await transaction.select({ sequence: sql<number>`coalesce(max(${runEvents.sequence}), 0)` }).from(runEvents).where(eq(runEvents.runId, task.runId));
-      const sequence = Number(rows[0]?.sequence ?? 0) + 1;
       const stableId = `control:${task.id}:${leaseVersion}:${control}`;
-      await transaction.insert(runEvents).values({ userId: task.userId, projectId: task.projectId, runId: task.runId, sequence, stableId, type: "ui_event", payload: { seq: sequence, time: now.toISOString(), kind: "ui_event", priority: "control", category: "WORKER.CONTROL", summary: control, payload: { id: stableId, type: "control", control, taskId } } }).onConflictDoNothing();
+      await appendRunEventInTransaction(transaction as unknown as Database, task, { stableId, type: "ui_event", payload: (sequence: number) => ({ seq: sequence, time: now.toISOString(), kind: "ui_event", priority: "control", category: "WORKER.CONTROL", summary: control, payload: { id: stableId, type: "control", control, taskId } }) });
       return true;
     });
   }

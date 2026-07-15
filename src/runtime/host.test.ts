@@ -233,6 +233,23 @@ describe("Host", () => {
     await expect(value.replayQueue(10)).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ category: "SYSTEM" })]));
   });
 
+  it("uses injected public stream persistence without writing an internal stream event", async () => {
+    const { value } = await host(["hello"]);
+    const store = value.store;
+    const persistStreamDelta = vi.fn().mockResolvedValue({ sequence: 7, text: "hello", eventSequence: 12 });
+    const runtimeAgent: RuntimeAgent = { run: async function* () { yield "hello"; }, abort: vi.fn(), close: vi.fn() };
+    const persistedHost = await Host.new({ provider: "mock", model: "mock", providers: { mock: { api_key: "test" } }, roles: {} }, {}, { agent: runtimeAgent, store, persistStreamDelta });
+    const stream = persistedHost.stream();
+
+    await persistedHost.startPrepared("write");
+    const chunks = [];
+    for await (const chunk of stream) chunks.push(chunk);
+    expect(chunks).toEqual([{ sequence: 7, text: "hello", eventSequence: 12 }]);
+    expect(persistStreamDelta).toHaveBeenCalledWith(1, "hello");
+    expect((await store.runtime.loadQueue()).filter(({ kind }) => kind === "stream_delta")).toHaveLength(0);
+    await value.close();
+  });
+
   it("resumes progress and injects pending steer", async () => {
     const { value, runtimeAgent } = await host();
     await value.store.progress.save({ novel_name: "Book", phase: "writing", current_chapter: 2, total_chapters: 10, completed_chapters: [1, 2], total_word_count: 3456 });

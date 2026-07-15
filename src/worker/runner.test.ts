@@ -263,6 +263,18 @@ describe("WorkerRunner", () => {
     );
   });
 
+  it("publishes an already durable Host chunk without appending it twice", async () => {
+    const claimed = task();
+    const fakeHost = host().value;
+    fakeHost.stream = async function* () { yield { sequence: 3, text: "durable", eventSequence: 17 }; };
+    const eventSink = { appendEvent: vi.fn(), publish: vi.fn().mockResolvedValue(undefined) };
+
+    await new WorkerRunner({ scheduler: scheduler(claimed), createHost: async () => fakeHost, workerId: "worker-1", eventSink }).runOnce();
+
+    expect(eventSink.appendEvent).not.toHaveBeenCalled();
+    expect(eventSink.publish).toHaveBeenCalledWith({ runId: claimed.runId, sequence: 17 });
+  });
+
   it("propagates shutdown abort to the active Host execution", async () => {
     const claimed = task();
     const repository = scheduler(claimed);

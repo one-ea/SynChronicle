@@ -31,6 +31,14 @@ export async function startWorker(): Promise<void> {
       publish: (wakeup) => eventBroker.publish(wakeup),
     },
     createHost: async (task) => Host.new(config, bundle, {
+      persistStreamDelta: async (chunkSequence, text) => {
+        const event = await events.appendEvent({ userId: task.userId, projectId: task.projectId, runId: task.runId }, {
+          stableId: `stream:${task.runId}:${task.id}:${task.type}:${chunkSequence}`,
+          type: "stream.delta",
+          payload: { taskId: task.id, agent: task.type, chunkSequence, text },
+        });
+        return { sequence: chunkSequence, text, eventSequence: event.sequence };
+      },
       store: new DatabaseStore(database, {
         userId: task.userId,
         projectId: task.projectId,

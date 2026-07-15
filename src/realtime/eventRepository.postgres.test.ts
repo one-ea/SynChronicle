@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDatabase, type Database } from "../db/client.js";
 import { migrateDatabase } from "../db/migrate.js";
 import { projects, runEvents, runs, users } from "../db/schema/index.js";
+import { DatabaseStore } from "../store/database/index.js";
 import { PostgresEventBroker } from "./broker.js";
 import { DatabaseEventRepository, type RunEventScope } from "./eventRepository.js";
 
@@ -50,6 +51,23 @@ describe.skipIf(!databaseUrl)("PostgreSQL resumable event stream", () => {
     expect(matches?.value).toBe(1);
   });
 
+  it("shares one monotonic sequence across DatabaseStore and realtime repository writes", async () => {
+    const scope = await createScope();
+    const repository = new DatabaseEventRepository(writer);
+    const store = new DatabaseStore(writer, scope);
+    await Promise.all(Array.from({ length: 20 }, (_, index) => index % 2 === 0
+      ? repository.appendEvent(scope, { stableId: `public-${index}`, type: "system", payload: { index } })
+      : store.runtime.appendQueue({ seq: 0, time: "", kind: "ui_event", priority: "background", payload: { id: `runtime-${index}`, type: "system" } })));
+    await store.runtime.appendQueue({ seq: 0, time: "", kind: "stream_delta", priority: "background", payload: { delta: "internal" } });
+
+    const rows = await writer.select().from(runEvents).where(eq(runEvents.runId, scope.runId));
+    expect(rows.map(({ sequence }) => sequence).sort((a, b) => a - b)).toEqual(Array.from({ length: 21 }, (_, index) => index + 1));
+    expect(new Set(rows.map(({ sequence }) => sequence))).toHaveLength(21);
+    const visible = await repository.listAfter(scope, 0, 500);
+    expect(visible.every(({ stableId, type }) => Boolean(stableId) && type !== "stream_delta")).toBe(true);
+    expect(visible).toHaveLength(20);
+  });
+
   it("delivers LISTEN/NOTIFY across independent clients and pulls committed DB rows after notify", async () => {
     const scope = await createScope();
     const writerRepository = new DatabaseEventRepository(writer);
@@ -90,5 +108,36 @@ describe.skipIf(!databaseUrl)("PostgreSQL resumable event stream", () => {
 
     await expect(publish({ sequence: event.sequence })).rejects.toThrow("notify failed");
     await expect(repository.listAfter(scope, 0, 500)).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ stableId: "notify-window" })]));
+  });
+
+  it("backfills a committed event after real publish failure when a later notify arrives", async () => {
+    const scope = await createScope();
+    const writerRepository = new DatabaseEventRepository(writer);
+    const readerRepository = new DatabaseEventRepository(reader);
+    const listenerBroker = new PostgresEventBroker(reader);
+    const workingPublisher = new PostgresEventBroker(writer);
+    const failedClient = createDatabase(databaseUrl!);
+    const failedPublisher = new PostgresEventBroker(failedClient);
+    let cursor = 0;
+    const received: string[] = [];
+    let resolveDelivered!: () => void;
+    const delivered = new Promise<void>((resolve) => { resolveDelivered = resolve; });
+    await listenerBroker.subscribe(async () => {
+      const events = await readerRepository.listAfter(scope, cursor, 500);
+      for (const event of events) {
+        cursor = event.sequence;
+        received.push(event.stableId!);
+      }
+      if (received.includes("missed-notify") && received.includes("later-notify")) resolveDelivered();
+    });
+    const missed = await writerRepository.appendEvent(scope, { stableId: "missed-notify", type: "system", payload: {} });
+    await failedClient.$client.end();
+    await expect(failedPublisher.publish({ runId: scope.runId, sequence: missed.sequence })).rejects.toThrow();
+    const later = await writerRepository.appendEvent(scope, { stableId: "later-notify", type: "system", payload: {} });
+    await workingPublisher.publish({ runId: scope.runId, sequence: later.sequence });
+    await delivered;
+
+    expect(received).toEqual(["missed-notify", "later-notify"]);
+    await Promise.all([listenerBroker.close(), workingPublisher.close(), failedPublisher.close()]);
   });
 });

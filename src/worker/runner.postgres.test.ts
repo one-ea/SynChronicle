@@ -6,6 +6,7 @@ import { migrateDatabase } from "../db/migrate.js";
 import { chapters, checkpoints, projects, runEvents, runs, tasks, usageRecords, users } from "../db/schema/index.js";
 import { Host, type RuntimeAgent } from "../runtime/host.js";
 import { SchedulerRepository } from "../scheduler/repository.js";
+import { DatabaseEventRepository } from "../realtime/eventRepository.js";
 import { DatabaseStore } from "../store/database/index.js";
 import { WorkerRunner, taskFingerprint, type ClaimedTask } from "./runner.js";
 
@@ -70,5 +71,46 @@ describe.skipIf(!databaseUrl)("PostgreSQL worker crash recovery", () => {
     expect(await database.select().from(checkpoints).where(eq(checkpoints.runId, runId))).toHaveLength(1);
     expect(await database.select().from(usageRecords).where(eq(usageRecords.runId, runId))).toHaveLength(1);
     expect((await database.select().from(runEvents).where(eq(runEvents.runId, runId))).filter((event) => event.stableId === lifecycleId)).toHaveLength(1);
+  });
+
+  it("recovers a chunk committed before notify after a Worker crash without duplicating the public event", async () => {
+    const userId = randomUUID();
+    const projectId = randomUUID();
+    const runId = randomUUID();
+    await database.insert(users).values({ id: userId, username: userId, passwordHash: "test", concurrencyLimit: 2 });
+    const [project] = await database.insert(projects).values({ id: projectId, userId, title: "chunk recovery", version: 1 }).returning();
+    await database.insert(runs).values({ id: runId, userId, projectId });
+    const [inserted] = await database.insert(tasks).values({ userId, projectId, runId, type: "write", status: "running", leaseOwner: "crashed-worker", leaseVersion: 1, leaseExpiresAt: new Date(Date.now() - 1_000), attempts: 1, payload: { prompt: "Write" } }).returning();
+    const events = new DatabaseEventRepository(database);
+    const stableId = `stream:${runId}:${inserted!.id}:write:1`;
+    const durable = await events.appendEvent({ userId, projectId, runId }, { stableId, type: "stream.delta", payload: { taskId: inserted!.id, agent: "write", chunkSequence: 1, text: "durable chunk" } });
+    const publish = vi.fn().mockResolvedValue(undefined);
+    const scheduler = new SchedulerRepository(database, { platformConcurrency: 100_000 });
+    const runner = new WorkerRunner({
+      scheduler,
+      workerId: "recovery-worker",
+      leaseMs: 30_000,
+      eventSink: { appendEvent: (scope, event) => events.appendEvent(scope, event), publish },
+      createHost: async (claimed) => Host.new(
+        { provider: "mock", model: "mock", providers: { mock: { api_key: "test" } }, roles: {} },
+        {},
+        {
+          agent: { run: async function* () { yield "durable chunk"; }, abort: vi.fn(), close: vi.fn() },
+          persistStreamDelta: async (chunkSequence, text) => {
+            const event = await events.appendEvent({ userId, projectId, runId }, { stableId: `stream:${runId}:${claimed.id}:${claimed.type}:${chunkSequence}`, type: "stream.delta", payload: { taskId: claimed.id, agent: claimed.type, chunkSequence, text } });
+            return { sequence: chunkSequence, text, eventSequence: event.sequence };
+          },
+          store: new DatabaseStore(database, { userId, projectId, runId, taskFingerprint: taskFingerprint(claimed), projectVersion: project!.version, lease: { taskId: claimed.id, owner: "recovery-worker", version: claimed.leaseVersion } }),
+        },
+      ),
+    });
+
+    await runner.runOnce();
+
+    const publicChunks = (await database.select().from(runEvents).where(eq(runEvents.runId, runId))).filter(({ stableId: candidate }) => candidate === stableId);
+    expect(publicChunks).toHaveLength(1);
+    expect(publicChunks[0]?.id).toBe(durable.id);
+    expect(publish).toHaveBeenCalledWith({ runId, sequence: durable.sequence });
+    expect((await events.listAfter({ userId, projectId, runId }, 0, 500)).filter(({ type }) => type === "stream.delta")).toHaveLength(1);
   });
 });

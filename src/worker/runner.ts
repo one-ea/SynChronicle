@@ -212,6 +212,10 @@ function persistStream(
       if (!sink) continue;
       const chunk = typeof value === "string" ? { sequence: chunkSequence + 1, text: value } : value;
       chunkSequence = chunk.sequence;
+      if (chunk.eventSequence !== undefined) {
+        await sink.publish({ runId: scope.runId, sequence: chunk.eventSequence });
+        continue;
+      }
       const event = await sink.appendEvent(scope, {
         stableId: `stream:${scope.runId}:${taskId}:${agent}:${chunkSequence}`,
         type: "stream.delta",

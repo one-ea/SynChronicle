@@ -3,6 +3,7 @@ import { and, asc, desc, eq, sql } from "drizzle-orm";
 import type { Database } from "../../db/client.js";
 import { artifacts, chapters, checkpoints, projects, runEvents, tasks, usageRecords } from "../../db/schema/index.js";
 import type { Checkpoint, RuntimeQueueItem, UsageState } from "../../domain/index.js";
+import { appendRunEventInTransaction } from "../../realtime/append.js";
 
 export interface LeaseFence { taskId: string; owner: string; version: number; }
 export interface DatabaseStoreScope { userId: string; projectId: string; runId: string; taskFingerprint?: string; projectVersion?: number; lease?: LeaseFence; }
@@ -68,11 +69,13 @@ export class DrizzleDatabaseBackend implements DatabaseBackend {
 
   async appendRuntime(scope: DatabaseStoreScope, item: RuntimeQueueItem): Promise<RuntimeQueueItem> {
     if (!this.transactionBound) return this.transaction(scope, (backend) => backend.appendRuntime(scope, item));
-    await this.database.execute(sql`select pg_advisory_xact_lock(hashtext(${scope.runId}))`);
-    const rows = await this.database.select({ sequence: sql<number>`coalesce(max(${runEvents.sequence}), 0)` }).from(runEvents).where(runScope(runEvents, scope));
-    const value = { ...item, seq: Number(rows[0]?.sequence ?? 0) + 1, time: item.time || new Date().toISOString() };
-    await this.database.insert(runEvents).values({ ...ownership(scope), sequence: value.seq, stableId: eventStableId(value), type: value.kind, payload: value }).onConflictDoNothing();
-    return value;
+    const time = item.time || new Date().toISOString();
+    const event = await appendRunEventInTransaction(this.database, ownership(scope), {
+      stableId: eventStableId(item),
+      type: item.kind,
+      payload: (sequence: number) => ({ ...item, seq: sequence, time }),
+    });
+    return { ...item, seq: event.sequence, time };
   }
 
   async clearRuntime(scope: DatabaseStoreScope) { if (!this.transactionBound) return this.transaction(scope, (backend) => backend.clearRuntime(scope)); await this.database.delete(runEvents).where(runScope(runEvents, scope)); }

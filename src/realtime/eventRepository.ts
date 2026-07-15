@@ -1,6 +1,7 @@
-import { and, asc, eq, gt, sql } from "drizzle-orm";
+import { and, asc, eq, gt, isNotNull, ne } from "drizzle-orm";
 import type { Database } from "../db/client.js";
 import { runEvents, runs } from "../db/schema/index.js";
+import { appendRunEvent } from "./append.js";
 
 export interface RunEventScope {
   userId: string;
@@ -42,33 +43,7 @@ export class DatabaseEventRepository implements RunEventRepository {
   }
 
   async appendEvent(scope: RunEventScope, event: NewRunEvent): Promise<RunEvent> {
-    return this.database.transaction(async (transaction) => {
-      const [ownedRun] = await transaction
-        .select({ id: runs.id })
-        .from(runs)
-        .where(and(eq(runs.id, scope.runId), eq(runs.projectId, scope.projectId), eq(runs.userId, scope.userId)))
-        .for("update")
-        .limit(1);
-      if (!ownedRun) throw new Error("Run not found");
-      if (event.stableId) {
-        const [existing] = await transaction
-          .select()
-          .from(runEvents)
-          .where(and(eq(runEvents.runId, scope.runId), eq(runEvents.stableId, event.stableId)))
-          .limit(1);
-        if (existing) return existing;
-      }
-      const [latest] = await transaction
-        .select({ sequence: sql<number>`coalesce(max(${runEvents.sequence}), 0)` })
-        .from(runEvents)
-        .where(and(eq(runEvents.runId, scope.runId), eq(runEvents.projectId, scope.projectId), eq(runEvents.userId, scope.userId)));
-      const [inserted] = await transaction
-        .insert(runEvents)
-        .values({ ...scope, ...event, sequence: Number(latest?.sequence ?? 0) + 1 })
-        .returning();
-      if (!inserted) throw new Error("Run event insert returned no row");
-      return inserted;
-    });
+    return appendRunEvent(this.database, scope, event);
   }
 
   async listAfter(scope: RunEventScope, sequence: number, limit: number): Promise<RunEvent[]> {
@@ -80,6 +55,8 @@ export class DatabaseEventRepository implements RunEventRepository {
         eq(runEvents.projectId, scope.projectId),
         eq(runEvents.runId, scope.runId),
         gt(runEvents.sequence, sequence),
+        isNotNull(runEvents.stableId),
+        ne(runEvents.type, "stream_delta"),
       ))
       .orderBy(asc(runEvents.sequence))
       .limit(limit);

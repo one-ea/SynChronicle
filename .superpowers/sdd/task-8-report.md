@@ -38,7 +38,7 @@ Implemented resumable run-event streaming over authenticated Fastify WebSockets.
 
 - Database rows remain the source of truth; LISTEN/NOTIFY carries no event payload used for delivery.
 - Sequence allocation locks the owned run row and inserts within the same transaction.
-- Stream stable IDs use `runId/taskId/agent/chunkSequence`; the chunk sequence originates from the persisted Host runtime queue in production.
+- Stream stable IDs use `runId/taskId/agent/chunkSequence`; public event persistence occurs inside the Host callback before the chunk reaches the Runner.
 - Worker publication happens only after `appendEvent` resolves its committed transaction.
 
 ## Hardening Follow-up RED / GREEN
@@ -46,12 +46,21 @@ Implemented resumable run-event streaming over authenticated Fastify WebSockets.
 - RED: rejected async broker listeners escaped as unhandled rejections; GREEN: broker dispatch catches them and invokes the subscriber error callback, which closes and unsubscribes the WebSocket.
 - RED: a failed initial LISTEN retained both its listener and rejected cached Promise; GREEN: subscription state rolls back and subsequent subscribe retries LISTEN.
 - RED: backpressure ignored the next serialized payload; GREEN: UTF-8 message bytes are included before every send.
-- RED: stream deltas had `stableId: null` and process-local ordering; GREEN: Host emits the sequence returned by durable runtime append and Worker includes it in payload and stable ID.
+- RED: stream deltas had `stableId: null` and process-local ordering; GREEN: Worker injects deterministic public stream persistence into Host, and database uniqueness deduplicates a retried task/chunk identity.
+
+## Durable Sequencing Follow-up
+
+- RED: DatabaseStore, realtime repository, and Scheduler allocated `run_events.sequence` with different lock strategies; GREEN: every PostgreSQL `run_events` insert uses `appendRunEventInTransaction`, which locks the owned run row and allocates the next sequence.
+- RED: each Worker chunk created an internal `stream_delta` row and a public `stream.delta` row; GREEN: Worker Host persists one public `stream.delta` row and Runner only publishes its committed `eventSequence`.
+- WebSocket replay reads only rows with a stable ID and excludes legacy internal `stream_delta` rows.
+- The conditional PostgreSQL suite mixes concurrent DatabaseStore and realtime repository writes and verifies one unique monotonic sequence.
+- The conditional Worker crash test precommits a chunk before notification, recovers with a new Worker, and verifies one public row with the original ID and sequence.
+- The conditional broker test closes a real publisher client to force NOTIFY failure, then verifies a later notification causes cursor-based DB backfill of both rows.
 
 ## PostgreSQL Conditional Coverage
 
 - `src/realtime/eventRepository.postgres.test.ts` runs when `TEST_DATABASE_URL` is configured.
-- It covers concurrent monotonic sequence allocation, stable-ID uniqueness, two independent PostgreSQL clients using LISTEN/NOTIFY, notification-triggered DB pull, commit-before-publish observation, and the notify-failure recovery window.
+- It covers concurrent mixed-writer monotonic sequence allocation, stable-ID uniqueness, public-event filtering, two independent PostgreSQL clients using LISTEN/NOTIFY, notification-triggered DB pull, commit-before-publish observation, real publish failure, and later-notify backfill.
 - Broker unit tests cover initial LISTEN failure rollback, retry, reconnect wakeup, rejected-listener cleanup, and close cleanup without requiring a live PostgreSQL service.
 
 ## Concerns
