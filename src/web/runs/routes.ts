@@ -69,7 +69,8 @@ export const runRoutes: FastifyPluginAsync<RunRoutesOptions> = async (app, optio
       );
       if (result === "missing") return reply.code(404).send(notFoundBody);
       if (result === "conflict") return reply.code(409).send(conflictBody);
-      return reply.code(200).send({ run: result });
+      const resumeData = result.resumeData && typeof result.resumeData === "object" ? result.resumeData as Record<string, unknown> : {};
+      return reply.code(200).send({ run: result, waiting_for_durable_commit: command === "abort" && resumeData.durableCommit === true });
     });
   }
 

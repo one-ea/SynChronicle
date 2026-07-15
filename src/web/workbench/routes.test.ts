@@ -11,7 +11,7 @@ function projection(userId: string): WorkbenchProjection {
   return {
     id: projectId, userId, title: "雾港来信", status: "active", version: 3,
     chapters: [{ id: "chapter-1", runId, sequence: 1, title: "潮声", body: "正文", status: "draft", version: 2 }],
-    latestRun: { id: runId, status: "running", version: 4, task: { id: "task-1", status: "running", leaseVersion: 2 }, checkpointVersion: 7 },
+    latestRun: { id: runId, status: "running", version: 4, task: { id: "task-1", status: "running", leaseVersion: 2 }, checkpointVersion: 7, waiting_for_durable_commit: false },
     agents: [{ name: "Writer", state: "running", summary: "正在续写", sequence: 12 }],
     usage: { inputTokens: 100, outputTokens: 60, totalTokens: 160, cost: "0.01200000", byAgent: [{ agent: "Writer", inputTokens: 100, outputTokens: 60, totalTokens: 160, cost: "0.01200000" }] },
     pendingQuestion: { id: "question-1", questions: [{ header: "篇幅", question: "希望多长？", options: ["短篇", "长篇"] }] },

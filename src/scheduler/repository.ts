@@ -332,6 +332,18 @@ export class SchedulerRepository {
     });
   }
 
+  async setDurableCommit(taskId: string, workerId: string, leaseVersion: number, active: boolean): Promise<boolean> {
+    const now = new Date();
+    return this.db.transaction(async (transaction) => {
+      const [task] = await transaction.select({ runId: tasks.runId }).from(tasks).where(and(eq(tasks.id, taskId), eq(tasks.leaseOwner, workerId), eq(tasks.leaseVersion, leaseVersion), inArray(tasks.status, activeTaskStatuses), sql`${tasks.leaseExpiresAt} > ${now}`)).limit(1).for("update");
+      if (!task) return false;
+      const [run] = await transaction.select({ resumeData: runs.resumeData }).from(runs).where(eq(runs.id, task.runId)).limit(1).for("update");
+      if (!run) return false;
+      await transaction.update(runs).set({ resumeData: { ...normalizeRunResumeData(run.resumeData), durableCommit: active }, updatedAt: now }).where(eq(runs.id, task.runId));
+      return true;
+    });
+  }
+
   async releaseLease(taskId: string, workerId: string, outcome: ReleaseLeaseOutcome): Promise<boolean> {
     return this.db.transaction(async (transaction) => {
       await transaction.execute(sql`select pg_advisory_xact_lock(${schedulerAdvisoryLock})`);

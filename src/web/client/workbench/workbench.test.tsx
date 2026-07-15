@@ -2,6 +2,7 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ApiClient } from "../api/client.js";
+import { ApiError } from "../api/client.js";
 import { WorkbenchPage, type WorkbenchProject } from "../pages/workbench.js";
 import { initialRunViewState, reduceRunEvent, type RunEventMessage } from "../realtime/useRunEvents.js";
 
@@ -55,6 +56,13 @@ describe("run event projection", () => {
   it("keeps compatibility with legacy stream payloads", () => {
     const legacy = reduceRunEvent(initialRunViewState, { sequence: 1, type: "stream_delta", payload: { delta: "旧协议" } });
     expect(legacy.stream).toBe("旧协议");
+  });
+
+  it("projects live Agent and usage events", () => {
+    const agent = reduceRunEvent(initialRunViewState, { sequence: 1, type: "stream.delta", payload: { agent: "Writer", text: "x" } });
+    const usage = reduceRunEvent(agent, { sequence: 2, type: "usage.snapshot", payload: { inputTokens: 12, outputTokens: 8, totalTokens: 20, cost: "0.01000000", byAgent: [] } });
+    expect(usage.agents).toEqual([{ name: "Writer", state: "stream.delta", sequence: 1 }]);
+    expect(usage.usage).toMatchObject({ totalTokens: 20, cost: "0.01000000" });
   });
 });
 
@@ -138,6 +146,7 @@ describe("WorkbenchPage", () => {
     await user.click(screen.getByRole("button", { name: "终止运行" }));
     await user.selectOptions(screen.getByLabelText("希望多长？"), "长篇");
     await user.click(screen.getByRole("button", { name: "提交回答" }));
+    expect(screen.queryByRole("button", { name: "提交回答" })).not.toBeInTheDocument();
     await user.type(screen.getByLabelText("角色"), "writer");
     await user.type(screen.getByLabelText("Provider"), "openai");
     await user.type(screen.getByLabelText("模型"), "gpt-5");
@@ -150,6 +159,16 @@ describe("WorkbenchPage", () => {
     expect(client.request).toHaveBeenCalledWith(expect.stringMatching(/\/answer$/), expect.objectContaining({ method: "POST" }));
     expect(client.request).toHaveBeenCalledWith(expect.stringMatching(/\/model$/), expect.objectContaining({ method: "POST" }));
     expect(client.request).toHaveBeenCalledWith(expect.stringMatching(/\/diagnostics$/));
+  });
+
+  it("shows request IDs and retries failed controls without unhandled rejection", async () => {
+    const request = vi.fn().mockRejectedValueOnce(new ApiError("request", "failed", 503, "req-control")).mockResolvedValue({ run: project.latestRun });
+    const user = userEvent.setup();
+    render(<WorkbenchPage api={{ request: request as ApiClient["request"] }} project={project} initialEvents={[]} />);
+    await user.click(screen.getByRole("button", { name: "暂停运行" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("req-control");
+    await user.click(screen.getByRole("button", { name: "重试" }));
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("restores panel, focus, chapter, and scroll on popstate", async () => {

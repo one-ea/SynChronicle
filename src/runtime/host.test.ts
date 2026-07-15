@@ -25,6 +25,27 @@ async function host(outputs: string[] = []) {
 }
 
 describe("Host", () => {
+  it("durably resumes AskUser answers and persists model selection", async () => {
+    const scope = { userId: "u", projectId: "p", runId: "r", taskFingerprint: "fp", projectVersion: 1, lease: { taskId: "t", owner: "w", version: 1 } };
+    const store = createMemoryDatabaseStore(scope);
+    store.backend.setLease(scope.lease);
+    const agent: RuntimeAgent = { run: async function* () {}, abort: vi.fn(), close: vi.fn() };
+    const config = { provider: "mock", model: "one", providers: { mock: { api_key: "x" }, other: { api_key: "y" } }, roles: {} } as const;
+    const first = await Host.new(config, {}, { agent, store });
+    const pending = first.askUser([{ header: "篇幅", question: "希望多长？", options: [{ label: "长篇", description: "" }] }]);
+    const event = await first.events()[Symbol.asyncIterator]().next();
+    const questionId = (event.value?.payload as { questionId: string }).questionId;
+    await first.answerUser(questionId, { "希望多长？": "长篇" });
+    await expect(pending).resolves.toEqual({ answers: { "希望多长？": "长篇" }, notes: {} });
+    await first.switchModel("writer", "other", "two");
+    await first.close();
+
+    store.backend.setLease(scope.lease);
+    const recovered = await Host.new(config, {}, { agent, store: createMemoryDatabaseStore(scope, store.backend) });
+    await expect(recovered.askUser([{ header: "篇幅", question: "希望多长？", options: [{ label: "长篇", description: "" }] }])).resolves.toEqual({ answers: { "希望多长？": "长篇" }, notes: {} });
+    expect(recovered.snapshot()).toMatchObject({ roleModels: { writer: { provider: "other", model: "two" } } });
+    await recovered.close();
+  });
   it("reports agent and durable commit boundaries", async () => {
     const dir = await mkdtemp(join(tmpdir(), "runtime-host-boundaries-"));
     const store = new Store(dir);

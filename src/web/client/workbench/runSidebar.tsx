@@ -1,6 +1,7 @@
 import type { ConnectionState, RunViewState } from "../realtime/useRunEvents.js";
 import { useState, type FormEvent } from "react";
 import type { WorkbenchProject } from "../pages/workbench.js";
+import { ApiError } from "../api/client.js";
 
 const connectionCopy: Record<ConnectionState, string> = {
   idle: "等待运行",
@@ -19,6 +20,7 @@ interface RunSidebarProps {
   usage?: WorkbenchProject["usage"];
   pendingQuestion?: WorkbenchProject["pendingQuestion"];
   diagnostics: string | null;
+  abortWaiting: boolean;
   controlsDisabled: boolean;
   collapsed: boolean;
   onToggle(): void;
@@ -31,7 +33,8 @@ interface RunSidebarProps {
 export function RunSidebar(props: RunSidebarProps) {
   const { state, connection, status, collapsed, onToggle } = props;
   const [pending, setPending] = useState(false);
-  async function run(action: () => Promise<void>) { setPending(true); try { await action(); } finally { setPending(false); } }
+  const [failure, setFailure] = useState<{ message: string; retry: () => Promise<void> } | null>(null);
+  async function run(action: () => Promise<void>) { setPending(true); setFailure(null); try { await action(); } catch (error) { const requestId = error instanceof ApiError && error.requestId ? ` 请求 ID：${error.requestId}` : ""; setFailure({ message: `${error instanceof ApiError && error.kind === "request" ? "网络或服务请求失败" : "操作失败"}。${requestId}`, retry: action }); } finally { setPending(false); } }
   async function answer(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!props.pendingQuestion) return;
@@ -60,6 +63,8 @@ export function RunSidebar(props: RunSidebarProps) {
       <section className="agent-list"><h3>Agents</h3>{props.agents.length ? props.agents.map((agent) => <p key={agent.name}><span>{agent.name}</span><small>{agent.summary ?? agent.state}</small></p>) : <p className="muted-copy">暂无 Agent 状态事件。</p>}</section>
       <section className="usage-card"><h3>Usage</h3>{props.usage ? <><p>{props.usage.totalTokens} tokens</p><p>${props.usage.cost}</p></> : <p>暂无用量记录。</p>}</section>
       <div className="control-placeholder" aria-label="运行控制"><button type="button" disabled={props.controlsDisabled || pending} onClick={() => void run(() => props.onCommand("pause"))} aria-label="暂停运行">暂停</button><button type="button" disabled={props.controlsDisabled || pending} onClick={() => void run(() => props.onCommand("resume"))} aria-label="继续运行">继续</button><button type="button" disabled={props.controlsDisabled || pending} onClick={() => void run(() => props.onCommand("abort"))} aria-label="终止运行">终止</button></div>
+      {props.abortWaiting && <p className="message" role="status">正在等待 durable commit 完成，终止将在安全边界生效。</p>}
+      {failure && <p className="message message-error" role="alert">{failure.message}<button type="button" onClick={() => void run(failure.retry)}>重试</button></p>}
       {props.pendingQuestion && <form className="sidebar-form" onSubmit={(event) => void answer(event)}><h3>需要你的回答</h3>{props.pendingQuestion.questions.map((question) => <label key={question.question}>{question.question}<select name={question.question} required defaultValue=""><option value="" disabled>请选择</option>{question.options.map((option) => <option key={option}>{option}</option>)}</select></label>)}<button type="submit" disabled={pending}>提交回答</button></form>}
       <form className="sidebar-form" onSubmit={(event) => void model(event)}><h3>模型切换</h3><label>角色<input name="role" required /></label><label>Provider<input name="provider" required /></label><label>模型<input name="model" required /></label><button type="submit" disabled={props.controlsDisabled || pending}>切换模型</button></form>
       <section className="diagnostics-card"><button type="button" disabled={props.controlsDisabled || pending} onClick={() => void run(props.onDiagnose)}>运行诊断</button>{props.diagnostics && <p role="status">{props.diagnostics}</p>}</section>

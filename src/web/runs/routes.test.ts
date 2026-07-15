@@ -113,6 +113,17 @@ describe("run command routes", () => {
     await app.close();
   });
 
+  it("reports abort waiting while the run is inside durable commit", async () => {
+    const { app, repository } = await testApp();
+    const headers = { "x-user-id": "alice" };
+    const start = await app.inject({ method: "POST", url: "/api/projects/project-a/runs", headers, payload: { idempotencyKey: "commit-abort" } });
+    const run = start.json().run as RunRecord;
+    repository.runs.set(run.id, { ...run, resumeData: { desiredState: "running", durableCommit: true } });
+    const abort = await app.inject({ method: "POST", url: `/api/projects/project-a/runs/${run.id}/abort`, headers });
+    expect(abort.json()).toMatchObject({ waiting_for_durable_commit: true, run: { resumeData: { desiredState: "cancelled", durableCommit: true } } });
+    await app.close();
+  });
+
   it("requires a start idempotency key and returns the same run on retry", async () => {
     const { app } = await testApp();
     const headers = { "x-user-id": "alice" };

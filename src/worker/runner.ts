@@ -31,6 +31,7 @@ export interface WorkerScheduler {
   finishTask(taskId: string, workerId: string, status: ReleaseLeaseOutcome["status"], leaseVersion: number): Promise<boolean>;
   recordTaskError(taskId: string, workerId: string, error: { message: string; stack?: string; retryable: boolean; category: string }, leaseVersion: number): Promise<boolean>;
   recordTaskControl(taskId: string, workerId: string, control: "paused" | "cancelled", leaseVersion: number): Promise<boolean>;
+  setDurableCommit?(taskId: string, workerId: string, leaseVersion: number, active: boolean): Promise<boolean>;
 }
 
 export interface WorkerRunnerDependencies {
@@ -102,24 +103,7 @@ export class WorkerRunner {
         throw leaseLost;
       }
     };
-    const scheduleRenewal = () => {
-      renewalTimer = this.clock.setTimeout(async () => {
-        if (stopped) return;
-        try { await verifyLease(); } catch { return; }
-        scheduleRenewal();
-      }, Math.max(1, Math.floor(this.leaseMs / 3))) as ReturnType<typeof setTimeout>;
-    };
-    const handleBoundary = async (boundary: WorkerBoundary = "agent") => {
-      signal?.throwIfAborted();
-      if (boundary === "commit:enter") await verifyLease();
-      if (boundary === "commit:enter") return;
-      const control = await scheduler.readRunControl(task.runId);
-      if (control.desiredState === "paused" || control.desiredState === "cancelled") {
-        executionState.outcome = control.desiredState === "paused" ? "paused" : "cancelled";
-        const reason = control.desiredState === "paused" ? "run paused" : "run aborted";
-        host.abort(reason);
-        throw new TaskExecutionError(reason, false, { category: "cancel" });
-      }
+    const deliverCommands = async () => {
       const commands = await scheduler.claimSteerCommands(task.id, workerId, task.leaseVersion);
       for (const command of commands) {
         const interactive = parseInteractiveCommand(command.instruction);
@@ -127,9 +111,27 @@ export class WorkerRunner {
         else if (interactive?.kind === "model" && host.switchModel) await host.switchModel(interactive.role, interactive.provider, interactive.model);
         else await host.steer(command.id, command.instruction);
       }
-      if (commands.length && !await scheduler.acknowledgeSteerCommands(task.id, workerId, task.leaseVersion, commands.map(({ id }) => id))) {
-        throw new TaskExecutionError("lease ownership lost while applying steer", true, { category: "lease_loss" });
+      if (commands.length && !await scheduler.acknowledgeSteerCommands(task.id, workerId, task.leaseVersion, commands.map(({ id }) => id))) throw new TaskExecutionError("lease ownership lost while applying command", true, { category: "lease_loss" });
+    };
+    const scheduleRenewal = () => {
+      renewalTimer = this.clock.setTimeout(async () => {
+        if (stopped) return;
+        try { await verifyLease(); await deliverCommands(); } catch { return; }
+        scheduleRenewal();
+      }, Math.max(1, Math.floor(this.leaseMs / 3))) as ReturnType<typeof setTimeout>;
+    };
+    const handleBoundary = async (boundary: WorkerBoundary = "agent") => {
+      signal?.throwIfAborted();
+      if (boundary === "commit:enter") { await verifyLease(); if (scheduler.setDurableCommit && !await scheduler.setDurableCommit(task.id, workerId, task.leaseVersion, true)) throw new TaskExecutionError("lease ownership lost entering durable commit", true, { category: "lease_loss" }); return; }
+      if (boundary === "commit:exit" && scheduler.setDurableCommit && !await scheduler.setDurableCommit(task.id, workerId, task.leaseVersion, false)) throw new TaskExecutionError("lease ownership lost exiting durable commit", true, { category: "lease_loss" });
+      const control = await scheduler.readRunControl(task.runId);
+      if (control.desiredState === "paused" || control.desiredState === "cancelled") {
+        executionState.outcome = control.desiredState === "paused" ? "paused" : "cancelled";
+        const reason = control.desiredState === "paused" ? "run paused" : "run aborted";
+        host.abort(reason);
+        throw new TaskExecutionError(reason, false, { category: "cancel" });
       }
+      await deliverCommands();
     };
 
     host.setBoundaryHandler(handleBoundary);
@@ -255,7 +257,11 @@ function persistStream(
 }
 
 function eventType(value: unknown): string {
-  if (value && typeof value === "object" && "type" in value && typeof value.type === "string") return value.type;
+  if (value && typeof value === "object") {
+    const payload = "payload" in value && value.payload && typeof value.payload === "object" ? value.payload as Record<string, unknown> : {};
+    if (typeof payload.publicType === "string") return payload.publicType;
+    if ("type" in value && typeof value.type === "string") return value.type;
+  }
   return "system";
 }
 

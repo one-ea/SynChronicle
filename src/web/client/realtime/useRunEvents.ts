@@ -16,10 +16,12 @@ export interface RunViewState {
   stream: string;
   events: RunEventMessage[];
   reflection?: { round?: number; maxRounds?: number; score?: number; passed?: boolean };
+  agents: Array<{ name: string; state: string; summary?: string; sequence: number }>;
+  usage?: { inputTokens: number; outputTokens: number; totalTokens: number; cost: string; byAgent: Array<{ agent: string; inputTokens: number; outputTokens: number; totalTokens: number; cost: string }> };
 }
 
 const MAX_VISIBLE_EVENTS = 200;
-export const initialRunViewState: RunViewState = { lastSequence: 0, stream: "", events: [] };
+export const initialRunViewState: RunViewState = { lastSequence: 0, stream: "", events: [], agents: [] };
 
 export function reconnectDelay(attempt: number, random: () => number = Math.random): number {
   const base = Math.min(800 * 2 ** Math.max(0, attempt - 1), 15_000);
@@ -46,11 +48,18 @@ export function reduceRunEvent(state: RunViewState, event: RunEventMessage): Run
     score: typeof reflectionPayload.score === "number" ? reflectionPayload.score : undefined,
     passed: typeof reflectionPayload.passed === "boolean" ? reflectionPayload.passed : undefined,
   } : state.reflection;
+  const nested = objectPayload(payload.payload);
+  const agentName = typeof event.agent === "string" ? event.agent : typeof payload.agent === "string" ? payload.agent : typeof nested.agent === "string" ? nested.agent : undefined;
+  const agents = agentName ? [{ name: agentName, state: event.type, summary: typeof payload.message === "string" ? payload.message : typeof nested.message === "string" ? nested.message : undefined, sequence: event.sequence }, ...state.agents.filter(({ name }) => name !== agentName)] : state.agents;
+  const usagePayload = event.type === "usage.snapshot" && typeof payload.totalTokens !== "number" ? nested : payload;
+  const usage = event.type === "usage.snapshot" && typeof usagePayload.totalTokens === "number" ? usagePayload as unknown as RunViewState["usage"] : state.usage;
   return {
     lastSequence: event.sequence,
     stream: typeof delta === "string" ? state.stream + delta : state.stream,
     events: [...state.events, event].slice(-MAX_VISIBLE_EVENTS),
     reflection,
+    agents,
+    usage,
   };
 }
 

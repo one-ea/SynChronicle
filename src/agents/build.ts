@@ -125,7 +125,7 @@ export function buildCoordinator(
           hasBudget,
           hardStop: cfg.budget?.hard_stop ?? false,
           reviewer: new Reviewer({
-            model: models.forReviewer(),
+            model: models.forReviewerWithHotSwap(),
             retryLimit: reflection.review_retry_limit,
             canContinue: () => !(cfg.budget?.hard_stop ?? false) || (hasBudget?.() ?? true),
             ...usage,

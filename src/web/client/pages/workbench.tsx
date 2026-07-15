@@ -13,7 +13,7 @@ export interface WorkbenchProject {
   title: string;
   version?: number;
   chapters?: WorkbenchChapter[];
-  latestRun?: { id: string; status: string; version?: number; checkpointVersion?: number | null } | null;
+  latestRun?: { id: string; status: string; version?: number; checkpointVersion?: number | null; waiting_for_durable_commit?: boolean } | null;
   agents?: Array<{ name: string; state: string; summary?: string; sequence?: number }>;
   usage?: { inputTokens: number; outputTokens: number; totalTokens: number; cost: string; byAgent: Array<{ agent: string; inputTokens: number; outputTokens: number; totalTokens: number; cost: string }> };
   pendingQuestion?: { id: string; questions: Array<{ header: string; question: string; options: string[] }> } | null;
@@ -43,8 +43,16 @@ export function WorkbenchPage({ api, project, initialEvents, subscribe, connecti
   const [leftWidth, setLeftWidth] = useState(280);
   const [rightWidth, setRightWidth] = useState(300);
   const [diagnostics, setDiagnostics] = useState<string | null>(null);
+  const [pendingQuestion, setPendingQuestion] = useState(project.pendingQuestion);
+  const [abortWaiting, setAbortWaiting] = useState(Boolean(project.latestRun?.waiting_for_durable_commit));
   const scrollPositions = useRef<Record<WorkbenchPanel, number>>({ project: 0, writing: 0, status: 0 });
   const { state, connection } = useRunEvents({ runId, initialEvents, subscribe });
+  useEffect(() => {
+    const latest = state.events.at(-1);
+    const payload = latest?.payload && typeof latest.payload === "object" ? latest.payload as Record<string, unknown> : {};
+    const message = typeof payload.message === "string" ? payload.message : latest?.message ?? "";
+    if (/完成|cancel|abort|终止/i.test(message)) setAbortWaiting(false);
+  }, [state.events]);
 
   useEffect(() => {
     const current = document.querySelector<HTMLElement>(`[data-panel='${panel}'] .activity-scroll, [data-panel='${panel}']`);
@@ -93,12 +101,14 @@ export function WorkbenchPage({ api, project, initialEvents, subscribe, connecti
   async function command(name: "pause" | "resume" | "abort") {
     if (!runId) throw new Error("Run unavailable");
     if (name === "abort" && !window.confirm("确认终止当前运行？未提交的生成内容可能丢失。")) return;
-    await api.request(`/api/projects/${project.id}/runs/${runId}/${name}`, { method: "POST" });
+    const result = await api.request<{ waiting_for_durable_commit?: boolean }>(`/api/projects/${project.id}/runs/${runId}/${name}`, { method: "POST" });
+    if (name === "abort") setAbortWaiting(Boolean(result.waiting_for_durable_commit));
   }
 
   async function answer(questionId: string, answers: Record<string, string>) {
     if (!runId) throw new Error("Run unavailable");
     await api.request(`/api/projects/${project.id}/runs/${runId}/answer`, { method: "POST", body: JSON.stringify({ questionId, answers }) });
+    setPendingQuestion(null);
   }
 
   async function switchModel(role: string, provider: string, model: string) {
@@ -122,7 +132,7 @@ export function WorkbenchPage({ api, project, initialEvents, subscribe, connecti
     <div className={`workbench-grid left-${leftCollapsed ? "closed" : "open"} right-${rightCollapsed ? "closed" : "open"}`} style={{ "--left-open-width": `${leftWidth}px`, "--right-open-width": `${rightWidth}px` } as CSSProperties}>
       <div data-panel="project" data-mobile-active={panel === "project"}><ProjectNav title={project.title} chapters={project.chapters ?? []} selectedChapterId={selectedChapter?.id} collapsed={leftCollapsed} onToggle={() => setLeftCollapsed((value) => !value)} onSelect={selectChapter} /></div>
       <div className="writing-column" data-panel="writing" data-mobile-active={panel === "writing"}><ActivityFeed state={state} chapter={selectedChapter} /><PromptInput onSend={steer} /></div>
-      <div data-panel="status" data-mobile-active={panel === "status"}><RunSidebar state={state} connection={connectionOverride ?? connection} status={project.latestRun?.status} agents={project.agents ?? []} usage={project.usage} pendingQuestion={project.pendingQuestion} diagnostics={diagnostics} controlsDisabled={!runId} collapsed={rightCollapsed} onToggle={() => setRightCollapsed((value) => !value)} onCommand={command} onAnswer={answer} onSwitchModel={switchModel} onDiagnose={diagnose} /></div>
+      <div data-panel="status" data-mobile-active={panel === "status"}><RunSidebar state={state} connection={connectionOverride ?? connection} status={project.latestRun?.status} agents={state.agents.length ? state.agents : project.agents ?? []} usage={state.usage ?? project.usage} pendingQuestion={pendingQuestion} diagnostics={diagnostics} abortWaiting={abortWaiting} controlsDisabled={!runId} collapsed={rightCollapsed} onToggle={() => setRightCollapsed((value) => !value)} onCommand={command} onAnswer={answer} onSwitchModel={switchModel} onDiagnose={diagnose} /></div>
     </div>
     <MobileNav current={panel} onChange={selectPanel} />
   </div>;

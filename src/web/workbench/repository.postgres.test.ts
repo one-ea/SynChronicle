@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDatabase, type Database } from "../../db/client.js";
 import { migrateDatabase } from "../../db/migrate.js";
-import { chapters, checkpoints, projects, runEvents, runs, tasks, usageRecords, users } from "../../db/schema/index.js";
+import { chapters, checkpoints, projects, runCommands, runEvents, runs, tasks, usageRecords, users } from "../../db/schema/index.js";
 import type { RequestAuth } from "../auth/plugin.js";
 import { WorkbenchRepository } from "./repository.js";
 
@@ -38,7 +38,10 @@ postgres("PostgreSQL workbench projection", () => {
     ]);
     const [checkpoint] = await database.insert(checkpoints).values({ userId: alice.userId, projectId: project!.id, runId: run!.id, version: 3, state: { agents: [{ name: "Reviewer", state: "waiting" }] }, taskFingerprint: "fp", projectVersion: 1 }).returning();
     await database.update(runs).set({ latestCheckpointId: checkpoint!.id }).where(eq(runs.id, run!.id));
-    await database.insert(runEvents).values({ userId: alice.userId, projectId: project!.id, runId: run!.id, sequence: 1, stableId: "writer-1", type: "system", payload: { type: "system", agent: "Writer", message: "drafting" } });
+    await database.insert(runEvents).values([
+      { userId: alice.userId, projectId: project!.id, runId: run!.id, sequence: 1, stableId: "writer-1", type: "system", payload: { type: "system", agent: "Writer", message: "drafting" } },
+      { userId: alice.userId, projectId: project!.id, runId: run!.id, sequence: 2, stableId: "ask:question-1", type: "tool", payload: { type: "tool", id: "ask:question-1", tool: "ask_user", payload: { questionId: "question-1", questions: [{ header: "篇幅", question: "希望多长？", options: ["长篇"] }] } } },
+    ]);
     await database.insert(usageRecords).values([
       { userId: alice.userId, projectId: project!.id, runId: run!.id, snapshotId: "u1", agent: "Writer", credentialSource: "user", provider: "openai", model: "gpt", inputTokens: 10, outputTokens: 5, cost: "0.01000000", latencyMs: 10 },
       { userId: alice.userId, projectId: project!.id, runId: run!.id, snapshotId: "u2", agent: "Writer", credentialSource: "user", provider: "openai", model: "gpt", inputTokens: 20, outputTokens: 7, cost: "0.02000000", latencyMs: 10 },
@@ -50,7 +53,10 @@ postgres("PostgreSQL workbench projection", () => {
     expect(result?.chapters).toEqual([expect.objectContaining({ title: "New", body: "new", version: 2 })]);
     expect(result?.latestRun).toMatchObject({ id: run!.id, version: 3, task: { id: task!.id, status: "running" }, checkpointVersion: 3 });
     expect(result?.agents).toEqual(expect.arrayContaining([expect.objectContaining({ name: "Writer", summary: "drafting" }), expect.objectContaining({ name: "Reviewer", state: "waiting" })]));
-    expect(result?.usage).toMatchObject({ inputTokens: 30, outputTokens: 12, totalTokens: 42, cost: "0.03000000" });
+    expect(result?.usage).toMatchObject({ inputTokens: 20, outputTokens: 7, totalTokens: 27, cost: "0.02000000" });
+    expect(result?.pendingQuestion).toMatchObject({ id: "question-1" });
+    await database.insert(runCommands).values({ userId: alice.userId, projectId: project!.id, runId: run!.id, commandId: "answer:question-1", instruction: "answer", status: "applied" });
+    expect((await repository.get(alice, project!.id))?.pendingQuestion).toBeNull();
     expect(await repository.get(bob, project!.id)).toBeNull();
   });
 

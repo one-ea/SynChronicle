@@ -14,15 +14,16 @@ describe("workbench projections", () => {
     ]);
   });
 
-  it("aggregates usage records by Agent and run totals", () => {
+  it("uses only the latest cumulative snapshot per usage dimension", () => {
     expect(projectUsage([
-      { agent: "Reviewer", inputTokens: "4", outputTokens: "2", cost: "0.003" },
-      { agent: "Writer", inputTokens: "10", outputTokens: "5", cost: "0.010" },
+      { snapshotId: "review-1", agent: "Reviewer", credentialSource: "user", provider: "openai", model: "review", inputTokens: "4", outputTokens: "2", cost: "0.003", createdAt: new Date(1) },
+      { snapshotId: "writer-old", agent: "Writer", credentialSource: "user", provider: "openai", model: "gpt", inputTokens: "10", outputTokens: "5", cost: "0.010", createdAt: new Date(1) },
+      { snapshotId: "writer-new", agent: "Writer", credentialSource: "user", provider: "openai", model: "gpt", inputTokens: "25", outputTokens: "9", cost: "0.020", createdAt: new Date(2) },
     ])).toEqual({
-      inputTokens: 14, outputTokens: 7, totalTokens: 21, cost: "0.01300000",
+      inputTokens: 29, outputTokens: 11, totalTokens: 40, cost: "0.02300000",
       byAgent: [
         { agent: "Reviewer", inputTokens: 4, outputTokens: 2, totalTokens: 6, cost: "0.00300000" },
-        { agent: "Writer", inputTokens: 10, outputTokens: 5, totalTokens: 15, cost: "0.01000000" },
+        { agent: "Writer", inputTokens: 25, outputTokens: 9, totalTokens: 34, cost: "0.02000000" },
       ],
     });
   });

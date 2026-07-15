@@ -35,13 +35,21 @@ export class ModelSet {
   private target(provider: string, model: string): ModelTarget { return { provider, model, instance: this.factory(provider, model) }; }
   forRole(role: string): LanguageModelInstance { return (this.roles.get(role) ?? this.defaultTarget).instance; }
   forReviewer(report?: FailoverReporter): LanguageModelInstance {
-    const primary = this.reviewerTarget ?? this.roles.get("reviewer") ?? this.defaultTarget;
+    const primary = this.roles.get("reviewer") ?? this.reviewerTarget ?? this.defaultTarget;
     return this.reviewerFallbacks.length ? failoverModel("reviewer", primary, this.reviewerFallbacks, report) : primary.instance;
   }
+  forReviewerWithHotSwap(report?: FailoverReporter): LanguageModelInstance {
+    return this.dynamic(() => {
+      const primary = this.roles.get("reviewer") ?? this.reviewerTarget ?? this.defaultTarget;
+      return this.reviewerFallbacks.length ? failoverModel("reviewer", primary, this.reviewerFallbacks, report) : primary.instance;
+    });
+  }
   forRoleWithFailover(role: string, report?: FailoverReporter): LanguageModelInstance {
-    const primary = this.roles.get(role);
-    const fallbacks = this.fallbacks.get(role) ?? [];
-    return primary && fallbacks.length ? failoverModel(role, primary, fallbacks, report) : (primary ?? this.defaultTarget).instance;
+    return this.dynamic(() => {
+      const primary = this.roles.get(role);
+      const fallbacks = this.fallbacks.get(role) ?? [];
+      return primary && fallbacks.length ? failoverModel(role, primary, fallbacks, report) : (primary ?? this.defaultTarget).instance;
+    });
   }
   async swap(role: string, provider: string, model: string): Promise<void> {
     if (!this.config.providers[provider]) throw new Error(`provider ${JSON.stringify(provider)} is not configured`);
@@ -53,6 +61,14 @@ export class ModelSet {
     if (!role || role === "default") return { provider: this.defaultTarget.provider, model: this.defaultTarget.model, explicit: true };
     const target = this.roles.get(role);
     return target ? { provider: target.provider, model: target.model, explicit: true } : { provider: this.defaultTarget.provider, model: this.defaultTarget.model, explicit: false };
+  }
+  private dynamic(resolve: () => LanguageModelInstance): LanguageModelInstance {
+    return new Proxy({} as LanguageModelInstance, {
+      get(_target, property) {
+        const value = Reflect.get(resolve() as object, property);
+        return typeof value === "function" ? value.bind(resolve()) : value;
+      },
+    });
   }
 }
 

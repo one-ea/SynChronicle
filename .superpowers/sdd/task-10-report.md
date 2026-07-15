@@ -85,3 +85,32 @@ Implemented the literary AI-native creative workbench with a responsive three-co
 
 - PostgreSQL-conditional tests require `TEST_DATABASE_URL`; 45 tests remain skipped in this environment, including the 2 new workbench projection tests.
 - Default `Host` currently exposes steer but does not expose optional hot model swap or external answer methods. Structured commands are durable and Worker-ready; specialized Host adapters receive direct capability calls, while the default Host consumes them as steering instructions at an Agent boundary.
+
+## Live Control Synchronization Follow-up
+
+- Usage projection now treats `usage_records` as cumulative snapshots. It selects the newest snapshot per Agent/credential source/provider/model dimension and totals only those latest values.
+- `ModelSet` supplies hot-swappable model handles to Coordinator role agents and reflective reviewers. `Host.switchModel` persists role selections in run metadata and restores them before resumed work.
+- Default Host AskUser uses a deterministic question ID, persists the public question and durable answer in the runtime queue, resolves an active waiter, and reuses the answer after Host reconstruction.
+- Worker renewal polling delivers AskUser/model commands while an Agent call is suspended; command claiming and acknowledgement preserve exactly-once durable delivery.
+- Host usage observations emit hash-stable public usage snapshots. The browser reducer updates live Agent and usage projections from production events.
+- Worker durable commit enter/exit updates run control state. Abort responses and workbench projection expose `waiting_for_durable_commit`; the UI keeps the waiting status until a terminal event arrives.
+- Applied answer commands suppress answered AskUser projections. The UI removes a submitted question immediately and prevents duplicate submission.
+- Run controls, diagnostics, AskUser, model switching, and steering catch API/network failures, include request IDs when present, and expose retry actions.
+
+## Follow-up Verification
+
+- Added unit coverage for cumulative snapshot selection, dynamic model handles, default Host AskUser recovery/model persistence, live Agent/usage reducer updates, durable abort state, answered-question suppression, and control retry behavior.
+- Added PostgreSQL-conditional integration coverage chaining latest usage snapshots, AskUser projection, applied answer suppression, Agent/checkpoint state, and tenant isolation.
+- Playwright continues to use production-compatible projection fields at 375, 768, 1024, and 1440 pixels.
+- Task 15 remains responsible for full-system browser-to-Worker E2E with a real PostgreSQL service and Provider execution.
+
+## Current Concerns
+
+- PostgreSQL-conditional tests require `TEST_DATABASE_URL` and remain skipped when that service is unavailable.
+- Full-system AskUser suspension, Worker delivery, provider hot swap, and browser completion are covered across unit/integration boundaries here; Task 15 will provide the single real-service E2E chain.
+
+## Final Synchronization Gate
+
+- Vitest: 439 passed, 45 PostgreSQL-conditional skipped.
+- Playwright Chromium: 8 passed across 375, 768, 1024, and 1440 pixel viewports. One initial Vite startup timing failure was non-reproducible; the isolated retry and complete rerun passed.
+- TypeScript, production build, Drizzle migration check, and Git diff check passed.

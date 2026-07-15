@@ -62,6 +62,16 @@ describe("extra passthrough", () => {
 });
 
 describe("ModelSet", () => {
+  it("routes an existing role handle to the model selected after swap", async () => {
+    const calls: string[] = [];
+    const model = (id: string) => ({ specificationVersion: "v2", provider: "test", modelId: id, supportedUrls: {}, doGenerate: async () => { calls.push(id); return { content: [], finishReason: "stop", usage: { inputTokens: 0, outputTokens: 0 }, warnings: [] }; }, doStream: async () => { throw new Error("unused"); } }) as any;
+    const set = new ModelSet({ provider: "mock", model: "one", providers: { mock: { api_key: "x" }, other: { api_key: "y" } }, roles: {} }, (_provider, id) => model(id));
+    const handle = set.forRoleWithFailover("writer") as any;
+    await handle.doGenerate({});
+    await set.swap("writer", "other", "two");
+    await handle.doGenerate({});
+    expect(calls).toEqual(["one", "two"]);
+  });
   it("falls back by role, reports failover, and supports swap/currentSelection", async () => {
     const primaryError = Object.assign(new Error("rate limited"), { statusCode: 429 });
     const primary = mockModel("openai", "primary", vi.fn().mockRejectedValue(primaryError));

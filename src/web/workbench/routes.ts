@@ -12,7 +12,7 @@ export interface WorkbenchProjection {
   status: string;
   version: number;
   chapters: Array<{ id: string; runId: string; sequence: number; title: string; body: string; status: string; version: number }>;
-  latestRun: { id: string; status: string; version: number; task: { id: string; status: string; leaseVersion: number } | null; checkpointVersion: number | null } | null;
+  latestRun: { id: string; status: string; version: number; task: { id: string; status: string; leaseVersion: number } | null; checkpointVersion: number | null; waiting_for_durable_commit: boolean } | null;
   agents: Array<{ name: string; state: string; summary?: string; sequence?: number }>;
   usage: { inputTokens: number; outputTokens: number; totalTokens: number; cost: string; byAgent: Array<{ agent: string; inputTokens: number; outputTokens: number; totalTokens: number; cost: string }> };
   pendingQuestion: { id: string; questions: Array<{ header: string; question: string; options: string[] }> } | null;

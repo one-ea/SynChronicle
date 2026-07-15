@@ -1,6 +1,6 @@
-import { and, asc, desc, eq, sql, sum } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import type { Database } from "../../db/client.js";
-import { chapters, checkpoints, projects, runEvents, runs, tasks, usageRecords } from "../../db/schema/index.js";
+import { chapters, checkpoints, projects, runCommands, runEvents, runs, tasks, usageRecords } from "../../db/schema/index.js";
 import type { RequestAuth } from "../auth/plugin.js";
 import type { WorkbenchProjection, WorkbenchRepositoryLike } from "./routes.js";
 
@@ -16,7 +16,7 @@ export class WorkbenchRepository implements WorkbenchRepositoryLike {
     const [run] = await this.db.select().from(runs).where(and(eq(runs.userId, auth.userId), eq(runs.projectId, projectId))).orderBy(desc(runs.createdAt)).limit(1);
     if (!run) return { ...project, chapters: [], latestRun: null, agents: [], usage: emptyUsage, pendingQuestion: null };
 
-    const [chapterRows, taskRows, checkpointRows, eventRows, usageRows] = await Promise.all([
+    const [chapterRows, taskRows, checkpointRows, eventRows, usageRows, answerRows] = await Promise.all([
       this.db.selectDistinctOn([chapters.sequence], { id: chapters.id, runId: chapters.runId, sequence: chapters.sequence, title: chapters.title, body: chapters.body, status: chapters.status, version: chapters.version })
         .from(chapters).where(and(eq(chapters.userId, auth.userId), eq(chapters.projectId, projectId), eq(chapters.runId, run.id))).orderBy(chapters.sequence, desc(chapters.version)),
       this.db.select({ id: tasks.id, status: tasks.status, leaseVersion: tasks.leaseVersion, type: tasks.type }).from(tasks)
@@ -25,8 +25,9 @@ export class WorkbenchRepository implements WorkbenchRepositoryLike {
         .where(and(eq(checkpoints.userId, auth.userId), eq(checkpoints.projectId, projectId), eq(checkpoints.runId, run.id))).orderBy(desc(checkpoints.version)).limit(1),
       this.db.select({ sequence: runEvents.sequence, type: runEvents.type, payload: runEvents.payload }).from(runEvents)
         .where(and(eq(runEvents.userId, auth.userId), eq(runEvents.projectId, projectId), eq(runEvents.runId, run.id))).orderBy(desc(runEvents.sequence)).limit(200),
-      this.db.select({ agent: usageRecords.agent, inputTokens: sum(usageRecords.inputTokens), outputTokens: sum(usageRecords.outputTokens), cost: sum(usageRecords.cost) }).from(usageRecords)
-        .where(and(eq(usageRecords.userId, auth.userId), eq(usageRecords.projectId, projectId), eq(usageRecords.runId, run.id))).groupBy(usageRecords.agent).orderBy(asc(usageRecords.agent)),
+      this.db.select({ snapshotId: usageRecords.snapshotId, agent: usageRecords.agent, credentialSource: usageRecords.credentialSource, provider: usageRecords.provider, model: usageRecords.model, inputTokens: usageRecords.inputTokens, outputTokens: usageRecords.outputTokens, cost: usageRecords.cost, createdAt: usageRecords.createdAt }).from(usageRecords)
+        .where(and(eq(usageRecords.userId, auth.userId), eq(usageRecords.projectId, projectId), eq(usageRecords.runId, run.id))).orderBy(desc(usageRecords.createdAt), desc(usageRecords.snapshotId)),
+      this.db.select({ commandId: runCommands.commandId }).from(runCommands).where(and(eq(runCommands.userId, auth.userId), eq(runCommands.projectId, projectId), eq(runCommands.runId, run.id), sql`${runCommands.commandId} like 'answer:%'`, eq(runCommands.status, "applied"))),
     ]);
     const checkpoint = checkpointRows[0];
     const task = taskRows[0];
@@ -34,10 +35,10 @@ export class WorkbenchRepository implements WorkbenchRepositoryLike {
     return {
       ...project,
       chapters: chapterRows,
-      latestRun: { id: run.id, status: run.status, version: checkpoint?.version ?? 0, task: task ? { id: task.id, status: task.status, leaseVersion: task.leaseVersion } : null, checkpointVersion: checkpoint?.version ?? null },
+      latestRun: { id: run.id, status: run.status, version: checkpoint?.version ?? 0, task: task ? { id: task.id, status: task.status, leaseVersion: task.leaseVersion } : null, checkpointVersion: checkpoint?.version ?? null, waiting_for_durable_commit: Boolean(run.resumeData && typeof run.resumeData === "object" && (run.resumeData as Record<string, unknown>).durableCommit) },
       agents: projectAgents(eventRows, task, checkpoint?.state),
       usage,
-      pendingQuestion: pendingQuestion(eventRows),
+      pendingQuestion: pendingQuestion(eventRows, new Set(answerRows.map(({ commandId }) => commandId.slice("answer:".length)))),
     };
   }
 
@@ -51,8 +52,13 @@ export class WorkbenchRepository implements WorkbenchRepositoryLike {
   }
 }
 
-export function projectUsage(rows: Array<{ agent: string; inputTokens: string | null; outputTokens: string | null; cost: string | null }>): WorkbenchProjection["usage"] {
-  const byAgent = rows.map((row) => {
+export function projectUsage(rows: Array<{ snapshotId: string; agent: string; credentialSource: string; provider: string; model: string; inputTokens: string | number | null; outputTokens: string | number | null; cost: string | null; createdAt: Date }>): WorkbenchProjection["usage"] {
+  const latest = new Map<string, typeof rows[number]>();
+  for (const row of [...rows].sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime() || right.snapshotId.localeCompare(left.snapshotId))) {
+    const dimension = [row.agent, row.credentialSource, row.provider, row.model].join("\0");
+    if (!latest.has(dimension)) latest.set(dimension, row);
+  }
+  const byAgent = [...latest.values()].sort((left, right) => left.agent.localeCompare(right.agent)).map((row) => {
     const inputTokens = Number(row.inputTokens ?? 0);
     const outputTokens = Number(row.outputTokens ?? 0);
     return { agent: row.agent, inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, cost: Number(row.cost ?? 0).toFixed(8) };
@@ -81,7 +87,7 @@ export function projectAgents(events: Array<{ sequence: number; type: string; pa
   return [...agents.values()];
 }
 
-function pendingQuestion(events: Array<{ sequence: number; type: string; payload: unknown }>): WorkbenchProjection["pendingQuestion"] {
+function pendingQuestion(events: Array<{ sequence: number; type: string; payload: unknown }>, answered = new Set<string>()): WorkbenchProjection["pendingQuestion"] {
   for (const event of events) {
     const payload = eventBody(event);
     const argumentsPayload = payload.payload && typeof payload.payload === "object" ? payload.payload as Record<string, unknown> : payload;
@@ -89,9 +95,11 @@ function pendingQuestion(events: Array<{ sequence: number; type: string; payload
     const questions = argumentsPayload.questions.flatMap((candidate) => {
       if (!candidate || typeof candidate !== "object") return [];
       const row = candidate as Record<string, unknown>;
-      return typeof row.header === "string" && typeof row.question === "string" ? [{ header: row.header, question: row.question, options: Array.isArray(row.options) ? row.options.filter((value): value is string => typeof value === "string") : [] }] : [];
+      const options = Array.isArray(row.options) ? row.options.flatMap((value) => typeof value === "string" ? [value] : value && typeof value === "object" && typeof (value as Record<string, unknown>).label === "string" ? [String((value as Record<string, unknown>).label)] : []) : [];
+      return typeof row.header === "string" && typeof row.question === "string" ? [{ header: row.header, question: row.question, options }] : [];
     });
-    if (questions.length) return { id: `event-${event.sequence}`, questions };
+    const questionId = typeof payload.id === "string" ? payload.id.replace(/^ask:/, "") : `event-${event.sequence}`;
+    if (questions.length && !answered.has(questionId)) return { id: questionId, questions };
   }
   return null;
 }
