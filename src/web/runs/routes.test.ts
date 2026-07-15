@@ -161,4 +161,21 @@ describe("run command routes", () => {
     expect(response.statusCode).toBe(400);
     await app.close();
   });
+
+  it("maps AskUser answers and model switches onto durable run commands", async () => {
+    const { app } = await testApp();
+    const headers = { "x-user-id": "alice" };
+    const start = await app.inject({ method: "POST", url: "/api/projects/project-a/runs", headers, payload: { idempotencyKey: "interactive-start" } });
+    const run = start.json().run as RunRecord;
+    const answer = await app.inject({ method: "POST", url: `/api/projects/project-a/runs/${run.id}/answer`, headers, payload: { questionId: "event-8", answers: { "希望多长？": "长篇" } } });
+    const model = await app.inject({ method: "POST", url: `/api/projects/project-a/runs/${run.id}/model`, headers, payload: { role: "writer", provider: "openai", model: "gpt-5" } });
+
+    expect(answer.statusCode).toBe(200);
+    expect(model.statusCode).toBe(200);
+    expect(model.json().run.resumeData.steerCommands).toEqual(expect.arrayContaining([
+      expect.objectContaining({ instruction: "[AskUser] {\"questionId\":\"event-8\",\"answers\":{\"希望多长？\":\"长篇\"}}" }),
+      expect.objectContaining({ instruction: "[ModelSwitch] {\"role\":\"writer\",\"provider\":\"openai\",\"model\":\"gpt-5\"}" }),
+    ]));
+    await app.close();
+  });
 });

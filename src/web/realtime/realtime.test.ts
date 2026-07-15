@@ -77,6 +77,14 @@ async function connect(app: ReturnType<typeof Fastify>, url: string, headers = u
 const upgrade = (userId = alice.userId, origin = "https://app.example.test") => ({ headers: { cookie: "session=valid", origin, "x-user-id": userId } });
 
 describe("run event websocket", () => {
+  it("delivers the production stream.delta payload without reshaping it", async () => {
+    const { app, repository } = await testApp();
+    repository.events.push({ ...event(1), type: "stream.delta", payload: { taskId: "task-1", agent: "Writer", chunkSequence: 1, text: "潮声" } });
+    const client = await connect(app, `/ws/runs/${scope.runId}?after=0`);
+    expect(await client.nextJson()).toMatchObject({ sequence: 1, type: "stream.delta", payload: { agent: "Writer", text: "潮声" } });
+    client.socket.terminate();
+  });
+
   it("replays every event strictly after the cursor before live events", async () => {
     const { app, repository, broker } = await testApp();
     repository.events.push(event(1), event(2), event(3));

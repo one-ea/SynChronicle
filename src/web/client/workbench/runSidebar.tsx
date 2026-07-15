@@ -1,4 +1,6 @@
 import type { ConnectionState, RunViewState } from "../realtime/useRunEvents.js";
+import { useState, type FormEvent } from "react";
+import type { WorkbenchProject } from "../pages/workbench.js";
 
 const connectionCopy: Record<ConnectionState, string> = {
   idle: "等待运行",
@@ -9,7 +11,39 @@ const connectionCopy: Record<ConnectionState, string> = {
   error: "实时事件解析失败",
 };
 
-export function RunSidebar({ state, connection, status, collapsed, onToggle }: { state: RunViewState; connection: ConnectionState; status?: string; collapsed: boolean; onToggle(): void }) {
+interface RunSidebarProps {
+  state: RunViewState;
+  connection: ConnectionState;
+  status?: string;
+  agents: NonNullable<WorkbenchProject["agents"]>;
+  usage?: WorkbenchProject["usage"];
+  pendingQuestion?: WorkbenchProject["pendingQuestion"];
+  diagnostics: string | null;
+  controlsDisabled: boolean;
+  collapsed: boolean;
+  onToggle(): void;
+  onCommand(command: "pause" | "resume" | "abort"): Promise<void>;
+  onAnswer(questionId: string, answers: Record<string, string>): Promise<void>;
+  onSwitchModel(role: string, provider: string, model: string): Promise<void>;
+  onDiagnose(): Promise<void>;
+}
+
+export function RunSidebar(props: RunSidebarProps) {
+  const { state, connection, status, collapsed, onToggle } = props;
+  const [pending, setPending] = useState(false);
+  async function run(action: () => Promise<void>) { setPending(true); try { await action(); } finally { setPending(false); } }
+  async function answer(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!props.pendingQuestion) return;
+    const data = new FormData(event.currentTarget);
+    const answers = Object.fromEntries(props.pendingQuestion.questions.map(({ question }) => [question, String(data.get(question) ?? "")]).filter(([, value]) => value));
+    await run(() => props.onAnswer(props.pendingQuestion!.id, answers));
+  }
+  async function model(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    await run(() => props.onSwitchModel(String(data.get("role")), String(data.get("provider")), String(data.get("model"))));
+  }
   const connectionRole = connection === "backpressure" || connection === "error" ? "alert" : "status";
   return <aside className="workbench-panel run-sidebar" aria-label="运行状态" data-collapsed={collapsed}>
     <header className="panel-heading">
@@ -23,9 +57,12 @@ export function RunSidebar({ state, connection, status, collapsed, onToggle }: {
         <p>Reviewer · 第 {state.reflection.round ?? "-"}/{state.reflection.maxRounds ?? "-"} 轮</p>
         <strong>{state.reflection.score ?? "-"}</strong><small>{state.reflection.passed ? "通过" : "继续修订"}</small>
       </section>}
-      <section className="agent-list"><h3>Agents</h3><p><span>Architect</span><small>结构待命</small></p><p><span>Writer</span><small>{status === "running" ? "正在创作" : "待命"}</small></p><p><span>Reviewer</span><small>{state.reflection ? "已回传评审" : "待命"}</small></p></section>
-      <section className="usage-card"><h3>Usage</h3><p>本次运行的 token 与费用将在服务端 usage 汇总后显示。</p></section>
-      <div className="control-placeholder" aria-label="运行控制占位"><button type="button" disabled title="将在后续任务接入">暂停</button><button type="button" disabled title="将在后续任务接入">继续</button><button type="button" disabled title="将在后续任务接入">终止</button></div>
+      <section className="agent-list"><h3>Agents</h3>{props.agents.length ? props.agents.map((agent) => <p key={agent.name}><span>{agent.name}</span><small>{agent.summary ?? agent.state}</small></p>) : <p className="muted-copy">暂无 Agent 状态事件。</p>}</section>
+      <section className="usage-card"><h3>Usage</h3>{props.usage ? <><p>{props.usage.totalTokens} tokens</p><p>${props.usage.cost}</p></> : <p>暂无用量记录。</p>}</section>
+      <div className="control-placeholder" aria-label="运行控制"><button type="button" disabled={props.controlsDisabled || pending} onClick={() => void run(() => props.onCommand("pause"))} aria-label="暂停运行">暂停</button><button type="button" disabled={props.controlsDisabled || pending} onClick={() => void run(() => props.onCommand("resume"))} aria-label="继续运行">继续</button><button type="button" disabled={props.controlsDisabled || pending} onClick={() => void run(() => props.onCommand("abort"))} aria-label="终止运行">终止</button></div>
+      {props.pendingQuestion && <form className="sidebar-form" onSubmit={(event) => void answer(event)}><h3>需要你的回答</h3>{props.pendingQuestion.questions.map((question) => <label key={question.question}>{question.question}<select name={question.question} required defaultValue=""><option value="" disabled>请选择</option>{question.options.map((option) => <option key={option}>{option}</option>)}</select></label>)}<button type="submit" disabled={pending}>提交回答</button></form>}
+      <form className="sidebar-form" onSubmit={(event) => void model(event)}><h3>模型切换</h3><label>角色<input name="role" required /></label><label>Provider<input name="provider" required /></label><label>模型<input name="model" required /></label><button type="submit" disabled={props.controlsDisabled || pending}>切换模型</button></form>
+      <section className="diagnostics-card"><button type="button" disabled={props.controlsDisabled || pending} onClick={() => void run(props.onDiagnose)}>运行诊断</button>{props.diagnostics && <p role="status">{props.diagnostics}</p>}</section>
     </div>}
   </aside>;
 }

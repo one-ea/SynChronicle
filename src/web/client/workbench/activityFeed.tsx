@@ -4,8 +4,9 @@ import type { WorkbenchChapter } from "../pages/workbench.js";
 function eventLabel(event: RunEventMessage) {
   if (event.type === "reflection") return "反思评审";
   if (event.type === "error") return "运行错误";
-  if (event.type === "stream" || event.type === "stream_delta") return "正文增量";
-  return event.agent ?? event.type;
+  if (event.type === "stream.delta" || event.type === "stream" || event.type === "stream_delta") return "正文增量";
+  const payload = event.payload && typeof event.payload === "object" ? event.payload as Record<string, unknown> : {};
+  return event.agent ?? (typeof payload.agent === "string" ? payload.agent : event.type);
 }
 
 export function ActivityFeed({ state, chapter }: { state: RunViewState; chapter?: WorkbenchChapter }) {
@@ -16,13 +17,13 @@ export function ActivityFeed({ state, chapter }: { state: RunViewState; chapter?
     </header>
     <div className="activity-scroll" data-scroll-key="writing">
       {chapter && <article className="chapter-reader" aria-labelledby="chapter-reader-title">
-        <p className="section-number">Chapter {String(chapter.order).padStart(2, "0")}</p>
+        <p className="section-number">Chapter {String(chapter.sequence).padStart(2, "0")}</p>
         <h2 id="chapter-reader-title">{chapter.title}</h2>
         {chapter.body ? <p>{chapter.body}</p> : <p className="muted-copy">这一章仍在等待正文。</p>}
       </article>}
       {state.stream && <article className="stream-card" aria-live="polite"><p className="section-number">实时正文</p><p>{state.stream}</p></article>}
       {state.events.length === 0 ? <section className="feed-empty"><h2>等待第一行文字</h2><p>运行事件会按发生顺序出现在这里。</p></section> : <ol className="event-list">
-        {state.events.filter((event) => event.type !== "stream" && event.type !== "stream_delta").map((event) => <li key={event.sequence}>
+        {state.events.filter((event) => !["stream.delta", "stream", "stream_delta"].includes(event.type)).map((event) => <li key={event.sequence}>
           <span className={`event-marker event-${event.type}`} aria-hidden="true" />
           <div><small>{eventLabel(event)} · #{event.sequence}</small><p>{event.message ?? "运行状态已更新"}</p></div>
         </li>)}

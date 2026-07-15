@@ -21,6 +21,8 @@ import {
 } from "./projects/service.js";
 import { runRoutes } from "./runs/routes.js";
 import { realtimeRoutes } from "./realtime/routes.js";
+import { WorkbenchRepository } from "./workbench/repository.js";
+import { workbenchRoutes } from "./workbench/routes.js";
 
 type WebServerCommonOptions = Partial<Pick<WebConfig, "publicUrl" | "trustProxy">> & { staticRoot?: string | null };
 
@@ -77,6 +79,10 @@ export async function buildWebServer(options: WebServerOptions): Promise<Fastify
   await app.register(runRoutes, {
     prefix: "/api/projects/:projectId/runs",
     repository: new SchedulerRepository(database),
+  });
+  await app.register(workbenchRoutes, {
+    prefix: "/api/projects",
+    repository: new WorkbenchRepository(database),
   });
   app.get("/api/health", async () => ({ status: "ok" as const }));
   const clientRoot = options.staticRoot === undefined

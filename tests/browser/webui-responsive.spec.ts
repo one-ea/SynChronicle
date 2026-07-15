@@ -17,7 +17,7 @@ for (const width of [375, 768, 1024, 1440]) {
     await page.route("**/api/projects/", async (route) => {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [project] }) });
     });
-    await page.goto("/projects");
+    await page.goto("/projects", { waitUntil: "domcontentloaded" });
 
     await expect(page.getByRole("heading", { name: "你的作品" })).toBeVisible();
     await expect(page.getByRole("navigation", { name: "主导航" })).toBeVisible();
@@ -35,14 +35,14 @@ for (const width of [375, 768, 1024, 1440]) {
     await page.route("**/api/projects/", async (route) => {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [project] }) });
     });
-    await page.route(`**/api/projects/${project.id}`, async (route) => {
-      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ project: {
+    await page.route(`**/api/projects/${project.id}/workbench`, async (route) => {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ workbench: {
         ...project,
-        chapters: [{ id: "chapter-1", title: "潮声抵达前", order: 1, status: "draft", body: "她在码头读完了第一封信。" }],
-        latestRun: null,
+        chapters: [{ id: "chapter-1", runId: null, sequence: 1, title: "潮声抵达前", status: "draft", body: "她在码头读完了第一封信。", version: 1 }],
+        latestRun: null, agents: [], usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, cost: "0.00000000", byAgent: [] }, pendingQuestion: null,
       } }) });
     });
-    await page.goto(`/projects/${project.id}?panel=writing&chapter=chapter-1`);
+    await page.goto(`/projects/${project.id}?panel=writing&chapter=chapter-1`, { waitUntil: "domcontentloaded" });
 
     await expect(page.getByRole("heading", { name: "创作流" })).toBeVisible();
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);

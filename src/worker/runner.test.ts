@@ -131,6 +131,26 @@ describe("WorkerRunner", () => {
     expect(repository.acknowledgeSteerCommands).toHaveBeenCalledWith(claimed.id, "worker-1", claimed.leaseVersion, ["steer-1"]);
   });
 
+  it("dispatches durable AskUser and model commands to matching Host capabilities", async () => {
+    const claimed = task();
+    const commands = [
+      { id: "answer:event-8", instruction: "[AskUser] {\"questionId\":\"event-8\",\"answers\":{\"希望多长？\":\"长篇\"}}" },
+      { id: "model:req-1", instruction: "[ModelSwitch] {\"role\":\"writer\",\"provider\":\"openai\",\"model\":\"gpt-5\"}" },
+    ];
+    const repository = scheduler(claimed, { desiredState: "running", steerCommands: commands });
+    let boundary!: () => Promise<void>;
+    const fakeHost = host({ onBoundary: (handler) => { boundary = handler; }, execute: async () => { await boundary(); } }).value;
+    fakeHost.answerUser = vi.fn().mockResolvedValue(undefined);
+    fakeHost.switchModel = vi.fn().mockResolvedValue(undefined);
+
+    await new WorkerRunner({ scheduler: repository, createHost: async () => fakeHost, workerId: "worker-1", leaseMs: 30_000 }).runOnce();
+
+    expect(fakeHost.answerUser).toHaveBeenCalledWith("event-8", { "希望多长？": "长篇" });
+    expect(fakeHost.switchModel).toHaveBeenCalledWith("writer", "openai", "gpt-5");
+    expect(fakeHost.steer).not.toHaveBeenCalled();
+    expect(repository.acknowledgeSteerCommands).toHaveBeenCalledWith(claimed.id, "worker-1", 1, commands.map(({ id }) => id));
+  });
+
   it("delivers each same-boundary steer command exactly once", async () => {
     const claimed = task();
     const commands = [{ id: "steer-a", instruction: "Direction A" }, { id: "steer-b", instruction: "Direction B" }];

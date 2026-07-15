@@ -35,6 +35,27 @@ const project = (overrides: Record<string, unknown> = {}) => ({
 });
 
 describe("App", () => {
+  it("loads a deep-linked workbench from the production projection endpoint", async () => {
+    const detail = {
+      ...project(),
+      chapters: [{ id: "chapter-1", runId: "run-1", sequence: 1, title: "潮声", body: "生产正文", status: "draft", version: 2 }],
+      latestRun: null,
+      agents: [],
+      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, cost: "0.00000000", byAgent: [] },
+      pendingQuestion: null,
+    };
+    window.history.replaceState({}, "", `/projects/${detail.id}?chapter=chapter-1`);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ body: { projects: [project()] } }))
+      .mockResolvedValueOnce(jsonResponse({ body: { workbench: detail } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    expect(await screen.findByText("生产正文")).toBeVisible();
+    expect(fetchMock).toHaveBeenNthCalledWith(2, `/api/projects/${detail.id}/workbench`, expect.anything());
+  });
+
   it("logs in and renders the current user's projects", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({ status: 401, body: { error: "Unauthorized" } }))

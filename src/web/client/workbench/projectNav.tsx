@@ -18,7 +18,7 @@ export function ProjectNav({ title, chapters, selectedChapterId, collapsed, onTo
     {!collapsed && (chapters.length ? <ol className="chapter-list">
       {chapters.map((chapter) => <li key={chapter.id}>
         <button type="button" className={chapter.id === selectedChapterId ? "chapter-current" : ""} aria-current={chapter.id === selectedChapterId ? "page" : undefined} onClick={() => onSelect(chapter)} aria-label={`查看章节《${chapter.title}》`}>
-          <span>{String(chapter.order).padStart(2, "0")}</span><strong>{chapter.title}</strong><small>{chapter.status === "draft" ? "草稿" : "规划"}</small>
+          <span>{String(chapter.sequence).padStart(2, "0")}</span><strong>{chapter.title}</strong><small>{chapter.status === "draft" ? "草稿" : "规划"}</small>
         </button>
       </li>)}
     </ol> : <p className="panel-empty">作品还没有章节。</p>)}

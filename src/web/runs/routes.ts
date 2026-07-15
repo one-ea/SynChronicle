@@ -18,6 +18,15 @@ const SteerSchema = z.object({
   ),
   instruction: z.string().trim().min(1),
 }).strict();
+const AnswerSchema = z.object({
+  questionId: z.string().trim().min(1).max(200),
+  answers: z.record(z.string().trim().min(1).max(500), z.string().trim().min(1).max(4000)),
+}).strict();
+const ModelSchema = z.object({
+  role: z.string().trim().min(1).max(100),
+  provider: z.string().trim().min(1).max(100),
+  model: z.string().trim().min(1).max(200),
+}).strict();
 
 export type RunRecord = RunRow;
 
@@ -63,4 +72,26 @@ export const runRoutes: FastifyPluginAsync<RunRoutesOptions> = async (app, optio
       return reply.code(200).send({ run: result });
     });
   }
+
+  app.post("/:runId/answer", async (request, reply) => {
+    const params = ParamsSchema.safeParse(request.params);
+    const input = AnswerSchema.safeParse(request.body);
+    if (!params.success || !params.data.runId || !input.success) return reply.code(400).send(invalidBody);
+    const instruction = `[AskUser] ${JSON.stringify(input.data)}`;
+    const result = await options.repository.command(request.auth, params.data.projectId, params.data.runId, "steer", { commandId: `answer:${input.data.questionId}`, instruction });
+    if (result === "missing") return reply.code(404).send(notFoundBody);
+    if (result === "conflict") return reply.code(409).send(conflictBody);
+    return reply.code(200).send({ run: result });
+  });
+
+  app.post("/:runId/model", async (request, reply) => {
+    const params = ParamsSchema.safeParse(request.params);
+    const input = ModelSchema.safeParse(request.body);
+    if (!params.success || !params.data.runId || !input.success) return reply.code(400).send(invalidBody);
+    const instruction = `[ModelSwitch] ${JSON.stringify(input.data)}`;
+    const result = await options.repository.command(request.auth, params.data.projectId, params.data.runId, "steer", { commandId: `model:${request.id}`, instruction });
+    if (result === "missing") return reply.code(404).send(notFoundBody);
+    if (result === "conflict") return reply.code(409).send(conflictBody);
+    return reply.code(200).send({ run: result });
+  });
 };

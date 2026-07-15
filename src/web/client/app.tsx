@@ -46,8 +46,8 @@ function Application() {
   useEffect(() => {
     if (!session.authenticated || !workbenchMatch) return;
     let active = true;
-    apiRef.current.request<{ project: WorkbenchProject }>(`/api/projects/${encodeURIComponent(workbenchMatch[1]!)}`).then(({ project }) => {
-      if (active) setWorkbenchProject(project);
+    apiRef.current.request<{ workbench: WorkbenchProject }>(`/api/projects/${encodeURIComponent(workbenchMatch[1]!)}/workbench`).then(({ workbench }) => {
+      if (active) setWorkbenchProject(workbench);
     }).catch((error) => {
       if (active && !(error instanceof ApiError && error.kind === "unauthorized")) setLoadError("创作台加载失败，请返回作品页重试。");
     });

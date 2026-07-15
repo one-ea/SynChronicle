@@ -21,7 +21,7 @@ it("has no detectable WCAG AA violations on the creative workbench", async () =>
   const { container } = render(<WorkbenchPage api={{ request: vi.fn().mockResolvedValue({}) }} project={{
     id: "project-1",
     title: "雾港来信",
-    chapters: [{ id: "chapter-1", title: "潮声抵达前", order: 1, status: "draft", body: "正文" }],
+    chapters: [{ id: "chapter-1", title: "潮声抵达前", sequence: 1, status: "draft", body: "正文" }],
     latestRun: null,
   }} initialEvents={[]} />);
   await screen.findByRole("heading", { name: "创作流" });

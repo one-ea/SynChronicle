@@ -53,3 +53,35 @@ Implemented the literary AI-native creative workbench with a responsive three-co
 - The current Task 4 project detail route returns project metadata only. Chapter arrays and latest-run metadata need a backend projection before production data can populate those workbench regions.
 - PostgreSQL-conditional tests require `TEST_DATABASE_URL` and remain skipped in this environment.
 - The bounded event window intentionally retains the latest 200 structured events; durable history remains available through server persistence and cursor replay.
+
+## Projection And Realtime Hardening
+
+- Added authenticated `GET /api/projects/:projectId/workbench`, backed by tenant-scoped project, latest run, latest chapter versions, task, checkpoint, event, and usage tables.
+- Projection work is bounded to a fixed query set: project and latest-run lookup followed by parallel chapter/task/checkpoint/event/usage queries. Chapter count and Agent count do not increase query count.
+- Empty projects return `chapters: []`, `latestRun: null`, `agents: []`, zero usage, and `pendingQuestion: null`.
+- Agent state is projected from latest runtime events, task state, and checkpoint Agent snapshots. Usage totals and per-Agent rows aggregate `usage_records`.
+- The browser consumes production `stream.delta` events from `payload.text`; legacy `stream`, `stream_delta`, and `payload.delta` remain compatible.
+- Reconnect attempts reset after a received event or five stable seconds. Consecutive 1013 closes retain exponential state, use capped jittered delays, and reconnect with the last projected cursor.
+- `popstate` restores panel, chapter, focus region, and stored panel scroll position.
+
+## Control Hardening
+
+- Pause, resume, and abort use the existing tenant-scoped run command API; abort requires explicit confirmation.
+- AskUser answers and model switch requests use validated explicit endpoints and durable command IDs.
+- Worker command delivery dispatches structured AskUser/model commands to matching Host capabilities and falls back to durable steer semantics for existing Host implementations.
+- Diagnostics uses a tenant-scoped projection of run status, latest event cursor, and checkpoint version.
+- Static Agent guesses and usage placeholders were removed from the right sidebar.
+
+## Hardening Verification
+
+- Full Vitest suite: 434 passed, 45 PostgreSQL-conditional skipped.
+- Target PostgreSQL projection coverage: 2 conditional tests added for tenant isolation, latest chapter version, task/checkpoint Agent state, usage aggregation, and empty projects.
+- WebSocket coverage: production stream protocol, cursor replay, disconnect-window recovery, duplicate suppression, and 1013 backpressure.
+- Frontend coverage: real protocol projection, legacy compatibility, consecutive 1013 backoff, control APIs, Agent/usage rendering, and history restoration.
+- Playwright Chromium: 8 passed at 375, 768, 1024, and 1440 pixels using the production workbench response schema.
+- Axe WCAG A/AA, TypeScript, production build, Drizzle migration check, and Git diff check passed.
+
+## Updated Concerns
+
+- PostgreSQL-conditional tests require `TEST_DATABASE_URL`; 45 tests remain skipped in this environment, including the 2 new workbench projection tests.
+- Default `Host` currently exposes steer but does not expose optional hot model swap or external answer methods. Structured commands are durable and Worker-ready; specialized Host adapters receive direct capability calls, while the default Host consumes them as steering instructions at an Agent boundary.

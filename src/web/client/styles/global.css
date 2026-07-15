@@ -135,6 +135,11 @@ input { background: transparent; border: 0; border-bottom: 1px solid var(--ink-m
 .agent-list small, .usage-card p, .muted-copy { color: var(--ink-muted); }
 .control-placeholder { display: grid; gap: var(--space-1); grid-template-columns: repeat(3, 1fr); margin-top: var(--space-3); }
 .control-placeholder button { min-height: 44px; }
+.sidebar-form, .diagnostics-card { border-top: 1px solid var(--rule); display: grid; gap: 0.6rem; margin-top: var(--space-3); padding-top: var(--space-2); }
+.sidebar-form h3 { font-family: var(--font-display); margin: 0; }
+.sidebar-form label { font-size: 0.78rem; margin: 0; }
+.sidebar-form input, .sidebar-form select { background: var(--paper-raised); border: 1px solid var(--rule); min-height: 44px; padding: 0.5rem; width: 100%; }
+.sidebar-form button, .diagnostics-card button { min-height: 44px; }
 .mobile-workbench-nav { display: none; }
 .panel-width-controls { align-items: center; display: flex; gap: 0.35rem; position: fixed; right: 8.5rem; top: 9px; z-index: 5; }
 .panel-width-controls label { font-size: 0; margin: 0; }
