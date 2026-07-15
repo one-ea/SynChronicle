@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { resolveContextWindow } from "../config/index.js";
 import type { Bundle } from "../domain/index.js";
 import type { ModelSet } from "../providers/index.js";
-import { StoreScope, type Store, type StagingSession } from "../store/index.js";
+import { StoreScope, type StorePort, type StagingSession } from "../store/index.js";
 import { createToolRegistry, type AskUserHandler } from "../tools/registry.js";
 import type { Agent } from "./agent.js";
 import type { AgentExecutor, GenerateResult } from "./agent.js";
@@ -35,7 +35,7 @@ async function deliverCompletion(state: ReflectionCommitState, agent: string, em
   try { await emit?.({ ...state.completion, agent }); return true; } catch { return false; }
 }
 
-export async function recoverReflectionCommit(store: Store, staging: StagingSession, agent: string, emit?: (event: IntegratedReflectionEvent) => unknown) {
+export async function recoverReflectionCommit(store: StorePort, staging: StagingSession, agent: string, emit?: (event: IntegratedReflectionEvent) => unknown) {
   const pending = parseCommitState(await staging.loadState());
   if (!pending || pending.phase === "completed") return;
   if (pending.phase === "committing") await store.commitStaged(staging, pending.candidateIds);
@@ -44,7 +44,7 @@ export async function recoverReflectionCommit(store: Store, staging: StagingSess
   if (await deliverCompletion(committed, agent, emit)) await staging.saveState({ ...committed, phase: "completed" });
 }
 
-export async function commitReflectionCandidate(store: Store, staging: StagingSession, agent: string, candidateIds: string[], completion: Extract<ReflectionEvent, { type: "reflection.completed" }>, emit?: (event: IntegratedReflectionEvent) => unknown, executionId?: string, signal?: AbortSignal) {
+export async function commitReflectionCandidate(store: StorePort, staging: StagingSession, agent: string, candidateIds: string[], completion: Extract<ReflectionEvent, { type: "reflection.completed" }>, emit?: (event: IntegratedReflectionEvent) => unknown, executionId?: string, signal?: AbortSignal) {
   signal?.throwIfAborted();
   await staging.saveState({ version: 1, phase: "committing", candidateIds, completion, ...(executionId ? { executionId } : {}) });
   await store.commitStaged(staging, candidateIds);
@@ -53,7 +53,7 @@ export async function commitReflectionCandidate(store: Store, staging: StagingSe
   if (await deliverCompletion(committed, agent, emit)) await staging.saveState({ ...committed, phase: "completed" });
 }
 
-export async function coordinateReflectionRecovery(store: Store, staging: StagingSession, stateId: string, task: ReflectionTask, agent: string, emit?: (event: IntegratedReflectionEvent) => unknown) {
+export async function coordinateReflectionRecovery(store: StorePort, staging: StagingSession, stateId: string, task: ReflectionTask, agent: string, emit?: (event: IntegratedReflectionEvent) => unknown) {
   await recoverReflectionCommit(store, staging, agent, emit);
   const commit = parseCommitState(await staging.loadState());
   const rawExecution = await store.staging.loadState(stateId);
@@ -82,7 +82,7 @@ function prompt(bundle: Bundle, name: string): string {
 
 export function buildCoordinator(
   cfg: Config,
-  store: Store,
+  store: StorePort,
   models: ModelSet,
   bundle: Bundle,
   recordUsage?: UsageRecorder,

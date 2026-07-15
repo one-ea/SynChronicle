@@ -2,9 +2,54 @@
 
 ## 状态
 
+- 已实现 `StorePort`、`DatabaseStore`、`DatabaseRecordingTransaction`。
+- File `Store` 保持原有公共行为，并实现同一 `StorePort`。
+- Database Store 通过 `userId/projectId/runId` 三元 scope 隔离全部读写。
+- 逻辑工件存入 `artifacts`，最终章节存入 `chapters`；runtime queue、checkpoint、usage 支持读写。
+
+## RED / GREEN
+
+- RED 1：`pnpm vitest run src/store/database/database-store.test.ts src/store/store.test.ts` 因 `DatabaseStore` 模块缺失失败。
+- GREEN 1：File Store 与内存 Database Store 共用 contract 通过。
+- RED 2：候选提交完成事件缺少 staging 中的真实 completion 数据，原子性断言失败。
+- GREEN 2：`commitStaged` 在同一 backend transaction 内提交候选业务工件、checkpoint、usage 和 completion runtime event。
+- 回滚证据：内存 backend 注入 constraint failure 后，`commitStaged` reject，候选 premise 保持不可见。
+
+## 接口决策
+
+- `StorePort` 覆盖 Host、Agent、Tool Registry 当前使用的完整 Store 能力，避免数据库类型进入 Agent。
+- `StoreScope` 改为基于 `StorePort`，File recording 与 Database recording 共用 Agent 执行路径。
+- Database Store 复用现有领域 Store，通过 `DatabaseFileIO` 将逻辑路径映射到数据库，保持 CLI/File Store 兼容。
+- `DatabaseRecordingTransaction` 使用现有 recording overlay 在内存缓冲候选写，正式 Store 在 commit 前不可见。
+
+## 验证
+
+- Store/Host/Agent：65 passed，2 skipped。
+- 全量测试：317 passed，10 skipped。
+- TypeScript：`pnpm typecheck` 通过。
+- Build：`pnpm build` 通过。
+- Diff：`git diff --check` 通过。
+- Migration sync：`pnpm exec drizzle-kit check` 通过。
+- PostgreSQL contract：当前未设置 `TEST_DATABASE_URL`，2 项数据库集成测试明确跳过；内存 contract、scope、SQL 构造入口和事务回滚测试有效。
+
+## 提交
+
+- Commit message：`feat(store): add PostgreSQL store adapter`
+
+## 顾虑
+
+- 当前环境缺少 PostgreSQL，真实数据库 migration + contract + rollback 路径留待提供 `TEST_DATABASE_URL` 的 CI 执行。
+- Task 2 Schema 使用 `artifacts.type/content_text/content_json` 字段名，适配器按实际 schema 映射；任务简报中的 `kind/text_content/json_content` 属于旧命名。
+
+---
+
+## 前序候选暂存实施记录
+
+### 状态
+
 已完成候选工件暂存与最终提交能力。
 
-## 实现
+### 实现
 
 - 新增 `StagedArtifactStore` 和 session 级 `StagingSession`。
 - 工件按 `meta/reflection/<session-id>/round-<n>/` 隔离暂存。
@@ -16,26 +61,24 @@
 - session ID、目标路径及 manifest 内容路径均进行越界校验，内容文件严格绑定当前 session。
 - 实现未包含任何正式数据删除操作。
 
-## TDD 记录
+### TDD 记录
 
 - 首次执行 `pnpm vitest run src/store/staging.test.ts`：按预期失败，原因是 `./staging.js` 尚未实现。
 - 新增跨 session manifest 引用测试：按预期失败，证明原校验未绑定当前 session。
 - 收紧 manifest 校验后测试转绿。
 
-## 验证
+### 验证
 
 - `pnpm vitest run src/store/staging.test.ts src/store/store.test.ts`：2 个测试文件通过，10 个测试通过。
 - `pnpm typecheck`：通过。
 
-## 关注点
+### 关注点
 
 - manifest 与 state 使用原子文件写入；进程级并发通过 session 内 promise 链串行化。
 - 多进程同时操作同一 session 未引入文件锁，调用方应保证单 session 单写者。
 - 暂存内容保留用于恢复和审计，当前任务不执行清理。
 
-## 修复记录 2026-07-13
-
-### 高/中严重问题修复
+### 修复记录 2026-07-13
 
 - 提交前完整解析候选 ID；任何未知 ID 会使整批提交拒绝，正式文件保持不变。
 - 同一提交选择集中出现重复 `target` 时整批拒绝。
@@ -47,21 +90,11 @@
 - 所有 staging 和正式目标读写前逐段执行 `lstat`，拒绝任意现存符号链接，并验证规范路径位于 realpath 后的 Store 根目录内。
 - 保持正式数据只写不删，暂存数据持续保留。
 
-### TDD 证据
+TDD 证据：新增测试首次运行 10 项中 4 项失败；修复后 staging 与 Store 回归 15 项通过；项目全量 208 项通过；`pnpm typecheck` 通过。
 
-- 新增测试首次运行：10 项中 4 项失败，稳定复现重复 target/未知 ID、manifest 崩溃窗口、跨实例丢更新和符号链接逃逸。
-- 修复后 staging 与 Store 回归：2 个测试文件、15 个测试通过。
-- 项目全量回归：35 个测试文件、208 个测试通过。
-- `pnpm typecheck`：通过。
+剩余边界：共享锁覆盖单 Node.js 进程中的多个 Store 实例；跨进程并发仍需上层保证单 session 单写者或后续引入平台文件锁。路径检查与原子写之间存在操作系统级 TOCTOU 边界。
 
-### 剩余边界
-
-- 共享锁覆盖单 Node.js 进程中的多个 Store 实例；跨进程并发仍需上层保证单 session 单写者或后续引入平台文件锁。
-- 路径检查与原子写之间存在操作系统级 TOCTOU 边界；在受信任 Store 根目录和单写者模型下，逐段符号链接拒绝可阻断静态链接逃逸。
-
-## 第二轮修复记录 2026-07-13
-
-### 修复内容
+### 第二轮修复记录 2026-07-13
 
 - `commit` 先完整校验候选 ID 和重复 target，再仅恢复请求选择集中的 `committing` 工件；非法请求不会触发任何正式 Store 写入。
 - target 策略禁止 `meta/reflection` 及其所有子路径，保护 manifest、state 和暂存内容控制命名空间。
@@ -69,14 +102,6 @@
 - 增加 reflection 控制目录、session 目录和 round 内容目录符号链接测试，三层内部路径均在读写前拒绝。
 - 保持正式数据无删除操作。
 
-### TDD 与验证
+TDD 与验证：新增测试首次运行 16 项中 3 项失败；staging 与 Store 回归 22 项通过；项目全量 215 项通过；`pnpm typecheck` 通过。
 
-- 新增测试首次运行：16 项中 3 项失败，分别复现非法请求副作用、控制命名空间写入和路径别名锁分裂；三项内部符号链接测试直接验证已有逐段防护。
-- staging 与 Store 回归：2 个测试文件、22 个测试通过。
-- 项目全量回归：35 个测试文件、215 个测试通过。
-- `pnpm typecheck`：通过。
-
-### 边界
-
-- session 打开与 `status()` 仍作为显式恢复入口推进全部 `committing` 工件；`commit()` 的恢复范围严格限定为已通过请求校验的候选集。
-- realpath 锁统一覆盖单进程路径别名；跨进程写入约束保持不变。
+边界：session 打开与 `status()` 仍作为显式恢复入口推进全部 `committing` 工件；`commit()` 的恢复范围严格限定为已通过请求校验的候选集。realpath 锁统一覆盖单进程路径别名；跨进程写入约束保持不变。

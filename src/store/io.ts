@@ -1,10 +1,12 @@
-import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
+import { mkdir, open, readFile, realpath, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
 export class FileIO {
+  readonly usesFilesystemPaths: boolean = true;
   constructor(readonly dir: string) {}
+  lockKey() { return realpath(this.dir); }
   path(rel: string) { return join(this.dir, rel); }
   async ensureDirs(dirs: string[]) { await Promise.all(dirs.map((dir) => mkdir(this.path(dir), { recursive: true }))); }
   async readFile(rel: string) { return readFile(this.path(rel)); }

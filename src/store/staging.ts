@@ -183,7 +183,7 @@ export class StagingSession {
   }
 
   private async withLock<T>(operation: () => Promise<T>) {
-    const key = `${await realpath(this.io.dir)}\0${this.sessionId}`;
+    const key = `${await this.io.lockKey()}\0${this.sessionId}`;
     const previous = StagingSession.locks.get(key) ?? Promise.resolve();
     const result = previous.then(operation);
     const settled = result.then(() => undefined, () => undefined);
@@ -218,6 +218,7 @@ function validateTarget(value: string) {
 
 async function assertSafeStorePath(io: FileIO, rel: string) {
   const normalized = validateRelativePath(rel);
+  if (!io.usesFilesystemPaths) return;
   const root = await realpath(io.dir);
   const target = resolve(root, normalized);
   const fromRoot = relative(root, target);

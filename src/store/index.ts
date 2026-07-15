@@ -12,8 +12,9 @@ import { JSONStore, SimulationStore, UsageStore } from "./misc.js";
 import { SessionStore } from "./session.js";
 import { StagedArtifactStore, type StagingSession } from "./staging.js";
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { StorePort } from "./port.js";
 
-export class Store {
+export class Store implements StorePort {
   readonly progress: ProgressStore; readonly outline: OutlineStore; readonly drafts: DraftStore; readonly summaries: SummaryStore; readonly runMeta: JSONStore<RunMeta>; readonly userRules: JSONStore<unknown>; readonly signals: SignalStore; readonly runtime: RuntimeStore; readonly characters: CharacterStore; readonly cast: CastStore; readonly world: WorldStore; readonly checkpoints: CheckpointStore; readonly sessions: SessionStore; readonly staging: StagedArtifactStore; readonly usage: UsageStore; readonly simulation: SimulationStore;
   private readonly io: FileIO;
   constructor(readonly dir: string, io = new FileIO(dir)) { this.io = io; this.progress = new ProgressStore(io); this.outline = new OutlineStore(io); this.drafts = new DraftStore(io); this.summaries = new SummaryStore(io); this.runMeta = new JSONStore(io, "meta/run.json"); this.userRules = new JSONStore(io, "meta/user_rules.json"); this.signals = new SignalStore(io); this.runtime = new RuntimeStore(io); this.characters = new CharacterStore(io); this.cast = new CastStore(io); this.world = new WorldStore(io); this.checkpoints = new CheckpointStore(io); this.sessions = new SessionStore(io); this.staging = new StagedArtifactStore(io); this.usage = new UsageStore(io); this.simulation = new SimulationStore(io); }
@@ -39,10 +40,10 @@ export class RecordingTransaction {
 }
 
 export class StoreScope {
-  private readonly storage = new AsyncLocalStorage<Store>();
-  readonly store: Store;
-  constructor(private readonly baseline: Store) {
-    this.store = new Proxy({} as Store, {
+  private readonly storage = new AsyncLocalStorage<StorePort>();
+  readonly store: StorePort;
+  constructor(private readonly baseline: StorePort) {
+    this.store = new Proxy({} as StorePort, {
       get: (_target, property) => {
         const source = this.storage.getStore() ?? this.baseline;
         const value = Reflect.get(source, property);
@@ -50,7 +51,7 @@ export class StoreScope {
       },
     });
   }
-  run<T>(store: Store, operation: () => Promise<T>) { return this.storage.run(store, operation); }
+  run<T>(store: StorePort, operation: () => Promise<T>) { return this.storage.run(store, operation); }
 }
 
 class SignalStore {
@@ -78,3 +79,4 @@ export * from "./cast.js";
 export * from "./misc.js";
 export * from "./session.js";
 export * from "./staging.js";
+export * from "./port.js";

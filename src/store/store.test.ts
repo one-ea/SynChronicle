@@ -3,6 +3,7 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "./index.js";
+import { storeContract } from "./store.contract.js";
 
 const tempStore = async () => {
   const dir = await mkdtemp(join(tmpdir(), "synchronicle-store-"));
@@ -12,6 +13,7 @@ const tempStore = async () => {
 };
 
 describe("Store", () => {
+  storeContract(async () => (await tempStore()).store);
   it("creates the Go-compatible directory tree", async () => {
     const { dir, store } = await tempStore();
     expect(store.dir).toBe(dir);

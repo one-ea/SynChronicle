@@ -2,7 +2,7 @@ import type { Config } from "../config/index.js";
 import { ConfigSchema } from "../config/index.js";
 import type { Bundle, ReflectionRuntimePayload, RuntimeEvent, RuntimeQueueItem } from "../domain/index.js";
 import { createModelSet } from "../providers/index.js";
-import { Store } from "../store/index.js";
+import { Store, type StorePort } from "../store/index.js";
 import { buildCoordinator } from "../agents/build.js";
 import { AsyncQueue } from "./asyncQueue.js";
 import { RuntimeStream } from "./stream.js";
@@ -17,11 +17,11 @@ import type { ReflectionEvent } from "../agents/reflection/index.js";
 
 export interface RuntimeObserver { reflection(event: ReflectionEvent & { agent: string }): void | Promise<void>; usage(agent: string, usage: ModelUsage | undefined, model?: ModelIdentity): void; }
 export interface RuntimeAgent { run(prompt: string, signal?: AbortSignal): AsyncIterable<string>; setObserver?(observer: RuntimeObserver): void; abort(reason: string): void; close(): void | Promise<void>; }
-export interface HostDependencies { agent?: RuntimeAgent; store?: Store; askUser?: AskUserHandler }
+export interface HostDependencies { agent?: RuntimeAgent; store?: StorePort; askUser?: AskUserHandler }
 type RuntimeState = "idle" | "running" | "paused" | "completed" | "closed";
 
 export class Host {
-  readonly store: Store;
+  readonly store: StorePort;
   readonly usage: UsageTracker;
   private state: RuntimeState = "idle";
   private recoveryLabel: string | null = null;
@@ -32,7 +32,7 @@ export class Host {
   private queueError: Error | null = null;
   private runController: AbortController | null = null;
   private seenEventIds = new Set<string>();
-  private constructor(private readonly config: Config, private readonly agent: RuntimeAgent, store: Store) { this.store = store; this.usage = new UsageTracker((state) => this.store.usage.save(state)); this.agent.setObserver?.({ reflection: (event) => this.observeReflection(event), usage: (agent, usage, model) => this.usage.record(agent, usage?.model ? usage : normalizeUsage(usage, model)) }); }
+  private constructor(private readonly config: Config, private readonly agent: RuntimeAgent, store: StorePort) { this.store = store; this.usage = new UsageTracker((state) => this.store.usage.save(state)); this.agent.setObserver?.({ reflection: (event) => this.observeReflection(event), usage: (agent, usage, model) => this.usage.record(agent, usage?.model ? usage : normalizeUsage(usage, model)) }); }
 
   static async new(config: Config, bundle: Bundle, dependencies: HostDependencies = {}): Promise<Host> { const cfg = ConfigSchema.parse(config); const store = dependencies.store ?? new Store(cfg.output_dir ?? "output/novel"); await store.init(); let runtimeAgent = dependencies.agent; let host: Host | undefined; if (!runtimeAgent) { const built = buildCoordinator(cfg, store, createModelSet(cfg), bundle, (agent, usage, model) => host?.usage.record(agent, normalizeUsage(usage, model)), undefined, undefined, dependencies.askUser, (event) => host?.observeReflection(event), () => host?.hasBudget() ?? true); runtimeAgent = { run(prompt, signal) { const stream = built.coordinator.stream(prompt, signal); return stream.textStream; }, abort() { built.coordinator.clear(); }, close() { built.coordinator.clear(); } }; } host = new Host(cfg, runtimeAgent, store); host.usage.load(await store.usage.load()); for (const item of await store.runtime.loadQueue()) { const payload = item.payload as RuntimeEvent | undefined; if (item.kind === "ui_event" && payload?.id) host.seenEventIds.add(payload.id); } return host; }
 
