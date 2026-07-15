@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { createDatabase } from "./client.js";
 import { migrateDatabase, migrationsFolder } from "./migrate.js";
 import * as schema from "./schema/index.js";
+import { createAuthRepository } from "../web/auth/session.js";
 
 const requiredTables = [
   "users",
@@ -75,6 +76,8 @@ describe("database schema", () => {
     const tasks = getTableConfig(schema.tasks);
 
     expect(users.indexes.map((index) => index.config.name)).toContain("users_username_uq");
+    expect(users.columns.find((column) => column.name === "auth_version")?.getSQLType()).toBe("integer");
+    expect(getTableConfig(schema.sessions).columns.find((column) => column.name === "auth_version")?.getSQLType()).toBe("integer");
     expect(artifacts.columns.find((column) => column.name === "content_json")?.getSQLType()).toBe("jsonb");
     expect(chapters.columns.find((column) => column.name === "body")?.getSQLType()).toBe("text");
     expect(runEvents.columns.find((column) => column.name === "sequence")?.getSQLType()).toBe("integer");
@@ -162,12 +165,18 @@ describe("database schema", () => {
       new URL("../../drizzle/0001_tenant_ownership.sql", import.meta.url),
       "utf8",
     );
-    const sql = `${foundationSql}\n${ownershipSql}`;
+    const authenticationSql = await readFile(
+      new URL("../../drizzle/0002_lean_felicia_hardy.sql", import.meta.url),
+      "utf8",
+    );
+    const sql = `${foundationSql}\n${ownershipSql}\n${authenticationSql}`;
 
     for (const table of requiredTables) {
       expect(sql).toContain(`CREATE TABLE \"${table}\"`);
     }
     expect(sql).toContain('CREATE UNIQUE INDEX "users_username_uq"');
+    expect(authenticationSql).toContain('ALTER TABLE "users" ADD COLUMN "auth_version" integer DEFAULT 1 NOT NULL');
+    expect(authenticationSql).toContain('ALTER TABLE "sessions" ADD COLUMN "auth_version" integer DEFAULT 1 NOT NULL');
     expect(sql).toContain('CREATE UNIQUE INDEX "run_events_run_sequence_uq"');
     expect(sql).toMatch(
       /CREATE UNIQUE INDEX "tasks_active_write_project_uq"[\s\S]+WHERE .*"type" = 'write'.*"status" in \('leased', 'running'\)/i,
@@ -216,7 +225,12 @@ integration("PostgreSQL migration", () => {
           { username: `other-${suffix}`, passwordHash: "test" },
         ])
         .returning();
-      expect(user).toMatchObject({ role: "user", status: "active", concurrencyLimit: 1 });
+      expect(user).toMatchObject({ role: "user", status: "active", concurrencyLimit: 1, authVersion: 1 });
+      const [session] = await database
+        .insert(schema.sessions)
+        .values({ userId: user!.id, tokenDigest: crypto.randomUUID(), expiresAt: new Date(Date.now() + 60_000) })
+        .returning();
+      expect(session).toMatchObject({ authVersion: 1 });
       await expect(
         database.insert(schema.users).values({ username: user!.username, passwordHash: "test" }),
       ).rejects.toThrow();
@@ -348,6 +362,61 @@ integration("PostgreSQL migration", () => {
           balance: "0",
         }),
       ).rejects.toThrow();
+    } finally {
+      await database.$client.end();
+    }
+  });
+
+  it("atomically binds sessions to the current authentication version", async () => {
+    await migrateDatabase(databaseUrl);
+    const database = createDatabase(databaseUrl);
+
+    try {
+      const suffix = crypto.randomUUID();
+      const [user] = await database
+        .insert(schema.users)
+        .values({ username: `auth-${suffix}`, passwordHash: "current-hash" })
+        .returning();
+      const repository = createAuthRepository(database);
+      const stale = await repository.createSessionIfCurrent({
+        userId: user!.id,
+        passwordHash: "stale-hash",
+        authVersion: user!.authVersion,
+        tokenDigest: crypto.randomUUID(),
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+      expect(stale).toBeUndefined();
+
+      const created = await repository.createSessionIfCurrent({
+        userId: user!.id,
+        passwordHash: user!.passwordHash,
+        authVersion: user!.authVersion,
+        tokenDigest: crypto.randomUUID(),
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+      expect(created).toBeDefined();
+
+      const changed = await repository.updatePasswordAndRevokeSessions(
+        user!.id,
+        "new-hash",
+        user!.passwordHash,
+        user!.authVersion,
+        new Date(),
+      );
+      expect(changed).toBe(true);
+      expect(
+        await repository.updatePasswordAndRevokeSessions(
+          user!.id,
+          "stale-overwrite",
+          user!.passwordHash,
+          user!.authVersion,
+          new Date(),
+        ),
+      ).toBe(false);
+      const [updatedUser] = await database.select().from(schema.users).where(eq(schema.users.id, user!.id));
+      const [session] = await database.select().from(schema.sessions).where(eq(schema.sessions.id, created!.id));
+      expect(updatedUser).toMatchObject({ passwordHash: "new-hash", authVersion: 2 });
+      expect(session?.revokedAt).toBeInstanceOf(Date);
     } finally {
       await database.$client.end();
     }

@@ -3,10 +3,10 @@ import { createDatabase } from "../db/client.js";
 import { authPlugin } from "./auth/plugin.js";
 import type { WebConfig } from "./config.js";
 
-export type WebServerOptions = Pick<WebConfig, "databaseUrl"> & Partial<Pick<WebConfig, "publicUrl">>;
+export type WebServerOptions = Pick<WebConfig, "databaseUrl"> & Partial<Pick<WebConfig, "publicUrl" | "trustProxy">>;
 
 export async function buildWebServer(options: WebServerOptions): Promise<FastifyInstance> {
-  const app = Fastify({ logger: true, trustProxy: true });
+  const app = Fastify({ logger: true, trustProxy: options.trustProxy ?? false });
   await app.register(authPlugin, {
     db: createDatabase(options.databaseUrl),
     publicUrl: options.publicUrl ?? "http://localhost:3000",

@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { hashPassword, verifyPassword } from "./password.js";
+import { DUMMY_PASSWORD_HASH, hashPassword, verifyPassword } from "./password.js";
 import { createSession, type AuthRepository } from "./session.js";
 
 export const SESSION_COOKIE = "synchronicle_session";
@@ -29,12 +29,18 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (app, opt
 
     const parsed = LoginBody.safeParse(request.body);
     const user = parsed.success ? await options.repository.findUserByUsername(parsed.data.username) : undefined;
-    const valid = user ? await verifyPassword(user.passwordHash, parsed.success ? parsed.data.password : "") : false;
+    const password = parsed.success ? parsed.data.password : "";
+    const valid = await verifyPassword(user?.passwordHash ?? DUMMY_PASSWORD_HASH, password);
     if (!user || !valid || user.status !== "active") {
       return reply.code(401).send(unauthorizedBody);
     }
 
-    const session = await createSession(options.repository, user.id);
+    const session = await createSession(options.repository, {
+      userId: user.id,
+      passwordHash: user.passwordHash,
+      authVersion: user.authVersion,
+    });
+    if (!session) return reply.code(401).send(unauthorizedBody);
     reply.setCookie(SESSION_COOKIE, session.token, {
       path: "/",
       httpOnly: true,
@@ -47,7 +53,7 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (app, opt
 
   app.post("/logout", { preHandler: app.authenticateRequest }, async (request, reply) => {
     await options.repository.revokeSession(request.auth.sessionId, new Date());
-    reply.clearCookie(SESSION_COOKIE, { path: "/" });
+    reply.clearCookie(SESSION_COOKIE, { path: "/", httpOnly: true, sameSite: "strict", secure: app.authPublicUrl.protocol === "https:" });
     return reply.code(204).send();
   });
 
@@ -62,8 +68,15 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (app, opt
     }
 
     const passwordHash = await hashPassword(parsed.data.newPassword);
-    await options.repository.updatePasswordAndRevokeSessions(user.id, passwordHash, new Date());
-    reply.clearCookie(SESSION_COOKIE, { path: "/" });
+    const changed = await options.repository.updatePasswordAndRevokeSessions(
+      user.id,
+      passwordHash,
+      user.passwordHash,
+      user.authVersion,
+      new Date(),
+    );
+    if (!changed) return reply.code(401).send(unauthorizedBody);
+    reply.clearCookie(SESSION_COOKIE, { path: "/", httpOnly: true, sameSite: "strict", secure: app.authPublicUrl.protocol === "https:" });
     return reply.code(204).send();
   });
 };

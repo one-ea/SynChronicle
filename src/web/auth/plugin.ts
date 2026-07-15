@@ -33,10 +33,47 @@ export interface AuthPluginOptions {
   db?: Database;
   repository?: AuthRepository;
   publicUrl: string;
-  loginRateLimit?: { max: number; windowMs: number };
+  loginRateLimit?: { max: number; windowMs: number; capacity?: number };
 }
 
 const mutationMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+export interface LoginRateLimiter {
+  consume(key: string): boolean;
+  readonly size: number;
+}
+
+export function createLoginRateLimiter(
+  options: { max: number; windowMs: number; capacity?: number },
+  now: () => number = Date.now,
+): LoginRateLimiter {
+  const capacity = options.capacity ?? 10_000;
+  for (const [name, value] of [["max", options.max], ["windowMs", options.windowMs], ["capacity", capacity]] as const) {
+    if (!Number.isInteger(value) || value <= 0) throw new Error(`${name} must be a positive integer`);
+  }
+  const attempts = new Map<string, { count: number; resetAt: number }>();
+
+  return {
+    consume(key) {
+      const timestamp = now();
+      for (const [candidate, attempt] of attempts) {
+        if (attempt.resetAt <= timestamp) attempts.delete(candidate);
+      }
+      const current = attempts.get(key);
+      if (!current) {
+        if (attempts.size >= capacity) return false;
+        attempts.set(key, { count: 1, resetAt: timestamp + options.windowMs });
+        return true;
+      }
+      if (current.count >= options.max) return false;
+      current.count += 1;
+      return true;
+    },
+    get size() {
+      return attempts.size;
+    },
+  };
+}
 
 export const authPlugin = fp<AuthPluginOptions>(async (app, options) => {
   const repository = options.repository ?? (options.db ? createAuthRepository(options.db) : undefined);
@@ -44,7 +81,7 @@ export const authPlugin = fp<AuthPluginOptions>(async (app, options) => {
 
   const publicUrl = new URL(options.publicUrl);
   const rateLimit = options.loginRateLimit ?? { max: 10, windowMs: 60_000 };
-  const attempts = new Map<string, { count: number; resetAt: number }>();
+  const limiter = createLoginRateLimiter(rateLimit);
 
   await app.register(cookie);
   app.decorateRequest("auth");
@@ -55,7 +92,7 @@ export const authPlugin = fp<AuthPluginOptions>(async (app, options) => {
       ? await repository.findActiveSessionByDigest(digestSessionToken(token), new Date())
       : undefined;
     const user = session ? await repository.findUserById(session.userId) : undefined;
-    if (!session || !user || user.status !== "active") {
+    if (!session || !user || user.status !== "active" || session.authVersion !== user.authVersion) {
       await reply.code(401).send({ error: "Unauthorized" });
       return;
     }
@@ -71,15 +108,7 @@ export const authPlugin = fp<AuthPluginOptions>(async (app, options) => {
   });
 
   function consumeLoginAttempt(ip: string): boolean {
-    const now = Date.now();
-    const current = attempts.get(ip);
-    if (!current || current.resetAt <= now) {
-      attempts.set(ip, { count: 1, resetAt: now + rateLimit.windowMs });
-      return true;
-    }
-    if (current.count >= rateLimit.max) return false;
-    current.count += 1;
-    return true;
+    return limiter.consume(ip);
   }
 
   await app.register(authRoutes, { prefix: "/api/auth", repository, consumeLoginAttempt });
