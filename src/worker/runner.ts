@@ -96,6 +96,9 @@ export class WorkerRunner {
     let renewalTimer: ReturnType<typeof setTimeout> | undefined;
     let stopped = false;
     let hostClosed = false;
+    let rejectHeartbeat!: (error: unknown) => void;
+    let heartbeatFailed = false;
+    const heartbeatFailure = new Promise<never>((_resolve, reject) => { rejectHeartbeat = reject; });
 
     const verifyLease = async () => {
       if (!await scheduler.renewLease(task.id, workerId, this.leaseMs, task.leaseVersion)) {
@@ -120,10 +123,23 @@ export class WorkerRunner {
       }
     };
     const scheduleRenewal = () => {
-      renewalTimer = this.clock.setTimeout(async () => {
+      renewalTimer = this.clock.setTimeout(() => {
         if (stopped) return;
-        try { await verifyLease(); } catch { return; }
-        try { await deliverCommands(); } finally { if (!stopped) scheduleRenewal(); }
+        void (async () => {
+          try {
+            await verifyLease();
+            await deliverCommands();
+            if (!stopped) scheduleRenewal();
+          } catch (error) {
+            if (heartbeatFailed) return;
+            heartbeatFailed = true;
+            stopped = true;
+            if (renewalTimer !== undefined) this.clock.clearTimeout(renewalTimer);
+            const failure = leaseLost ?? taskError(error, task.attempts, task.maxAttempts);
+            host.abort(failure.message);
+            rejectHeartbeat(failure);
+          }
+        })();
       }, Math.max(1, Math.floor(this.leaseMs / 3))) as ReturnType<typeof setTimeout>;
     };
     const handleBoundary = async (boundary: WorkerBoundary = "agent") => {
@@ -146,19 +162,21 @@ export class WorkerRunner {
     try {
       if (!await scheduler.startTask(task.id, workerId, task.leaseVersion)) throw new TaskExecutionError("lease ownership lost before task start", true, { category: "lease_loss" });
       scheduleRenewal();
-      const checkpoint = await host.latestCheckpoint();
-      if (checkpoint?.taskFingerprint === taskFingerprint(task) && checkpoint.projectVersion === task.projectVersion) {
-        const resumed = await host.resume(signal);
-        if (resumed.error) throw resumed.error;
-      } else {
-        await host.startPrepared(taskPrompt(task.payload), signal);
-      }
-      await verifyLease();
-      await host.close();
-      hostClosed = true;
-      await Promise.all(drains);
-      await verifyLease();
-      if (!await scheduler.finishTask(task.id, workerId, "completed", task.leaseVersion)) throw new TaskExecutionError("lease ownership lost before final commit", true, { category: "lease_loss" });
+      await Promise.race([(async () => {
+        const checkpoint = await host.latestCheckpoint();
+        if (checkpoint?.taskFingerprint === taskFingerprint(task) && checkpoint.projectVersion === task.projectVersion) {
+          const resumed = await host.resume(signal);
+          if (resumed.error) throw resumed.error;
+        } else {
+          await host.startPrepared(taskPrompt(task.payload), signal);
+        }
+        await verifyLease();
+        await host.close();
+        hostClosed = true;
+        await Promise.all(drains);
+        await verifyLease();
+        if (!await scheduler.finishTask(task.id, workerId, "completed", task.leaseVersion)) throw new TaskExecutionError("lease ownership lost before final commit", true, { category: "lease_loss" });
+      })(), heartbeatFailure]);
     } catch (error) {
       let failure = leaseLost ?? taskError(error, task.attempts, task.maxAttempts);
       if (!hostClosed) {

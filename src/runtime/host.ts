@@ -53,13 +53,13 @@ export class Host {
       await previous;
       const items = await this.store.runtime.loadQueue();
       const answered = new Set<string>();
-      const pending: Array<{ questionId: string; questions: unknown }> = [];
+      const pending: Array<{ questionId: string; interactionSequence: number; questions: unknown }> = [];
       for (const item of items) {
-        const outer = item.payload as { type?: string; questionId?: string; payload?: { questionId?: string; questions?: unknown } } | undefined;
+        const outer = item.payload as { type?: string; questionId?: string; payload?: { questionId?: string; interactionSequence?: number; questions?: unknown } } | undefined;
         if (outer?.type === "ask_user_answer" && outer.questionId) answered.add(outer.questionId);
-        if (outer?.type === "tool" && outer.payload?.questionId) pending.push({ questionId: outer.payload.questionId, questions: outer.payload.questions });
+        if (outer?.type === "tool" && outer.payload?.questionId) pending.push({ questionId: outer.payload.questionId, interactionSequence: outer.payload.interactionSequence ?? Number.parseInt(outer.payload.questionId, 10), questions: outer.payload.questions });
       }
-      const recovered = pending.toReversed().find((candidate) => !answered.has(candidate.questionId) && !this.askWaiters.has(candidate.questionId) && JSON.stringify(candidate.questions) === JSON.stringify(questions));
+      const recovered = pending.sort((left, right) => left.interactionSequence - right.interactionSequence).find((candidate) => !answered.has(candidate.questionId) && !this.askWaiters.has(candidate.questionId) && JSON.stringify(candidate.questions) === JSON.stringify(questions));
       if (recovered) {
         questionId = recovered.questionId;
         const event = { type: "tool" as const, tool: "ask_user", id: `ask:${questionId}`, message: "等待用户回答", payload: { questionId, questions } } as RuntimeEvent;

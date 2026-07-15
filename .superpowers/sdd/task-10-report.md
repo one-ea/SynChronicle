@@ -137,3 +137,24 @@ Implemented the literary AI-native creative workbench with a responsive three-co
 ## Interactive Isolation Concerns
 
 - PostgreSQL-conditional coverage remains skipped without `TEST_DATABASE_URL`, including the command failure persistence and workbench projection integration paths.
+
+## Heartbeat Lease Loss Completion
+
+- Heartbeat callbacks now catch lease renewal, command polling, delivery, acknowledgement, and failure-persistence errors inside the timer task.
+- A controlled heartbeat failure promise joins the main task execution with `Promise.race`, so asynchronous failures terminate `runOnce` through its normal error path without unhandled rejections.
+- Heartbeat lease loss stops renewal, aborts the Host, and propagates the lease failure. Ordinary command failures remain durable and allow subsequent heartbeats.
+- Reconstructed AskUser calls sort matching pending interactions by persisted `interactionSequence`. Two identical pending calls bind oldest-first, and answers resolve to the correct waiter even when submitted in reverse order.
+
+## Heartbeat Completion Verification
+
+- Target tests: 51 passed, 18 PostgreSQL-conditional skipped.
+- Full Vitest suite: 447 passed, 46 PostgreSQL-conditional skipped.
+- TypeScript typecheck: passed.
+- Production build: passed.
+- Drizzle check: passed.
+- Drizzle generate: no schema changes.
+- Git diff check: passed.
+
+## Heartbeat Completion Concerns
+
+- PostgreSQL-conditional tests remain skipped without `TEST_DATABASE_URL`; this follow-up changes in-process Worker coordination and Host queue ordering, with persistence integration still covered by the existing conditional suite.

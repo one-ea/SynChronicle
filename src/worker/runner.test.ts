@@ -170,6 +170,46 @@ describe("WorkerRunner", () => {
     } finally { vi.useRealTimers(); }
   });
 
+  it("propagates heartbeat command lease loss through runOnce without an unhandled rejection", async () => {
+    vi.useFakeTimers();
+    try {
+      const claimed = task();
+      const repository = scheduler(claimed, { desiredState: "running", steerCommands: [{ id: "model-stale", instruction: "[ModelSwitch] {\"role\":\"writer\",\"provider\":\"openai\",\"model\":\"gpt-5\"}" }] });
+      vi.mocked(repository.acknowledgeSteerCommands).mockResolvedValue(false);
+      const fakeHost = host({ execute: (signal) => new Promise<void>((_resolve, reject) => signal?.addEventListener("abort", () => reject(signal.reason), { once: true })) }).value;
+      fakeHost.switchModel = vi.fn().mockResolvedValue(undefined);
+
+      const running = new WorkerRunner({ scheduler: repository, createHost: async () => fakeHost, workerId: "worker-1", leaseMs: 300 }).runOnce();
+      const result = expect(running).rejects.toThrow("lease ownership lost while applying command");
+      while (!vi.mocked(fakeHost.startPrepared).mock.calls.length) await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(100);
+      await result;
+
+      expect(fakeHost.abort).toHaveBeenCalledWith("lease ownership lost while applying command");
+      expect(repository.renewLease).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(repository.renewLease).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("propagates heartbeat command polling errors through runOnce", async () => {
+    vi.useFakeTimers();
+    try {
+      const claimed = task();
+      const repository = scheduler(claimed);
+      vi.mocked(repository.claimSteerCommands).mockReset().mockRejectedValue(new Error("command store unavailable"));
+      const fakeHost = host({ execute: (signal) => new Promise<void>((_resolve, reject) => signal?.addEventListener("abort", () => reject(signal.reason), { once: true })) }).value;
+
+      const running = new WorkerRunner({ scheduler: repository, createHost: async () => fakeHost, workerId: "worker-1", leaseMs: 300 }).runOnce();
+      const result = expect(running).resolves.toBe(true);
+      while (!vi.mocked(fakeHost.startPrepared).mock.calls.length) await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(fakeHost.abort).toHaveBeenCalledWith("command store unavailable");
+      await result;
+      expect(repository.recordTaskError).toHaveBeenCalledWith(claimed.id, "worker-1", expect.objectContaining({ message: "command store unavailable" }), 1);
+    } finally { vi.useRealTimers(); }
+  });
+
   it("treats command acknowledgement failure as lease loss", async () => {
     const claimed = task();
     const repository = scheduler(claimed, { desiredState: "running", steerCommands: [{ id: "answer-1", instruction: "[AskUser] {\"questionId\":\"question-1\",\"answers\":{\"篇幅\":\"长篇\"}}" }] });

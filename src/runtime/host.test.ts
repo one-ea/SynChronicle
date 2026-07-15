@@ -86,6 +86,34 @@ describe("Host", () => {
     await expect(second).resolves.toEqual({ answers: { "希望多长？": "短篇" }, notes: {} });
     await value.close();
   });
+
+  it("rebinds identical pending questions in interaction order after reconstruction", async () => {
+    const scope = { userId: "u4", projectId: "p4", runId: "r4", taskFingerprint: "fp", projectVersion: 1, lease: { taskId: "t4", owner: "w", version: 1 } };
+    const store = createMemoryDatabaseStore(scope); store.backend.setLease(scope.lease);
+    const config = { provider: "mock", model: "one", providers: { mock: { api_key: "x" } }, roles: {} } as const;
+    const questions = [{ header: "篇幅", question: "希望多长？", options: [{ label: "长篇", description: "" }] }];
+    const first = await Host.new(config, {}, { agent: agent(), store });
+    void first.askUser(questions);
+    void first.askUser(questions);
+    const firstEvents = first.events()[Symbol.asyncIterator]();
+    const firstId = ((await firstEvents.next()).value?.payload as { questionId: string }).questionId;
+    const secondId = ((await firstEvents.next()).value?.payload as { questionId: string }).questionId;
+    await first.close();
+
+    store.backend.setLease(scope.lease);
+    const recovered = await Host.new(config, {}, { agent: agent(), store: createMemoryDatabaseStore(scope, store.backend) });
+    const firstAnswer = recovered.askUser(questions);
+    const secondAnswer = recovered.askUser(questions);
+    const recoveredEvents = recovered.events()[Symbol.asyncIterator]();
+    expect(((await recoveredEvents.next()).value?.payload as { questionId: string }).questionId).toBe(firstId);
+    expect(((await recoveredEvents.next()).value?.payload as { questionId: string }).questionId).toBe(secondId);
+
+    await recovered.answerUser(secondId, { "希望多长？": "短篇" });
+    await recovered.answerUser(firstId, { "希望多长？": "长篇" });
+    await expect(firstAnswer).resolves.toEqual({ answers: { "希望多长？": "长篇" }, notes: {} });
+    await expect(secondAnswer).resolves.toEqual({ answers: { "希望多长？": "短篇" }, notes: {} });
+    await recovered.close();
+  });
   it("reports agent and durable commit boundaries", async () => {
     const dir = await mkdtemp(join(tmpdir(), "runtime-host-boundaries-"));
     const store = new Store(dir);
