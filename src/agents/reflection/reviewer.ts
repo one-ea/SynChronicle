@@ -23,6 +23,7 @@ export interface ReviewerOptions {
   onUsageError?: (error: unknown) => void;
   now?: () => number;
   canContinue?: () => boolean;
+  generationOptions?: () => { temperature?: number; maxTokens?: number };
 }
 
 export class ReviewerError extends Error {
@@ -40,8 +41,9 @@ export class Reviewer {
   private readonly onUsageError?: ReviewerOptions["onUsageError"];
   private readonly now: () => number;
   private readonly canContinue: () => boolean;
+  private readonly generationOptions?: ReviewerOptions["generationOptions"];
 
-  constructor({ model, generate = generateText, retryLimit = 2, onUsage, onUsageError, now = () => performance.now(), canContinue = () => true }: ReviewerOptions) {
+  constructor({ model, generate = generateText, retryLimit = 2, onUsage, onUsageError, now = () => performance.now(), canContinue = () => true, generationOptions }: ReviewerOptions) {
     if (!Number.isInteger(retryLimit) || retryLimit < 0 || retryLimit > 3) {
       throw new RangeError("retryLimit must be an integer between 0 and 3");
     }
@@ -52,6 +54,7 @@ export class Reviewer {
     this.onUsageError = onUsageError;
     this.now = now;
     this.canContinue = canContinue;
+    this.generationOptions = generationOptions;
   }
 
   async review(request: ReviewRequest, signal?: AbortSignal): Promise<ReviewResult> {
@@ -63,9 +66,12 @@ export class Reviewer {
       let raw: Awaited<ReturnType<Generate>>;
       const startedAt = this.now();
       try {
+        const options = this.generationOptions?.() ?? {};
         raw = await this.generate({
           model: this.model,
           prompt: buildReviewPrompt(request),
+          ...(options.temperature === undefined ? {} : { temperature: options.temperature }),
+          ...(options.maxTokens === undefined ? {} : { maxOutputTokens: options.maxTokens }),
           ...(signal ? { abortSignal: signal } : {}),
         });
       } catch (error) {

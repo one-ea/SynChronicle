@@ -46,6 +46,7 @@ class MemoryRuns implements RunCommandRepository {
     this.runs.set(run.id, next);
     return next;
   }
+  async commandStatus(auth: RequestAuth, projectId: string, runId: string, commandId: string) { const run = this.runs.get(runId); return run?.userId === auth.userId && run.projectId === projectId ? { commandId, status: "applied" as const, retryable: false, failureCategory: null, errorMessage: null } : null; }
 }
 
 async function testApp() {
@@ -200,6 +201,17 @@ describe("run command routes", () => {
 
     const model = await app.inject({ method: "POST", url: `/api/projects/project-a/runs/${run.id}/model`, headers, payload: { role: "writer", provider: "openai", model: "gpt-5", credentialId: "22222222-2222-4222-8222-222222222222", parameters: { temperature: 0.2 } } });
     expect(model.json()).toMatchObject({ command: { status: "queued", appliesAfter: "agent_boundary" } });
+    await app.close();
+  });
+
+  it("returns tenant-isolated command status by command ID", async () => {
+    const { app } = await testApp();
+    const start = await app.inject({ method: "POST", url: "/api/projects/project-a/runs", headers: { "x-user-id": "alice" }, payload: { idempotencyKey: "status-start" } });
+    const run = start.json().run as RunRecord;
+    const own = await app.inject({ method: "GET", url: `/api/projects/project-a/runs/${run.id}/commands/model:req-1`, headers: { "x-user-id": "alice" } });
+    const foreign = await app.inject({ method: "GET", url: `/api/projects/project-a/runs/${run.id}/commands/model:req-1`, headers: { "x-user-id": "bob" } });
+    expect(own.json()).toMatchObject({ command: { commandId: "model:req-1", status: "applied" } });
+    expect(foreign.statusCode).toBe(404);
     await app.close();
   });
 });

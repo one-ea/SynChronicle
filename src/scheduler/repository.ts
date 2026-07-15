@@ -4,6 +4,8 @@ import type { Database } from "../db/client.js";
 import { platformModels, projects, providerCredentials, runCommands, runs, tasks, userModelSets, users } from "../db/schema/index.js";
 import { appendRunEventInTransaction } from "../realtime/append.js";
 import type { RequestAuth } from "../web/auth/plugin.js";
+import type { EventBroker } from "../realtime/broker.js";
+import { redactSecrets } from "../credentials/redactor.js";
 import { LEGACY_COMMAND_ID_PREFIX } from "./types.js";
 import type {
   EnqueueRunInput,
@@ -21,6 +23,7 @@ const schedulerAdvisoryLock = 0x53594e43;
 
 export interface SchedulerRepositoryOptions {
   platformConcurrency: number;
+  eventBroker?: EventBroker;
 }
 
 type SchedulerExecutor = Database | Parameters<Parameters<Database["transaction"]>[0]>[0];
@@ -110,12 +113,19 @@ export function buildEligibleTaskQuery(executor: SchedulerExecutor, now: Date) {
 
 export class SchedulerRepository {
   private readonly platformConcurrency: number;
+  private readonly eventBroker?: EventBroker;
 
   constructor(private readonly db: Database, options: SchedulerRepositoryOptions = { platformConcurrency: 4 }) {
     if (!Number.isInteger(options.platformConcurrency) || options.platformConcurrency <= 0) {
       throw new Error("platformConcurrency must be a positive integer");
     }
     this.platformConcurrency = options.platformConcurrency;
+    this.eventBroker = options.eventBroker;
+  }
+
+  async commandStatus(auth: RequestAuth, projectId: string, runId: string, commandId: string) {
+    const [row] = await this.db.select({ commandId: runCommands.commandId, status: runCommands.status, retryable: runCommands.retryable, failureCategory: runCommands.failureCategory, errorMessage: runCommands.errorMessage }).from(runCommands).where(and(eq(runCommands.userId, auth.userId), eq(runCommands.projectId, projectId), eq(runCommands.runId, runId), eq(runCommands.commandId, commandId))).limit(1);
+    return row ? { ...row, retryable: row.retryable === 1 } : null;
   }
 
   async validateModelSelection(auth: RequestAuth, selection: { provider: string; model: string; credentialId?: string }): Promise<boolean> {
@@ -285,18 +295,22 @@ export class SchedulerRepository {
   async acknowledgeSteerCommands(taskId: string, workerId: string, leaseVersion: number, commandIds: string[]): Promise<boolean> {
     if (!commandIds.length) return true;
     const now = new Date();
-    return this.db.transaction(async (transaction) => {
-      const [owned] = await transaction.select({ runId: tasks.runId }).from(tasks).where(and(eq(tasks.id, taskId), eq(tasks.leaseOwner, workerId), eq(tasks.leaseVersion, leaseVersion), inArray(tasks.status, activeTaskStatuses), sql`${tasks.leaseExpiresAt} > ${now}`)).limit(1).for("update");
-      if (!owned) return false;
+    const result = await this.db.transaction(async (transaction) => {
+      const [owned] = await transaction.select({ runId: tasks.runId, userId: tasks.userId, projectId: tasks.projectId }).from(tasks).where(and(eq(tasks.id, taskId), eq(tasks.leaseOwner, workerId), eq(tasks.leaseVersion, leaseVersion), inArray(tasks.status, activeTaskStatuses), sql`${tasks.leaseExpiresAt} > ${now}`)).limit(1).for("update");
+      if (!owned) return { applied: false, events: [] as Array<{ runId: string; sequence: number }> };
       const applied = await transaction.update(runCommands).set({ status: "applied", appliedAt: now, updatedAt: now }).where(and(eq(runCommands.runId, owned.runId), inArray(runCommands.commandId, commandIds), eq(runCommands.status, "claimed"), eq(runCommands.claimedBy, workerId), eq(runCommands.claimedLeaseVersion, leaseVersion))).returning({ id: runCommands.id });
-      if (applied.length !== commandIds.length) return false;
+      if (applied.length !== commandIds.length) return { applied: false, events: [] as Array<{ runId: string; sequence: number }> };
       const [run] = await transaction.select().from(runs).where(eq(runs.id, owned.runId)).limit(1).for("update");
       if (run) { const resumeData = normalizeRunResumeData(run.resumeData); await transaction.update(runs).set({ resumeData: { ...resumeData, steerCommands: resumeData.steerCommands.filter(({ id }) => !commandIds.includes(id)) }, updatedAt: now }).where(eq(runs.id, owned.runId)); }
-      return true;
+      const events = [];
+      for (const commandId of commandIds) events.push(await appendRunEventInTransaction(transaction as unknown as Database, owned, { stableId: `command-applied:${commandId}`, type: "command.applied", payload: { commandId } }));
+      return { applied: true, events };
     });
+    for (const event of result.events) await this.eventBroker?.publish({ runId: event.runId, sequence: event.sequence });
+    return result.applied;
   }
 
-  async recordCommandFailure(taskId: string, workerId: string, leaseVersion: number, commandId: string, error: { message: string; category: string; retryable: boolean }): Promise<boolean> { const now = new Date(); return this.db.transaction(async (transaction) => { const [owned] = await transaction.select({ runId: tasks.runId, userId: tasks.userId, projectId: tasks.projectId }).from(tasks).where(and(eq(tasks.id, taskId), eq(tasks.leaseOwner, workerId), eq(tasks.leaseVersion, leaseVersion), inArray(tasks.status, activeTaskStatuses), sql`${tasks.leaseExpiresAt} > ${now}`)).limit(1); if (!owned) return false; const [failed] = await transaction.update(runCommands).set({ status: "failed", retryable: error.retryable ? 1 : 0, failureCategory: error.category, errorMessage: error.message, claimedBy: null, claimedLeaseVersion: null, updatedAt: now }).where(and(eq(runCommands.runId, owned.runId), eq(runCommands.commandId, commandId), eq(runCommands.status, "claimed"))).returning(); if (!failed) return false; await appendRunEventInTransaction(transaction as unknown as Database, owned, { stableId: `command-error:${commandId}:${failed.attempts}`, type: "command.error", payload: { commandId, category: error.category, retryable: error.retryable, message: error.message } }); return true; }); }
+  async recordCommandFailure(taskId: string, workerId: string, leaseVersion: number, commandId: string, error: { message: string; category: string; retryable: boolean }): Promise<boolean> { const now = new Date(); const safeMessage = redactSecrets(error.message); const result = await this.db.transaction(async (transaction) => { const [owned] = await transaction.select({ runId: tasks.runId, userId: tasks.userId, projectId: tasks.projectId }).from(tasks).where(and(eq(tasks.id, taskId), eq(tasks.leaseOwner, workerId), eq(tasks.leaseVersion, leaseVersion), inArray(tasks.status, activeTaskStatuses), sql`${tasks.leaseExpiresAt} > ${now}`)).limit(1); if (!owned) return null; const [failed] = await transaction.update(runCommands).set({ status: "failed", retryable: error.retryable ? 1 : 0, failureCategory: error.category, errorMessage: safeMessage, claimedBy: null, claimedLeaseVersion: null, updatedAt: now }).where(and(eq(runCommands.runId, owned.runId), eq(runCommands.commandId, commandId), eq(runCommands.status, "claimed"))).returning(); if (!failed) return null; return appendRunEventInTransaction(transaction as unknown as Database, owned, { stableId: `command-error:${commandId}:${failed.attempts}`, type: "command.error", payload: { commandId, category: error.category, retryable: error.retryable, message: safeMessage } }); }); if (!result) return false; await this.eventBroker?.publish({ runId: result.runId, sequence: result.sequence }); return true; }
 
   async finishTask(taskId: string, workerId: string, status: ReleaseLeaseOutcome["status"], leaseVersion?: number): Promise<boolean> {
     const now = new Date();

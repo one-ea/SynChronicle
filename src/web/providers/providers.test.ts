@@ -42,4 +42,13 @@ describe("provider credential routes", () => {
     expect((await limited.inject({ method: "POST", url: "/api/providers/credentials", payload: { provider: "openai", apiKey: "secret" } })).statusCode).toBe(429);
     await limited.close();
   });
+
+  it("maps credential lifecycle conflicts to stable 409 errors", async () => {
+    const { server, credentials } = await app();
+    credentials.replace.mockRejectedValueOnce(Object.assign(new Error("credential is revoked"), { code: "CREDENTIAL_REVOKED", statusCode: 409 }));
+    const response = await server.inject({ method: "PUT", url: "/api/providers/credentials/22222222-2222-4222-8222-222222222222", payload: { apiKey: "next" } });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ error: { code: "CREDENTIAL_REVOKED", message: "Credential is revoked" } });
+    await server.close();
+  });
 });

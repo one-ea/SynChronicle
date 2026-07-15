@@ -12,6 +12,9 @@ Implemented the Task 11 credential-encryption brief and retained the reusable mo
 - Database mutations and audit events commit in one transaction. Concurrent replace/revoke operations lock the credential row.
 - API responses return owned opaque credential IDs and metadata only. Plaintext, envelopes, ciphertext, and wrapped keys stay out of responses.
 - Recursive redaction covers nested objects, arrays, headers, URL query credentials, common secret fields, credential IDs, and Error causes.
+- Custom Provider base URLs require public HTTPS. DNS resolution rejects loopback, link-local, private, ULA, documentation, reserved, multicast, and metadata addresses; every request resolves again and pins the validated address into the TLS connection. Redirect following is disabled.
+- Official Provider endpoints remain available through their SDK defaults. Custom public HTTPS endpoints use the same pinned transport.
+- Credential resolution writes success and rejection audits with credential ID, Provider, run ID, result, and reason. Resolution audit failure is fail-closed, so a model call cannot proceed without its security audit.
 
 ## Provider And Worker
 
@@ -19,6 +22,7 @@ Implemented the Task 11 credential-encryption brief and retained the reusable mo
 - Worker models carrying a credential ID resolve it immediately before each Provider `doGenerate` or `doStream` call and release the in-memory lease in `finally`.
 - User credential calls override configured Provider API keys for that call. Platform model calls retain platform Provider configuration.
 - Actual Provider/model attribution remains supplied by the AI SDK model and failover layers.
+- Credential lifecycle conflicts return stable error codes and HTTP 409 responses; unsafe URLs return a stable HTTP 400 code.
 
 ## Model Configuration Corrections
 
@@ -27,16 +31,23 @@ Implemented the Task 11 credential-encryption brief and retained the reusable mo
 - Provider selectors filter model and credential choices by Provider. Server validation checks tenant credential ownership and Provider/model linkage.
 - Active model-set changes use a tenant advisory lock plus a partial unique database index, preserving one active version per tenant.
 - Queued model commands continue to return explicit safe-boundary status feedback.
+- Reflection reviewers consume the live reviewer role temperature and max-token settings.
+- Tenant-scoped command status lookup is available by command ID. Worker acknowledgement/failure writes `command.applied` or `command.error` events and publishes a WS wakeup; the UI correlates these events, renders applied/failed state, and offers model-switch retry after failure.
 
 ## TDD
 
-- RED/GREEN cycles covered envelope randomness and AAD, key registry errors, recursive redaction, CredentialService state transitions, metadata-only routes, rate limiting, call-scoped Worker resolution, switch parameter retention, and runtime generation parameters.
+- RED/GREEN cycles covered envelope randomness and AAD, key registry errors, recursive redaction, SSRF address classes and rebinding, CredentialService state transitions and resolution audit, metadata-only routes, stable errors, rate limiting, call-scoped Worker resolution, switch parameter retention, reviewer parameters, command status API, and WS command projection.
 - PostgreSQL-conditional coverage covers cross-tenant resolution, plaintext serialization, concurrent replace/revoke, AAD tampering, and concurrent active model-set selection.
 
 ## Verification
 
-- Credential/Provider/Web route/Worker target suite: 73 passed, 4 PostgreSQL-conditional skipped.
-- Full Vitest suite: 461 passed, 48 PostgreSQL-conditional skipped.
+- Security/credential/Provider/Worker/Web target suite: 124 passed, 20 PostgreSQL-conditional skipped.
+- Full Vitest suite: 479 passed, 48 PostgreSQL-conditional skipped.
+- TypeScript typecheck: passed.
+- Production build: passed.
+- Drizzle check: passed.
+- Drizzle generate: no additional schema changes.
+- Git diff check: passed.
 - TypeScript typecheck: passed.
 - Production build: passed.
 - Drizzle check: passed.
@@ -47,3 +58,4 @@ Implemented the Task 11 credential-encryption brief and retained the reusable mo
 
 - JavaScript strings cannot be deterministically zeroed by the runtime. The implementation minimizes lifetime, clears mutable lease references, and scopes plaintext to credential resolution and the immediate Provider call.
 - PostgreSQL-conditional tests require `TEST_DATABASE_URL`; skipped counts are reported from the final gate.
+- DNS pinning is implemented for custom base URLs through the Node HTTPS transport. SDK-owned official default transports remain under the upstream SDK's endpoint policy.

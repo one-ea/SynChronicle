@@ -1,4 +1,4 @@
-const secretKey = /^(api[-_]?key|authorization|proxy-authorization|token|access[-_]?token|refresh[-_]?token|password|secret|cookie|set-cookie|credential[-_]?id)$/i;
+const secretKey = /^(?:.*[-_])?api[-_]?key$|^(authorization|proxy-authorization|token|access[-_]?token|refresh[-_]?token|password|secret|cookie|set-cookie|credential[-_]?id)$/i;
 const secretQuery = /^(api[-_]?key|key|token|access[-_]?token|authorization|secret)$/i;
 
 function redactUrl(value: string): string {

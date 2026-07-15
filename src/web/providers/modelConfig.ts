@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-const ParametersSchema = z.object({
+export const ParametersSchema = z.object({
   temperature: z.number().min(0).max(2).optional(),
   maxTokens: z.number().int().positive().max(1_000_000).optional(),
   reasoningEffort: z.enum(["low", "medium", "high"]).optional(),

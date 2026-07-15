@@ -22,9 +22,9 @@ export async function startWorker(): Promise<void> {
   const idleMs = positiveInteger(process.env.WORKER_IDLE_MS, 1_000, "WORKER_IDLE_MS");
   const database = createDatabase(databaseUrl);
   const credentialService = new CredentialService(new DatabaseCredentialRepository(database), masterKeyRegistryFromEnvironment(process.env.PROJECT_CREDENTIAL_MASTER_KEYS, process.env.PROJECT_CREDENTIAL_MASTER_KEY_VERSION));
-  const scheduler = new SchedulerRepository(database);
   const events = new DatabaseEventRepository(database);
   const eventBroker = new PostgresEventBroker(database);
+  const scheduler = new SchedulerRepository(database, { platformConcurrency: 4, eventBroker });
   const config = await loadConfig(process.env.CONFIG_PATH);
   const bundle = loadAssets(config.style);
   const runner = new WorkerRunner({
@@ -41,7 +41,7 @@ export async function startWorker(): Promise<void> {
       return Host.new(runConfig, bundle, {
         modelFactory: (provider, model, selection) => selection?.credentialId
           ? credentialScopedModel(provider, model, selection.credentialId, runConfig.providers?.[provider] ?? {}, async (credentialId, expectedProvider) => {
-            const secret = await credentialService.resolve(task.userId, credentialId);
+            const secret = await credentialService.resolve(task.userId, credentialId, { runId: task.runId });
             if (!secret || secret.provider !== expectedProvider) throw new Error("credential is unavailable for this provider");
             const lease = { apiKey: secret.apiKey, baseUrl: secret.baseUrl, release() { lease.apiKey = ""; lease.baseUrl = undefined; secret.apiKey = ""; secret.baseUrl = undefined; } };
             return lease;

@@ -18,10 +18,11 @@ export interface RunViewState {
   reflection?: { round?: number; maxRounds?: number; score?: number; passed?: boolean };
   agents: Array<{ name: string; state: string; summary?: string; sequence: number }>;
   usage?: { inputTokens: number; outputTokens: number; totalTokens: number; cost: string; byAgent: Array<{ agent: string; inputTokens: number; outputTokens: number; totalTokens: number; cost: string }> };
+  commands: Record<string, { status: "applied" | "failed"; retryable?: boolean; category?: string; message?: string }>;
 }
 
 const MAX_VISIBLE_EVENTS = 200;
-export const initialRunViewState: RunViewState = { lastSequence: 0, stream: "", events: [], agents: [] };
+export const initialRunViewState: RunViewState = { lastSequence: 0, stream: "", events: [], agents: [], commands: {} };
 
 export function reconnectDelay(attempt: number, random: () => number = Math.random): number {
   const base = Math.min(800 * 2 ** Math.max(0, attempt - 1), 15_000);
@@ -53,6 +54,8 @@ export function reduceRunEvent(state: RunViewState, event: RunEventMessage): Run
   const agents = agentName ? [{ name: agentName, state: event.type, summary: typeof payload.message === "string" ? payload.message : typeof nested.message === "string" ? nested.message : undefined, sequence: event.sequence }, ...state.agents.filter(({ name }) => name !== agentName)] : state.agents;
   const usagePayload = event.type === "usage.snapshot" && typeof payload.totalTokens !== "number" ? nested : payload;
   const usage = event.type === "usage.snapshot" && typeof usagePayload.totalTokens === "number" ? usagePayload as unknown as RunViewState["usage"] : state.usage;
+  const commandId = typeof payload.commandId === "string" ? payload.commandId : undefined;
+  const commands = commandId && (event.type === "command.applied" || event.type === "command.error") ? { ...state.commands, [commandId]: event.type === "command.applied" ? { status: "applied" as const } : { status: "failed" as const, retryable: payload.retryable === true, category: typeof payload.category === "string" ? payload.category : undefined, message: typeof payload.message === "string" ? payload.message : undefined } } : state.commands;
   return {
     lastSequence: event.sequence,
     stream: typeof delta === "string" ? state.stream + delta : state.stream,
@@ -60,6 +63,7 @@ export function reduceRunEvent(state: RunViewState, event: RunEventMessage): Run
     reflection,
     agents,
     usage,
+    commands,
   };
 }
 

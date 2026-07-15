@@ -1,4 +1,5 @@
 import { and, eq } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
 import type { Database } from "../db/client.js";
 import { auditEvents, providerCredentials } from "../db/schema/index.js";
 import type { CredentialEnvelope } from "./envelope.js";
@@ -40,5 +41,9 @@ export class DatabaseCredentialRepository implements CredentialRepository {
       await audit(transaction, record, action, requestId);
       return record;
     });
+  }
+
+  async auditResolution(event: { userId: string; credentialId: string; provider: string; runId: string; result: "success" | "rejected"; reason?: string }) {
+    await this.db.insert(auditEvents).values({ userId: event.userId, action: "credential.resolve", targetType: "provider_credential", targetId: event.credentialId, result: event.result, requestId: randomUUID(), metadata: { provider: event.provider, runId: event.runId, ...(event.reason ? { reason: event.reason } : {}) } });
   }
 }

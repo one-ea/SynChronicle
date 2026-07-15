@@ -25,7 +25,7 @@ const project: WorkbenchProject = {
 };
 
 function api(): ApiClient {
-  const request = vi.fn(async (path: string) => path.endsWith("/diagnostics") ? { diagnostics: { summary: "run healthy", cursor: 12, checkpointVersion: 7 } } : { run: project.latestRun });
+  const request = vi.fn(async (path: string) => path.endsWith("/diagnostics") ? { diagnostics: { summary: "run healthy", cursor: 12, checkpointVersion: 7 } } : path.endsWith("/model") ? { run: project.latestRun, command: { commandId: "model:test" } } : { run: project.latestRun });
   return { request: request as ApiClient["request"] };
 }
 
@@ -68,6 +68,11 @@ describe("run event projection", () => {
     const usage = reduceRunEvent(agent, { sequence: 2, type: "usage.snapshot", payload: { inputTokens: 12, outputTokens: 8, totalTokens: 20, cost: "0.01000000", byAgent: [] } });
     expect(usage.agents).toEqual([{ name: "Writer", state: "stream.delta", sequence: 1 }]);
     expect(usage.usage).toMatchObject({ totalTokens: 20, cost: "0.01000000" });
+  });
+  it("projects command applied and failed events by command ID", () => {
+    const applied = reduceRunEvent(initialRunViewState, { sequence: 1, type: "command.applied", payload: { commandId: "model:1" } });
+    const failed = reduceRunEvent(applied, { sequence: 2, type: "command.error", payload: { commandId: "model:2", category: "invalid_config", retryable: false, message: "Model unavailable" } });
+    expect(failed.commands).toEqual(expect.objectContaining({ "model:1": { status: "applied" }, "model:2": expect.objectContaining({ status: "failed", message: "Model unavailable" }) }));
   });
 });
 

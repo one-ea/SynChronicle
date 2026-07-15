@@ -52,6 +52,8 @@ export function WorkbenchPage({ api, project, initialEvents, subscribe, connecti
   const [pendingQuestion, setPendingQuestion] = useState(project.pendingQuestion);
   const [abortWaiting, setAbortWaiting] = useState(Boolean(project.latestRun?.waiting_for_durable_commit));
   const [commandFeedback, setCommandFeedback] = useState<string | null>(null);
+  const [pendingCommandId, setPendingCommandId] = useState<string | null>(null);
+  const [lastModelSwitch, setLastModelSwitch] = useState<{ role: string; provider: string; model: string; credentialId?: string; parameters?: Record<string, unknown> } | null>(null);
   const scrollPositions = useRef<Record<WorkbenchPanel, number>>({ project: 0, writing: 0, status: 0 });
   const { state, connection } = useRunEvents({ runId, initialEvents, subscribe });
   useEffect(() => {
@@ -60,6 +62,13 @@ export function WorkbenchPage({ api, project, initialEvents, subscribe, connecti
     const message = typeof payload.message === "string" ? payload.message : latest?.message ?? "";
     if (/完成|cancel|abort|终止/i.test(message)) setAbortWaiting(false);
   }, [state.events]);
+  useEffect(() => {
+    if (!pendingCommandId) return;
+    const command = state.commands[pendingCommandId];
+    if (!command) return;
+    setCommandFeedback(command.status === "applied" ? "模型切换已在安全边界应用。" : `模型切换失败：${command.message ?? command.category ?? "未知错误"}`);
+    if (command.status === "applied") setPendingCommandId(null);
+  }, [pendingCommandId, state.commands]);
 
   useEffect(() => {
     const current = document.querySelector<HTMLElement>(`[data-panel='${panel}'] .activity-scroll, [data-panel='${panel}']`);
@@ -132,7 +141,10 @@ export function WorkbenchPage({ api, project, initialEvents, subscribe, connecti
 
   async function switchModel(role: string, provider: string, model: string, credentialId?: string, parameters?: Record<string, unknown>) {
     if (!runId) throw new Error("Run unavailable");
-    await api.request(`/api/projects/${project.id}/runs/${runId}/model`, { method: "POST", body: JSON.stringify({ role, provider, model, credentialId, parameters }) });
+    const selection = { role, provider, model, credentialId, parameters };
+    const result = await api.request<{ command: { commandId: string } }>(`/api/projects/${project.id}/runs/${runId}/model`, { method: "POST", body: JSON.stringify(selection) });
+    setPendingCommandId(result.command.commandId);
+    setLastModelSwitch(selection);
     setCommandFeedback("模型切换已排队，将在下一个 Agent 安全边界生效。");
   }
 
@@ -152,7 +164,7 @@ export function WorkbenchPage({ api, project, initialEvents, subscribe, connecti
     <div className={`workbench-grid left-${leftCollapsed ? "closed" : "open"} right-${rightCollapsed ? "closed" : "open"}`} style={{ "--left-open-width": `${leftWidth}px`, "--right-open-width": `${rightWidth}px` } as CSSProperties}>
       <div data-panel="project" data-mobile-active={panel === "project"}><ProjectNav title={project.title} chapters={project.chapters ?? []} selectedChapterId={selectedChapter?.id} collapsed={leftCollapsed} onToggle={() => setLeftCollapsed((value) => !value)} onSelect={selectChapter} /></div>
       <div className="writing-column" data-panel="writing" data-mobile-active={panel === "writing"}><ActivityFeed state={state} chapter={selectedChapter} /><PromptInput onSend={steer} /></div>
-      <div data-panel="status" data-mobile-active={panel === "status"}><RunSidebar state={state} connection={connectionOverride ?? connection} status={project.latestRun?.status} agents={state.agents.length ? state.agents : project.agents ?? []} usage={state.usage ?? project.usage} pendingQuestion={pendingQuestion} modelConfiguration={project.modelConfiguration} commandFeedback={commandFeedback} diagnostics={diagnostics} abortWaiting={abortWaiting} controlsDisabled={!runId} collapsed={rightCollapsed} onToggle={() => setRightCollapsed((value) => !value)} onStart={startRun} onCommand={command} onAnswer={answer} onSwitchModel={switchModel} onDiagnose={diagnose} /></div>
+      <div data-panel="status" data-mobile-active={panel === "status"}><RunSidebar state={state} connection={connectionOverride ?? connection} status={project.latestRun?.status} agents={state.agents.length ? state.agents : project.agents ?? []} usage={state.usage ?? project.usage} pendingQuestion={pendingQuestion} modelConfiguration={project.modelConfiguration} commandFeedback={commandFeedback} commandRetry={commandFeedback?.startsWith("模型切换失败") && lastModelSwitch ? () => switchModel(lastModelSwitch.role, lastModelSwitch.provider, lastModelSwitch.model, lastModelSwitch.credentialId, lastModelSwitch.parameters) : undefined} diagnostics={diagnostics} abortWaiting={abortWaiting} controlsDisabled={!runId} collapsed={rightCollapsed} onToggle={() => setRightCollapsed((value) => !value)} onStart={startRun} onCommand={command} onAnswer={answer} onSwitchModel={switchModel} onDiagnose={diagnose} /></div>
     </div>
     <MobileNav current={panel} onChange={selectPanel} />
   </div>;

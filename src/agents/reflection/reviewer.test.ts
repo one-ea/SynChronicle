@@ -24,6 +24,12 @@ function validReview(overrides: Partial<Record<string, unknown>> = {}) {
 }
 
 describe("Reviewer", () => {
+  it("passes live reviewer temperature and maxTokens to generation", async () => {
+    const generate = vi.fn().mockResolvedValue({ text: JSON.stringify(validReview()), usage: {} });
+    const reviewer = new Reviewer({ model, generate, generationOptions: () => ({ temperature: 0.2, maxTokens: 1234 }) });
+    await reviewer.review(request);
+    expect(generate).toHaveBeenCalledWith(expect.objectContaining({ temperature: 0.2, maxOutputTokens: 1234 }));
+  });
   it("uses its model without tools and recomputes passed from score", async () => {
     const generate = vi.fn().mockResolvedValue({
       text: JSON.stringify(validReview()),

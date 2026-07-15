@@ -31,15 +31,23 @@ describe("recursive secret redaction", () => {
     expect(JSON.stringify(value)).not.toContain("secret-value");
     expect(value).toMatchObject({ authorization: "[REDACTED]", nested: [{ token: "[REDACTED]" }] });
   });
+
+  it("redacts API-key header variants in plain objects and Headers", () => {
+    const value = redactSecrets({ "x-api-key": "a", "api-key": "b", "vendor-api-key": "c", authorization: "d", "proxy-authorization": "e", cookie: "f", "set-cookie": "g", headers: new Headers({ "x-api-key": "h" }) });
+    expect(Object.values(value).every((entry) => typeof entry === "object" || entry === "[REDACTED]")).toBe(true);
+    expect(JSON.stringify(value)).not.toMatch(/"[a-h]"/);
+  });
 });
 
 class MemoryCredentials implements CredentialRepository {
   rows = new Map<string, CredentialRecord>();
   audits: string[] = [];
+  resolutionAudits: Array<Record<string, unknown>> = [];
   async create(row: CredentialRecord, action: string) { this.rows.set(row.id, structuredClone(row)); this.audits.push(action); return row; }
   async list(userId: string) { return [...this.rows.values()].filter((row) => row.userId === userId); }
   async get(userId: string, id: string) { const row = this.rows.get(id); return row?.userId === userId ? structuredClone(row) : null; }
   async mutate(userId: string, id: string, action: string, mutation: (row: CredentialRecord) => CredentialRecord | null) { const row = await this.get(userId, id); if (!row) return null; const next = mutation(row); if (!next) return null; this.rows.set(id, structuredClone(next)); this.audits.push(action); return next; }
+  async auditResolution(event: Record<string, unknown>) { this.resolutionAudits.push(structuredClone(event)); }
 }
 
 describe("CredentialService", () => {
@@ -65,11 +73,27 @@ describe("CredentialService", () => {
     const userId = randomUUID();
     const saved = await service.create(userId, { provider: "openai", apiKey: "secret-value" }, "req-1");
     await service.disable(userId, saved.id, "req-2");
-    expect(await service.resolve(userId, saved.id)).toBeNull();
+    await expect(service.resolve(userId, saved.id)).rejects.toMatchObject({ code: "CREDENTIAL_DISABLED" });
     await service.replace(userId, saved.id, { apiKey: "next-secret" }, "req-3");
     expect(await service.resolve(userId, saved.id)).toMatchObject({ apiKey: "next-secret" });
     await service.revoke(userId, saved.id, "req-4");
     await expect(service.replace(userId, saved.id, { apiKey: "again" }, "req-5")).rejects.toThrow("revoked");
     expect(repository.audits).toEqual(["credential.create", "credential.disable", "credential.replace", "credential.revoke"]);
+  });
+
+  it("audits successful and rejected resolution without secrets and fails closed on audit failure", async () => {
+    const repository = new MemoryCredentials();
+    const service = new CredentialService(repository, keys);
+    const userId = randomUUID();
+    const saved = await service.create(userId, { provider: "openai", apiKey: "audit-secret" }, "req-1");
+    await service.resolve(userId, saved.id, { runId: "run-1" });
+    await service.resolve(randomUUID(), saved.id, { runId: "run-2" });
+    expect(repository.resolutionAudits).toEqual([
+      expect.objectContaining({ credentialId: saved.id, provider: "openai", runId: "run-1", result: "success" }),
+      expect.objectContaining({ credentialId: saved.id, runId: "run-2", result: "rejected", reason: "not_found" }),
+    ]);
+    expect(JSON.stringify(repository.resolutionAudits)).not.toContain("audit-secret");
+    repository.auditResolution = async () => { throw new Error("audit unavailable"); };
+    await expect(service.resolve(userId, saved.id, { runId: "run-3" })).rejects.toThrow("audit unavailable");
   });
 });
