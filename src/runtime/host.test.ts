@@ -60,6 +60,23 @@ describe("Host", () => {
     expect(lifecycle.map((item) => item.summary)).toEqual(["启动创作", "运行完成"]);
   });
 
+  it("deduplicates repeated error lifecycle events with a stable ID", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "runtime-host-error-lifecycle-"));
+    const store = new Store(dir);
+    const config = { provider: "mock", model: "mock", providers: { mock: { api_key: "test" } }, roles: {}, output_dir: dir } as const;
+    const failing = (): RuntimeAgent => ({ run: async function* () { throw new Error("provider failed"); }, abort: vi.fn(), close: vi.fn() });
+    const first = await Host.new(config, {}, { agent: failing(), store });
+    await expect(first.startPrepared("write")).rejects.toThrow("provider failed");
+    await first.close();
+    const second = await Host.new(config, {}, { agent: failing(), store });
+    await expect(second.startPrepared("write")).rejects.toThrow("provider failed");
+    await second.close();
+
+    const errors = (await store.runtime.loadQueue()).filter((item) => item.category === "ERROR");
+    expect(errors).toHaveLength(1);
+    expect((errors[0]?.payload as { id?: string }).id).toMatch(/^lifecycle:.*:error:/);
+  });
+
   it("registers an injected agent observer once across multiple runs", async () => {
     const setObserver = vi.fn();
     const runtimeAgent = { ...agent(), setObserver };

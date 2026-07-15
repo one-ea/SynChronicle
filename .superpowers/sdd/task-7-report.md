@@ -100,3 +100,26 @@
 - `pnpm exec drizzle-kit generate`: no schema changes。
 - `git diff --check`: passed。
 - 首次将全量测试与 build/Drizzle 并行执行时，Argon2 用例因 CPU 争用触发 20 秒测试超时；独立重跑全量测试后 365 tests passed。
+
+## 最后一轮整改 RED / GREEN
+
+- RED: `pnpm vitest run src/worker/runner.test.ts src/runtime/host.test.ts`。
+- RED 结果: marker/run meta 已持久化，但 reclaim Host 的 `startPrepared()` prompt 未包含 durable pending steer；重复 provider failure 生成两个无稳定 ID 的 error lifecycle event。
+- GREEN: reclaim Worker 使用真实 Host 和共享 DatabaseStore backend，模拟 marker 写入后、command ack 前崩溃；新 Host 最终向 Agent prompt 投递一次 steer 并 ack。error lifecycle 使用稳定 ID，恢复重试只保留一条。
+- PostgreSQL 条件测试新增 transaction barrier：Worker A fenced transaction 已锁 task 行后跨越 lease expiry，Worker B claim 保持阻塞；A commit 后 B 才 reclaim，lease version 递增且章节只提交一次。
+- PostgreSQL 条件测试新增 checkpoint crash recovery 端到端：真实 checkpoint、expired lease、reclaim、fingerprint/project version、`Host.resume()`、chapter/usage/event 唯一性串联验证。
+- 删除无调用方且缺少 lease version fencing 的旧 `SchedulerRepository.applySteerCommands()`。
+
+## 最后一轮恢复证明
+
+- Host 在 agent 边界同时读取进程内 steer 与 `runMeta.pending_steer`。marker 已存在时 `Host.steer()` 保持幂等，durable pending 仍进入 prompt；成功执行后清除 pending，marker 保留用于 crash replay 判定。
+- command 在 ack 后、provider 调用前崩溃时，run meta pending 仍由下一 Host 自动投递；provider 成功后、ack 前崩溃时，下一 Worker 可 reclaim command，marker 阻止重复写入，已清理 pending 表示投递完成。
+- error lifecycle ID 由 Store scope 与错误消息确定，文件 Store 使用恢复时 seen-ID 去重，DatabaseStore 使用 `(run_id, stable_id)` 唯一约束去重。
+
+## 最后一轮测试证据
+
+- 目标测试: 6 files passed，1 PostgreSQL file skipped；60 passed，29 skipped。
+- PostgreSQL 条件测试仅在 `TEST_DATABASE_URL` 存在时执行，包括 transaction lock barrier 与 checkpoint crash recovery。
+- 全量测试: 48 files passed，3 conditional files skipped；367 passed，35 skipped。
+- `pnpm typecheck`、`pnpm build`、`pnpm exec drizzle-kit check`、`pnpm exec drizzle-kit generate`、`git diff --check` 全部通过。
+- 提交: `fix(worker): complete crash recovery delivery`，本报告随提交入库。

@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { Host, type RuntimeAgent } from "../runtime/host.js";
 import type { RunResumeData } from "../scheduler/types.js";
+import { createMemoryDatabaseStore } from "../store/database/index.js";
 import { WorkerRunner, taskFingerprint, type ClaimedTask, type WorkerHost, type WorkerScheduler } from "./runner.js";
 
 function task(overrides: Partial<ClaimedTask> = {}): ClaimedTask {
@@ -127,6 +129,30 @@ describe("WorkerRunner", () => {
     expect(fakeHost.steer).toHaveBeenCalledTimes(1);
     expect(fakeHost.steer).toHaveBeenCalledWith("steer-1", "Increase tension");
     expect(repository.acknowledgeSteerCommands).toHaveBeenCalledWith(claimed.id, "worker-1", claimed.leaseVersion, ["steer-1"]);
+  });
+
+  it("delivers a durable steer once after marker write and pre-ack crash", async () => {
+    const firstTask = task({ leaseOwner: "worker-a", leaseVersion: 1 });
+    const secondTask = task({ leaseOwner: "worker-b", leaseVersion: 2, attempts: 2 });
+    const firstScope = { userId: firstTask.userId, projectId: firstTask.projectId, runId: firstTask.runId, taskFingerprint: taskFingerprint(firstTask), projectVersion: 1, lease: { taskId: firstTask.id, owner: "worker-a", version: 1 } };
+    const firstStore = createMemoryDatabaseStore(firstScope);
+    firstStore.backend.setLease(firstScope.lease);
+    const config = { provider: "mock", model: "mock", providers: { mock: { api_key: "test" } }, roles: {} } as const;
+    const crashedHost = await Host.new(config, {}, { agent: { run: async function* () {}, abort: vi.fn(), close: vi.fn() }, store: firstStore });
+    await crashedHost.steer("steer-crash", "Raise the tension");
+    await crashedHost.close();
+
+    firstStore.backend.setLease({ taskId: secondTask.id, owner: "worker-b", version: 2 });
+    const secondStore = createMemoryDatabaseStore({ ...firstScope, lease: { taskId: secondTask.id, owner: "worker-b", version: 2 } }, firstStore.backend);
+    const prompts: string[] = [];
+    const agent: RuntimeAgent = { run: async function* (prompt) { prompts.push(prompt); }, abort: vi.fn(), close: vi.fn() };
+    const recoveredHost = await Host.new(config, {}, { agent, store: secondStore });
+    const repository = scheduler(secondTask, { desiredState: "running", steerCommands: [{ id: "steer-crash", instruction: "Raise the tension" }] });
+    await new WorkerRunner({ scheduler: repository, createHost: async () => recoveredHost, workerId: "worker-b", leaseMs: 30_000 }).runOnce();
+
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]?.match(/Raise the tension/g)).toHaveLength(1);
+    expect(repository.acknowledgeSteerCommands).toHaveBeenCalledWith(secondTask.id, "worker-b", 2, ["steer-crash"]);
   });
 
   it("restarts from a safe boundary when the project version changed", async () => {

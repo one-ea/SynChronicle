@@ -5,7 +5,8 @@ import { migrateDatabase } from "../../db/migrate.js";
 import { and, eq } from "drizzle-orm";
 import { artifacts, chapters, checkpoints, projects, runEvents, runs, tasks, usageRecords, users } from "../../db/schema/index.js";
 import { storeContract } from "../store.contract.js";
-import { DatabaseStore, createMemoryDatabaseStore } from "./index.js";
+import { SchedulerRepository } from "../../scheduler/repository.js";
+import { DatabaseStore, DrizzleDatabaseBackend, createMemoryDatabaseStore, type DatabaseBackend, type DatabaseStoreScope } from "./index.js";
 
 const scope = () => ({ userId: randomUUID(), projectId: randomUUID(), runId: randomUUID() });
 
@@ -191,6 +192,47 @@ describe.skipIf(!databaseUrl)("DatabaseStore PostgreSQL contract", () => {
 
     await expect(oldStore.commitStaged(staging, ids)).rejects.toThrow("lease ownership lost");
     expect(await oldStore.drafts.loadChapterText(1)).toBe("");
+  });
+
+  it("blocks reclaim while an expired lease holder owns the durable transaction row lock", async () => {
+    if (!databaseUrl || !database) return;
+    await migrateDatabase(databaseUrl);
+    const owner = scope();
+    await database.insert(users).values({ id: owner.userId, username: owner.userId, passwordHash: "test", concurrencyLimit: 2 });
+    const [project] = await database.insert(projects).values({ id: owner.projectId, userId: owner.userId, title: "transaction lock", version: 3 }).returning();
+    await database.insert(runs).values({ id: owner.runId, userId: owner.userId, projectId: owner.projectId, resumeData: { desiredState: "running", steerCommands: [] } });
+    const [task] = await database.insert(tasks).values({ ...owner, type: "write", status: "running", leaseOwner: "worker-a", leaseVersion: 1, leaseExpiresAt: new Date(Date.now() + 100) }).returning();
+    let locked!: () => void;
+    let release!: () => void;
+    const lockReady = new Promise<void>((resolve) => { locked = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const inner = new DrizzleDatabaseBackend(database);
+    const backend = new Proxy(inner, {
+      get(target, property) {
+        if (property === "transaction") return (storeScope: DatabaseStoreScope, operation: (value: DatabaseBackend) => Promise<unknown>) => target.transaction(storeScope, async (transaction) => { locked(); await gate; return operation(transaction); });
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as DatabaseBackend;
+    const store = new DatabaseStore(database, { ...owner, projectVersion: project!.version, taskFingerprint: "task", lease: { taskId: task!.id, owner: "worker-a", version: 1 } }, backend);
+    const recording = store.recordingTransaction();
+    await recording.store.drafts.saveFinalChapter(1, "worker-a chapter");
+    const staging = await store.staging.createSession(randomUUID());
+    const ids = await recording.stage(staging, 1);
+    const committing = store.commitStaged(staging, ids);
+    await lockReady;
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    const repository = new SchedulerRepository(database, { platformConcurrency: 100 });
+    let reclaimed = false;
+    const reclaiming = repository.claimNextTask("worker-b", 30_000).then((value) => { reclaimed = true; return value; });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(reclaimed).toBe(false);
+
+    release();
+    await committing;
+    const claimed = await reclaiming;
+    expect(claimed).toMatchObject({ id: task!.id, leaseOwner: "worker-b", leaseVersion: 2 });
+    expect(await store.drafts.loadChapterText(1)).toBe("worker-a chapter");
   });
 
   it("upserts concurrent usage snapshots by stable billing content", async () => {

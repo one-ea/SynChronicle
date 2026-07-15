@@ -275,28 +275,6 @@ export class SchedulerRepository {
     });
   }
 
-  async applySteerCommands(runId: string, workerId: string, commandIds: string[]): Promise<boolean> {
-    if (!commandIds.length) return true;
-    const now = new Date();
-    return this.db.transaction(async (transaction) => {
-      const [owned] = await transaction.select({ id: tasks.id }).from(tasks).where(and(
-        eq(tasks.runId, runId),
-        eq(tasks.leaseOwner, workerId),
-        inArray(tasks.status, activeTaskStatuses),
-        sql`${tasks.leaseExpiresAt} > ${now}`,
-      )).limit(1).for("update");
-      if (!owned) return false;
-      const [run] = await transaction.select().from(runs).where(eq(runs.id, runId)).limit(1).for("update");
-      if (!run) return false;
-      const resumeData = normalizeRunResumeData(run.resumeData);
-      await transaction.update(runs).set({
-        resumeData: { ...resumeData, steerCommands: resumeData.steerCommands.filter(({ id }) => !commandIds.includes(id)) },
-        updatedAt: now,
-      }).where(eq(runs.id, runId));
-      return true;
-    });
-  }
-
   async finishTask(taskId: string, workerId: string, status: ReleaseLeaseOutcome["status"], leaseVersion?: number): Promise<boolean> {
     const now = new Date();
     return this.db.transaction(async (transaction) => {
