@@ -20,6 +20,8 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
+    "web": "node dist/web/main.js",
+    "worker": "node dist/worker/main.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
@@ -40,22 +42,37 @@
     "url": "https://github.com/one-ea/SynChronicle.git"
   },
   "dependencies": {
+    "@fastify/cookie": "^11.1.1",
+    "@fastify/static": "^10.1.0",
+    "@fastify/websocket": "^11.3.0",
     "ai": "^5.0.48",
     "@ai-sdk/openai": "^2.0.32",
     "@ai-sdk/anthropic": "^2.0.16",
     "@ai-sdk/google": "^2.0.15",
+    "argon2": "^0.44.0",
+    "drizzle-orm": "^0.45.2",
+    "fastify": "^5.10.0",
+    "fastify-plugin": "^6.0.0",
     "ink": "^6.3.1",
+    "postgres": "^3.4.9",
     "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-router-dom": "^7.18.1",
     "zod": "^3.25.76",
     "gpt-tokenizer": "^3.4.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "@vitejs/plugin-react": "^6.0.3",
+    "drizzle-kit": "^0.31.10",
+    "playwright": "^1.61.1",
     "typescript": "^5.8.3",
     "tsup": "^8.5.0",
     "vitest": "^3.2.4",
     "@types/node": "^24.0.0",
     "@types/react": "^19.1.2",
-    "ink-testing-library": "^4.0.0"
+    "ink-testing-library": "^4.0.0",
+    "vite": "^8.1.4"
   },
   "pnpm": {
     "onlyBuiltDependencies": ["esbuild"]

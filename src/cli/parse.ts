@@ -1,11 +1,14 @@
 export type CLIOptions =
   | { command: "eval"; argv: string[] }
+  | { command: "web" }
+  | { command: "worker" }
   | { command: "version" }
   | { command: "update"; updateVersion: string }
   | { command: "start"; configPath: string; headless: boolean; prompt: string; promptFile: string; args: string[] };
 
 export function parseCLIOptions(argv: string[]): CLIOptions {
   if (argv[0] === "eval") return { command: "eval", argv: argv.slice(1) };
+  if (argv.length === 1 && (argv[0] === "web" || argv[0] === "worker")) return { command: argv[0] };
   let configPath = "", prompt = "", promptFile = "", updateVersion = "";
   let headless = false, version = false, update = false;
   const args: string[] = [];

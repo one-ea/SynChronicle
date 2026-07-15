@@ -17,6 +17,11 @@ describe("parseCLIOptions", () => {
     expect(parseCLIOptions(["eval", "--cases", "cases"])).toEqual({ command: "eval", argv: ["--cases", "cases"] });
   });
 
+  it("parses web and worker commands", () => {
+    expect(parseCLIOptions(["web"]).command).toBe("web");
+    expect(parseCLIOptions(["worker"]).command).toBe("worker");
+  });
+
   it.each([
     [["--prompt", "x", "--prompt-file", "p"], /不能同时使用/],
     [["--prompt", "x"], /仅能在 --headless/],
