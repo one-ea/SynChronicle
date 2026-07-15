@@ -219,9 +219,48 @@ describe("WorkerRunner", () => {
 
     expect(eventSink.appendEvent).toHaveBeenCalledWith(
       { userId: claimed.userId, projectId: claimed.projectId, runId: claimed.runId },
-      { stableId: null, type: "stream.delta", payload: { agent: "write", text: "draft text" } },
+      { stableId: `stream:${claimed.runId}:${claimed.id}:write:1`, type: "stream.delta", payload: { taskId: claimed.id, agent: "write", chunkSequence: 1, text: "draft text" } },
     );
     expect(calls).toEqual(["append:system", "append:stream.delta", "publish:1", "publish:2"]);
+  });
+
+  it("uses deterministic task and chunk sequence stable IDs across Worker retries", async () => {
+    const claimed = task();
+    const persisted = new Map<string, { sequence: number }>();
+    const appendEvent = vi.fn(async (eventScope, value) => {
+      const sequence = persisted.get(value.stableId!)?.sequence ?? persisted.size + 1;
+      persisted.set(value.stableId!, { sequence });
+      return { ...eventScope, ...value, id: value.stableId!, sequence, createdAt: new Date() };
+    });
+    const eventSink = { appendEvent, publish: vi.fn().mockResolvedValue(undefined) };
+
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const fakeHost = host().value;
+      fakeHost.stream = async function* () { yield "first"; yield "second"; };
+      await new WorkerRunner({ scheduler: scheduler({ ...claimed, attempts: attempt }), createHost: async () => fakeHost, workerId: "worker-1", eventSink }).runOnce();
+    }
+
+    expect(appendEvent.mock.calls.map(([, value]) => value)).toEqual([
+      { stableId: `stream:${claimed.runId}:${claimed.id}:write:1`, type: "stream.delta", payload: { taskId: claimed.id, agent: "write", chunkSequence: 1, text: "first" } },
+      { stableId: `stream:${claimed.runId}:${claimed.id}:write:2`, type: "stream.delta", payload: { taskId: claimed.id, agent: "write", chunkSequence: 2, text: "second" } },
+      { stableId: `stream:${claimed.runId}:${claimed.id}:write:1`, type: "stream.delta", payload: { taskId: claimed.id, agent: "write", chunkSequence: 1, text: "first" } },
+      { stableId: `stream:${claimed.runId}:${claimed.id}:write:2`, type: "stream.delta", payload: { taskId: claimed.id, agent: "write", chunkSequence: 2, text: "second" } },
+    ]);
+    expect(persisted).toHaveLength(2);
+  });
+
+  it("uses the persisted Host chunk sequence instead of a process-local counter", async () => {
+    const claimed = task();
+    const fakeHost = host().value;
+    fakeHost.stream = async function* () { yield { sequence: 41, text: "persisted" }; };
+    const eventSink = { appendEvent: vi.fn(async (eventScope, value) => ({ ...eventScope, ...value, id: "event", sequence: 1, createdAt: new Date() })), publish: vi.fn().mockResolvedValue(undefined) };
+
+    await new WorkerRunner({ scheduler: scheduler(claimed), createHost: async () => fakeHost, workerId: "worker-1", eventSink }).runOnce();
+
+    expect(eventSink.appendEvent).toHaveBeenCalledWith(
+      { userId: claimed.userId, projectId: claimed.projectId, runId: claimed.runId },
+      { stableId: `stream:${claimed.runId}:${claimed.id}:write:41`, type: "stream.delta", payload: { taskId: claimed.id, agent: "write", chunkSequence: 41, text: "persisted" } },
+    );
   });
 
   it("propagates shutdown abort to the active Host execution", async () => {

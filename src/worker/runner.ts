@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { ClaimedTask as SchedulerClaimedTask, ReleaseLeaseOutcome, RunResumeData } from "../scheduler/types.js";
 import type { EventWakeup } from "../realtime/broker.js";
 import type { NewRunEvent, RunEvent, RunEventScope } from "../realtime/eventRepository.js";
+import type { RuntimeStreamChunk } from "../runtime/stream.js";
 import { TaskExecutionError, taskError, taskPrompt, type WorkerBoundary } from "./commands.js";
 
 export type ClaimedTask = SchedulerClaimedTask;
@@ -14,7 +15,7 @@ export interface WorkerHost {
   abort(reason: string): void;
   close(): Promise<void>;
   events?(): AsyncIterable<unknown>;
-  stream?(): AsyncIterable<string>;
+  stream?(): AsyncIterable<string | RuntimeStreamChunk>;
   setBoundaryHandler(handler: (boundary?: WorkerBoundary) => Promise<void>): void;
 }
 
@@ -84,11 +85,7 @@ export class WorkerRunner {
         type: eventType(value),
         payload: value,
       }), scope, this.dependencies.eventSink),
-      persist(host.stream?.(), (value) => ({
-        stableId: null,
-        type: "stream.delta",
-        payload: { agent: task.type, text: String(value) },
-      }), scope, this.dependencies.eventSink),
+      persistStream(host.stream?.(), scope, task.id, task.type, this.dependencies.eventSink),
     ].filter((value): value is Promise<void> => Boolean(value));
     const executionState: { outcome: ReleaseLeaseOutcome["status"] } = { outcome: "completed" };
     let leaseLost: TaskExecutionError | null = null;
@@ -196,6 +193,30 @@ function persist(
     for await (const value of iterable) {
       if (!sink) continue;
       const event = await sink.appendEvent(scope, map(value));
+      await sink.publish({ runId: event.runId, sequence: event.sequence });
+    }
+  })();
+}
+
+function persistStream(
+  iterable: AsyncIterable<string | RuntimeStreamChunk> | undefined,
+  scope: RunEventScope,
+  taskId: string,
+  agent: string,
+  sink: WorkerRunnerDependencies["eventSink"],
+): Promise<void> | undefined {
+  if (!iterable) return undefined;
+  return (async () => {
+    let chunkSequence = 0;
+    for await (const value of iterable) {
+      if (!sink) continue;
+      const chunk = typeof value === "string" ? { sequence: chunkSequence + 1, text: value } : value;
+      chunkSequence = chunk.sequence;
+      const event = await sink.appendEvent(scope, {
+        stableId: `stream:${scope.runId}:${taskId}:${agent}:${chunkSequence}`,
+        type: "stream.delta",
+        payload: { taskId, agent, chunkSequence, text: chunk.text },
+      });
       await sink.publish({ runId: event.runId, sequence: event.sequence });
     }
   })();

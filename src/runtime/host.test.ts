@@ -222,9 +222,13 @@ describe("Host", () => {
     const stream = value.stream();
     await value.startPrepared("write");
     expect(runtimeAgent.run).toHaveBeenCalledWith("write", expect.any(AbortSignal));
-    const chunks: string[] = [];
+    const chunks: Array<{ sequence: number; text: string }> = [];
     for await (const chunk of stream) chunks.push(chunk);
-    expect(chunks).toEqual(["hello", " world"]);
+    expect(chunks).toEqual([
+      { sequence: expect.any(Number), text: "hello" },
+      { sequence: expect.any(Number), text: " world" },
+    ]);
+    expect(chunks[1]!.sequence).toBe(chunks[0]!.sequence + 1);
     expect(value.snapshot().runtimeState).toBe("completed");
     await expect(value.replayQueue(10)).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ category: "SYSTEM" })]));
   });

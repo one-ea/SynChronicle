@@ -18,6 +18,10 @@ type AuthorizedRequest = FastifyRequest & { realtimeScope?: RunEventScope; realt
 export const realtimeRoutes: FastifyPluginAsync<RealtimeRoutesOptions> = async (app, options) => {
   const pageSize = options.pageSize ?? 500;
   const maxBufferedBytes = options.maxBufferedBytes ?? 1024 * 1024;
+  const connections = new Set<() => Promise<void>>();
+  app.addHook("onClose", async () => {
+    await Promise.all([...connections].map((cleanup) => cleanup()));
+  });
 
   app.get("/ws/runs/:runId", {
     websocket: true,
@@ -44,8 +48,10 @@ export const realtimeRoutes: FastifyPluginAsync<RealtimeRoutesOptions> = async (
     const cleanup = async () => {
       if (closed) return;
       closed = true;
+      connections.delete(cleanup);
       await unsubscribe?.();
     };
+    connections.add(cleanup);
     socket.once("close", () => void cleanup());
     socket.once("error", () => void cleanup());
 
@@ -63,12 +69,13 @@ export const realtimeRoutes: FastifyPluginAsync<RealtimeRoutesOptions> = async (
             const events = await options.repository.listAfter(scope, cursor, pageSize);
             for (const event of events) {
               if (event.sequence <= cursor) continue;
-              if (socket.bufferedAmount > maxBufferedBytes) {
+              const message = JSON.stringify(event);
+              if (exceedsBackpressure(socket.bufferedAmount, message, maxBufferedBytes)) {
                 socket.close(1013, "Slow consumer");
                 await cleanup();
                 return;
               }
-              socket.send(JSON.stringify(event));
+              socket.send(message);
               cursor = event.sequence;
             }
             if (events.length < pageSize) break;
@@ -84,6 +91,10 @@ export const realtimeRoutes: FastifyPluginAsync<RealtimeRoutesOptions> = async (
         await drain();
         unsubscribe = await options.broker.subscribe((wakeup) => {
           if ((!wakeup.runId || wakeup.runId === scope.runId) && wakeup.sequence > cursor) return drain();
+        }, async (error) => {
+          request.log.error({ err: error }, "run event wakeup failed");
+          socket.close(1011, "Event stream failed");
+          await cleanup();
         });
         if (closed) await unsubscribe();
         else await drain();
@@ -95,3 +106,7 @@ export const realtimeRoutes: FastifyPluginAsync<RealtimeRoutesOptions> = async (
     })();
   });
 };
+
+export function exceedsBackpressure(bufferedAmount: number, message: string, maxBufferedBytes: number): boolean {
+  return bufferedAmount + Buffer.byteLength(message, "utf8") > maxBufferedBytes;
+}

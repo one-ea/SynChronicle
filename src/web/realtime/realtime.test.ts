@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { RequestAuth } from "../auth/plugin.js";
 import { InMemoryEventBroker, type EventWakeup } from "../../realtime/broker.js";
 import type { RunEvent, RunEventRepository, RunEventScope } from "../../realtime/eventRepository.js";
-import { realtimeRoutes } from "./routes.js";
+import { exceedsBackpressure, realtimeRoutes } from "./routes.js";
 
 const alice: RequestAuth = { userId: "alice", role: "user", sessionId: "session-a" };
 const scope: RunEventScope = { userId: alice.userId, projectId: "project-a", runId: "00000000-0000-4000-8000-000000000001" };
@@ -36,7 +36,7 @@ class MemoryEvents implements RunEventRepository {
 const apps: Array<ReturnType<typeof Fastify>> = [];
 afterEach(async () => Promise.all(apps.splice(0).map((app) => app.close())));
 
-async function testApp(repository = new MemoryEvents(), broker = new InMemoryEventBroker(), maxBufferedBytes = 64) {
+async function testApp(repository = new MemoryEvents(), broker = new InMemoryEventBroker(), maxBufferedBytes = 64_000) {
   const app = Fastify();
   apps.push(app);
   app.decorateRequest("auth");
@@ -159,6 +159,43 @@ describe("run event websocket", () => {
 
     await expect(close).resolves.toEqual({ code: 1013, reason: "Slow consumer" });
     expect(broker.subscriberCount).toBe(0);
+  });
+
+  it("closes and unsubscribes when an asynchronous wakeup pull fails", async () => {
+    const repository = new MemoryEvents();
+    const broker = new InMemoryEventBroker();
+    const { app } = await testApp(repository, broker);
+    const client = await connect(app, `/ws/runs/${scope.runId}?after=0`);
+    repository.afterList = () => { throw new Error("database unavailable"); };
+    const close = new Promise<{ code: number; reason: string }>((resolve) => {
+      client.socket.once("close", (code: number, reason: { toString(): string }) => resolve({ code, reason: reason.toString() }));
+    });
+
+    await broker.publish({ runId: scope.runId, sequence: 1 });
+    await expect(close).resolves.toEqual({ code: 1011, reason: "Event stream failed" });
+    expect(broker.subscriberCount).toBe(0);
+  });
+
+  it("clears active subscriptions when the server closes", async () => {
+    const repository = new MemoryEvents();
+    const broker = new InMemoryEventBroker();
+    const { app } = await testApp(repository, broker);
+    await connect(app, `/ws/runs/${scope.runId}?after=0`);
+    expect(broker.subscriberCount).toBe(1);
+
+    await app.close();
+    expect(broker.subscriberCount).toBe(0);
+  });
+});
+
+describe("backpressure accounting", () => {
+  it("includes the serialized message bytes for a single oversized event", () => {
+    expect(exceedsBackpressure(0, "€", 2)).toBe(true);
+  });
+
+  it("combines queued bytes with the next serialized message", () => {
+    expect(exceedsBackpressure(8, "abc", 10)).toBe(true);
+    expect(exceedsBackpressure(7, "abc", 10)).toBe(false);
   });
 });
 
