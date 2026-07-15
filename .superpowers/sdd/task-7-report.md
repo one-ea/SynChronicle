@@ -123,3 +123,20 @@
 - 全量测试: 48 files passed，3 conditional files skipped；367 passed，35 skipped。
 - `pnpm typecheck`、`pnpm build`、`pnpm exec drizzle-kit check`、`pnpm exec drizzle-kit generate`、`git diff --check` 全部通过。
 - 提交: `fix(worker): complete crash recovery delivery`，本报告随提交入库。
+
+## Steer Exactly-Once 整改
+
+- RED: 同一 agent boundary 输入 `Direction A`、`Direction B` 时，旧实现同时拼接内存单条列表和完整 `pending_steer` 字符串，测试观察到 `Direction A` 出现两次。
+- RED: Store 缺少 `completeSteerDelivery()`，无法在单一 fenced transaction 内清理 pending steer 并恢复 progress flow。
+- GREEN: StorePort 新增结构化 durable steer inbox、`applySteerCommand()`、`pendingSteerCommands()` 和 `completeSteerDelivery()` 领域操作。
+- Host 删除进程内 pending steer 列表，只从结构化 inbox 读取 `{ id, instruction }`，同边界 A/B 每条只进入 Agent prompt 一次。
+- marker 写入后、ack 前崩溃恢复测试升级为 A/B 两条命令；reclaim Host 从共享 durable inbox 恢复并各投递一次。
+- provider 成功后，`completeSteerDelivery(commandIds)` 在同一 fenced transaction 中移除已投递 command ID、重建 `runMeta.pending_steer`，并在 inbox 清空时把 progress flow 从 `steering` 恢复为 `writing`。
+- Memory 和 PostgreSQL 均覆盖清理中途 progress 写入失败，验证 inbox、run meta、progress 三者整体回滚。
+- Store 合同覆盖分批完成：清理 A 时保留更新后的 B 与 `steering`，清理 B 后统一切换为 `writing`。
+
+## Steer Exactly-Once 测试证据
+
+- 目标测试: 4 files passed，1 PostgreSQL conditional file skipped；53 passed，14 skipped。
+- 全量测试: 48 files passed，3 conditional files skipped；371 passed，37 skipped。
+- 提交: `fix(worker): deliver steer commands exactly once`，本报告随提交入库。

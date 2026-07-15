@@ -11,6 +11,8 @@ import type { SessionStore } from "./session.js";
 import type { SummaryStore } from "./summaries.js";
 import type { WorldStore } from "./world.js";
 
+export interface DurableSteerCommand { id: string; instruction: string; }
+
 export interface SignalStorePort {
   saveLastCommit(value: unknown): Promise<void>;
   loadLastCommit(): Promise<unknown>;
@@ -52,6 +54,9 @@ export interface StorePort {
   checkConsistency(): Promise<string[]>;
   foundationMissing(): Promise<string[]>;
   clearHandledSteer(): Promise<void>;
+  applySteerCommand(commandId: string, instruction: string, fallback: RunMeta): Promise<boolean>;
+  pendingSteerCommands(): Promise<DurableSteerCommand[]>;
+  completeSteerDelivery(commandIds: string[]): Promise<void>;
   recordingTransaction(): RecordingTransactionPort;
   writeArtifact(path: string, value: unknown): Promise<void>;
   commitStaged(staging: StagingSession, candidateIds: string[]): Promise<void>;

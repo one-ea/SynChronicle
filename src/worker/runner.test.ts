@@ -131,7 +131,26 @@ describe("WorkerRunner", () => {
     expect(repository.acknowledgeSteerCommands).toHaveBeenCalledWith(claimed.id, "worker-1", claimed.leaseVersion, ["steer-1"]);
   });
 
-  it("delivers a durable steer once after marker write and pre-ack crash", async () => {
+  it("delivers each same-boundary steer command exactly once", async () => {
+    const claimed = task();
+    const commands = [{ id: "steer-a", instruction: "Direction A" }, { id: "steer-b", instruction: "Direction B" }];
+    const repository = scheduler(claimed, { desiredState: "running", steerCommands: commands });
+    const storeScope = { userId: claimed.userId, projectId: claimed.projectId, runId: claimed.runId, taskFingerprint: taskFingerprint(claimed), projectVersion: 1, lease: { taskId: claimed.id, owner: "worker-1", version: 1 } };
+    const store = createMemoryDatabaseStore(storeScope);
+    store.backend.setLease(storeScope.lease);
+    const prompts: string[] = [];
+    const agent: RuntimeAgent = { run: async function* (prompt) { prompts.push(prompt); }, abort: vi.fn(), close: vi.fn() };
+    const actualHost = await Host.new({ provider: "mock", model: "mock", providers: { mock: { api_key: "test" } }, roles: {} }, {}, { agent, store });
+
+    await new WorkerRunner({ scheduler: repository, createHost: async () => actualHost, workerId: "worker-1", leaseMs: 30_000 }).runOnce();
+
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]?.match(/Direction A/g)).toHaveLength(1);
+    expect(prompts[0]?.match(/Direction B/g)).toHaveLength(1);
+    expect(repository.acknowledgeSteerCommands).toHaveBeenCalledWith(claimed.id, "worker-1", 1, ["steer-a", "steer-b"]);
+  });
+
+  it("delivers durable steer commands once after marker write and pre-ack crash", async () => {
     const firstTask = task({ leaseOwner: "worker-a", leaseVersion: 1 });
     const secondTask = task({ leaseOwner: "worker-b", leaseVersion: 2, attempts: 2 });
     const firstScope = { userId: firstTask.userId, projectId: firstTask.projectId, runId: firstTask.runId, taskFingerprint: taskFingerprint(firstTask), projectVersion: 1, lease: { taskId: firstTask.id, owner: "worker-a", version: 1 } };
@@ -139,7 +158,8 @@ describe("WorkerRunner", () => {
     firstStore.backend.setLease(firstScope.lease);
     const config = { provider: "mock", model: "mock", providers: { mock: { api_key: "test" } }, roles: {} } as const;
     const crashedHost = await Host.new(config, {}, { agent: { run: async function* () {}, abort: vi.fn(), close: vi.fn() }, store: firstStore });
-    await crashedHost.steer("steer-crash", "Raise the tension");
+    await crashedHost.steer("steer-crash-a", "Raise the tension");
+    await crashedHost.steer("steer-crash-b", "Shorten the scene");
     await crashedHost.close();
 
     firstStore.backend.setLease({ taskId: secondTask.id, owner: "worker-b", version: 2 });
@@ -147,12 +167,13 @@ describe("WorkerRunner", () => {
     const prompts: string[] = [];
     const agent: RuntimeAgent = { run: async function* (prompt) { prompts.push(prompt); }, abort: vi.fn(), close: vi.fn() };
     const recoveredHost = await Host.new(config, {}, { agent, store: secondStore });
-    const repository = scheduler(secondTask, { desiredState: "running", steerCommands: [{ id: "steer-crash", instruction: "Raise the tension" }] });
+    const repository = scheduler(secondTask, { desiredState: "running", steerCommands: [{ id: "steer-crash-a", instruction: "Raise the tension" }, { id: "steer-crash-b", instruction: "Shorten the scene" }] });
     await new WorkerRunner({ scheduler: repository, createHost: async () => recoveredHost, workerId: "worker-b", leaseMs: 30_000 }).runOnce();
 
     expect(prompts).toHaveLength(1);
     expect(prompts[0]?.match(/Raise the tension/g)).toHaveLength(1);
-    expect(repository.acknowledgeSteerCommands).toHaveBeenCalledWith(secondTask.id, "worker-b", 2, ["steer-crash"]);
+    expect(prompts[0]?.match(/Shorten the scene/g)).toHaveLength(1);
+    expect(repository.acknowledgeSteerCommands).toHaveBeenCalledWith(secondTask.id, "worker-b", 2, ["steer-crash-a", "steer-crash-b"]);
   });
 
   it("restarts from a safe boundary when the project version changed", async () => {

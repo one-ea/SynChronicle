@@ -6,7 +6,7 @@ import { and, eq } from "drizzle-orm";
 import { artifacts, chapters, checkpoints, projects, runEvents, runs, tasks, usageRecords, users } from "../../db/schema/index.js";
 import { storeContract } from "../store.contract.js";
 import { SchedulerRepository } from "../../scheduler/repository.js";
-import { DatabaseStore, DrizzleDatabaseBackend, createMemoryDatabaseStore, type DatabaseBackend, type DatabaseStoreScope } from "./index.js";
+import { DatabaseStore, DrizzleDatabaseBackend, MemoryDatabaseBackend, createMemoryDatabaseStore, type DatabaseBackend, type DatabaseStoreScope } from "./index.js";
 
 const scope = () => ({ userId: randomUUID(), projectId: randomUUID(), runId: randomUUID() });
 
@@ -101,6 +101,29 @@ describe("DatabaseStore memory contract", () => {
     await expect(store.applySteerCommand("steer-1", "Raise tension", fallback)).resolves.toBe(true);
     await expect(store.applySteerCommand("steer-1", "Raise tension", fallback)).resolves.toBe(false);
     expect(await store.runMeta.load()).toMatchObject({ pending_steer: "Raise tension", steer_history: [{ input: "Raise tension" }] });
+  });
+
+  it("rolls back steer inbox, run meta, and progress when atomic cleanup fails", async () => {
+    const owner = { ...scope(), lease: { taskId: randomUUID(), owner: "worker-a", version: 1 } };
+    const inner = new MemoryDatabaseBackend();
+    inner.setLease(owner.lease);
+    const fallback = { started_at: "now", provider: "test", style: "", model: "test", planning_tier: "mid" as const, steer_history: [], pending_steer: "", pause_point: null };
+    const base = new DatabaseStore({} as never, owner, inner);
+    await base.progress.save({ novel_name: "Book", phase: "writing", current_chapter: 1, total_chapters: 2, completed_chapters: [], total_word_count: 0, flow: "steering" });
+    await base.applySteerCommand("steer-a", "Direction A", fallback);
+    const failing = new Proxy(inner, {
+      get(target, property) {
+        if (property === "transaction") return (storeScope: DatabaseStoreScope, operation: (backend: DatabaseBackend) => Promise<unknown>) => target.transaction(storeScope, (transaction) => operation(new Proxy(transaction, { get(value, key) { if (key === "write") return async (scopeValue: DatabaseStoreScope, path: string, content: Uint8Array) => { if (path === "meta/progress.json") throw new Error("cleanup failure"); return value.write(scopeValue, path, content); }; const member = Reflect.get(value, key, value); return typeof member === "function" ? member.bind(value) : member; } }) as DatabaseBackend));
+        const member = Reflect.get(target, property, target);
+        return typeof member === "function" ? member.bind(target) : member;
+      },
+    }) as DatabaseBackend;
+    const store = new DatabaseStore({} as never, owner, failing);
+
+    await expect(store.completeSteerDelivery(["steer-a"])).rejects.toThrow("cleanup failure");
+    expect(await store.pendingSteerCommands()).toEqual([{ id: "steer-a", instruction: "Direction A" }]);
+    expect(await store.runMeta.load()).toMatchObject({ pending_steer: "Direction A" });
+    expect(await store.progress.load()).toMatchObject({ flow: "steering" });
   });
 });
 
@@ -247,5 +270,34 @@ describe.skipIf(!databaseUrl)("DatabaseStore PostgreSQL contract", () => {
     await Promise.all([store.usage.save({ ...base, updated_at: "first" }), store.usage.save({ ...base, updated_at: "second" })]);
     const rows = await database.select().from(usageRecords).where(and(eq(usageRecords.runId, owner.runId), eq(usageRecords.agent, "__store_state__")));
     expect(rows).toHaveLength(1);
+  });
+
+  it("rolls back PostgreSQL steer cleanup when progress update fails", async () => {
+    if (!databaseUrl || !database) return;
+    await migrateDatabase(databaseUrl);
+    const owner = scope();
+    await database.insert(users).values({ id: owner.userId, username: owner.userId, passwordHash: "test" });
+    const [project] = await database.insert(projects).values({ id: owner.projectId, userId: owner.userId, title: "steer cleanup", version: 2 }).returning();
+    await database.insert(runs).values({ id: owner.runId, userId: owner.userId, projectId: owner.projectId });
+    const [task] = await database.insert(tasks).values({ ...owner, type: "write", status: "running", leaseOwner: "worker-a", leaseVersion: 1, leaseExpiresAt: new Date(Date.now() + 30_000) }).returning();
+    const storeScope = { ...owner, projectVersion: project!.version, lease: { taskId: task!.id, owner: "worker-a", version: 1 } };
+    const base = new DatabaseStore(database, storeScope);
+    const fallback = { started_at: "now", provider: "test", style: "", model: "test", planning_tier: "mid" as const, steer_history: [], pending_steer: "", pause_point: null };
+    await base.progress.save({ novel_name: "Book", phase: "writing", current_chapter: 1, total_chapters: 2, completed_chapters: [], total_word_count: 0, flow: "steering" });
+    await base.applySteerCommand("steer-a", "Direction A", fallback);
+    const inner = new DrizzleDatabaseBackend(database);
+    const failing = new Proxy(inner, {
+      get(target, property) {
+        if (property === "transaction") return (scopeValue: DatabaseStoreScope, operation: (backend: DatabaseBackend) => Promise<unknown>) => target.transaction(scopeValue, (transaction) => operation(new Proxy(transaction, { get(value, key) { if (key === "write") return async (writeScope: DatabaseStoreScope, path: string, content: Uint8Array) => { if (path === "meta/progress.json") throw new Error("cleanup failure"); return value.write(writeScope, path, content); }; const member = Reflect.get(value, key, value); return typeof member === "function" ? member.bind(value) : member; } }) as DatabaseBackend));
+        const member = Reflect.get(target, property, target);
+        return typeof member === "function" ? member.bind(target) : member;
+      },
+    }) as DatabaseBackend;
+    const store = new DatabaseStore(database, storeScope, failing);
+
+    await expect(store.completeSteerDelivery(["steer-a"])).rejects.toThrow("cleanup failure");
+    expect(await base.pendingSteerCommands()).toEqual([{ id: "steer-a", instruction: "Direction A" }]);
+    expect(await base.runMeta.load()).toMatchObject({ pending_steer: "Direction A" });
+    expect(await base.progress.load()).toMatchObject({ flow: "steering" });
   });
 });

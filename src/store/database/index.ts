@@ -1,7 +1,8 @@
 import type { Database } from "../../db/client.js";
 import { Store, StoreScope } from "../index.js";
 import type { StagingSession } from "../staging.js";
-import type { RunMeta } from "../../domain/index.js";
+import type { Progress, RunMeta } from "../../domain/index.js";
+import type { DurableSteerCommand } from "../port.js";
 import { DrizzleDatabaseBackend, MemoryDatabaseBackend, scopedArtifactFilter, type DatabaseBackend, type DatabaseStoreScope } from "./artifacts.js";
 import { commitDatabaseStaging, DatabaseRecordingTransaction } from "./checkpoints.js";
 import { DatabaseFileIO, DatabaseRuntimeStore } from "./runtime.js";
@@ -20,12 +21,26 @@ export class DatabaseStore extends Store {
   async applySteerCommand(commandId: string, instruction: string, fallback: RunMeta): Promise<boolean> {
     return this.backend.transaction(this.scope, async (backend) => {
       const io = this.databaseIo.withBackend(backend);
-      const marker = `meta/worker-steer/${commandId}.json`;
-      if (await backend.read(this.scope, marker)) return false;
+      const commands = await io.readJSON<DurableSteerCommand[]>("meta/worker-steer/inbox.json") ?? [];
+      if (commands.some(({ id }) => id === commandId)) return false;
+      const next = [...commands, { id: commandId, instruction }];
       const current = await io.readJSON<RunMeta>("meta/run.json") ?? fallback;
-      await io.writeJSON("meta/run.json", { ...current, pending_steer: [current.pending_steer, instruction].filter(Boolean).join("\n"), steer_history: [...current.steer_history, { input: instruction, timestamp: new Date().toISOString() }] });
-      await backend.write(this.scope, marker, Buffer.from(JSON.stringify({ commandId, instruction })));
+      await io.writeJSON("meta/worker-steer/inbox.json", next);
+      await io.writeJSON("meta/run.json", { ...current, pending_steer: steerText(next), steer_history: [...current.steer_history, { input: instruction, timestamp: new Date().toISOString() }] });
       return true;
+    });
+  }
+  async pendingSteerCommands(): Promise<DurableSteerCommand[]> { return await this.databaseIo.readJSON<DurableSteerCommand[]>("meta/worker-steer/inbox.json") ?? []; }
+  async completeSteerDelivery(commandIds: string[]): Promise<void> {
+    await this.backend.transaction(this.scope, async (backend) => {
+      const io = this.databaseIo.withBackend(backend);
+      const ids = new Set(commandIds);
+      const remaining = (await io.readJSON<DurableSteerCommand[]>("meta/worker-steer/inbox.json") ?? []).filter(({ id }) => !ids.has(id));
+      await io.writeJSON("meta/worker-steer/inbox.json", remaining);
+      const meta = await io.readJSON<RunMeta>("meta/run.json");
+      if (meta) await io.writeJSON("meta/run.json", { ...meta, pending_steer: steerText(remaining) });
+      const progress = await io.readJSON<Progress>("meta/progress.json");
+      if (progress?.flow === "steering" && !remaining.length) await io.writeJSON("meta/progress.json", { ...progress, flow: "writing" });
     });
   }
   override resolveExportPath(_filename: string): string { throw new Error("DatabaseStore requires an explicit export path"); }
@@ -40,3 +55,5 @@ export function createMemoryDatabaseStore(scope: DatabaseStoreScope, backend = n
 
 export { DatabaseRecordingTransaction, DatabaseFileIO, DrizzleDatabaseBackend, MemoryDatabaseBackend, StoreScope };
 export type { DatabaseBackend, DatabaseStoreScope };
+
+function steerText(commands: DurableSteerCommand[]): string { return commands.map(({ instruction }) => instruction).join("\n"); }

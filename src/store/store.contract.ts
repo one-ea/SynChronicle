@@ -68,4 +68,22 @@ export function storeContract(createStore: () => Promise<StorePort>): void {
     expect(await store.runtime.loadQueue()).toEqual([]);
     expect(await store.checkpoints.all()).toEqual([]);
   });
+
+  it("completes structured steer delivery without clearing newer commands", async () => {
+    const store = await createStore();
+    const fallback = { started_at: "now", provider: "test", style: "", model: "test", planning_tier: "mid" as const, steer_history: [], pending_steer: "", pause_point: null };
+    await store.progress.save({ novel_name: "Book", phase: "writing", current_chapter: 1, total_chapters: 2, completed_chapters: [], total_word_count: 0, flow: "steering" });
+    await store.applySteerCommand("steer-a", "Direction A", fallback);
+    await store.applySteerCommand("steer-b", "Direction B", fallback);
+
+    await store.completeSteerDelivery(["steer-a"]);
+    expect(await store.pendingSteerCommands()).toEqual([{ id: "steer-b", instruction: "Direction B" }]);
+    expect(await store.runMeta.load()).toMatchObject({ pending_steer: "Direction B" });
+    expect(await store.progress.load()).toMatchObject({ flow: "steering" });
+
+    await store.completeSteerDelivery(["steer-b"]);
+    expect(await store.pendingSteerCommands()).toEqual([]);
+    expect(await store.runMeta.load()).toMatchObject({ pending_steer: "" });
+    expect(await store.progress.load()).toMatchObject({ flow: "writing" });
+  });
 }
