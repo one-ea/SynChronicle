@@ -2,6 +2,7 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import type { RequestAuth } from "../auth/plugin.js";
 import type { AuditEventInput, AuditRepositoryLike } from "../audit/repository.js";
 import type { ProjectMutationResult, ProjectRow } from "./repository.js";
+import type { ProjectMutationService } from "./service.js";
 import {
   ArchiveProjectSchema,
   CreateProjectSchema,
@@ -24,6 +25,7 @@ export interface ProjectRepositoryLike {
 interface ProjectRoutesOptions {
   repository: ProjectRepositoryLike;
   audit: AuditRepositoryLike;
+  mutations: Pick<ProjectMutationService, "create" | "update" | "archive">;
 }
 
 const notFoundBody = { error: "Project not found" } as const;
@@ -75,7 +77,7 @@ export const projectRoutes: FastifyPluginAsync<ProjectRoutesOptions> = async (ap
     }
     let project: ProjectRecord;
     try {
-      project = await options.repository.create(request.auth, input.data);
+      project = await options.mutations.create(request.auth, input.data, request.id);
     } catch (error) {
       await auditMutation(options.audit, request, {
         action: "project.create",
@@ -84,11 +86,6 @@ export const projectRoutes: FastifyPluginAsync<ProjectRoutesOptions> = async (ap
       });
       throw error;
     }
-    await auditMutation(options.audit, request, {
-      action: "project.create",
-      targetId: project.id,
-      result: "success",
-    });
     return reply.code(201).send({ project });
   });
 
@@ -105,7 +102,7 @@ export const projectRoutes: FastifyPluginAsync<ProjectRoutesOptions> = async (ap
     }
     let result: ProjectMutationResult;
     try {
-      result = await options.repository.update(request.auth, params.data.projectId, input.data);
+      result = await options.mutations.update(request.auth, params.data.projectId, input.data, request.id);
     } catch (error) {
       await auditMutation(options.audit, request, {
         action: "project.update",
@@ -114,11 +111,6 @@ export const projectRoutes: FastifyPluginAsync<ProjectRoutesOptions> = async (ap
       });
       throw error;
     }
-    await auditMutation(options.audit, request, {
-      action: "project.update",
-      targetId: params.data.projectId,
-      result: result === "missing" ? "not_found" : result === "conflict" ? "conflict" : "success",
-    });
     return sendMutationResult(reply, result);
   });
 
@@ -135,7 +127,7 @@ export const projectRoutes: FastifyPluginAsync<ProjectRoutesOptions> = async (ap
     }
     let result: ProjectMutationResult;
     try {
-      result = await options.repository.archive(request.auth, params.data.projectId, input.data.version);
+      result = await options.mutations.archive(request.auth, params.data.projectId, input.data.version, request.id);
     } catch (error) {
       await auditMutation(options.audit, request, {
         action: "project.archive",
@@ -144,11 +136,6 @@ export const projectRoutes: FastifyPluginAsync<ProjectRoutesOptions> = async (ap
       });
       throw error;
     }
-    await auditMutation(options.audit, request, {
-      action: "project.archive",
-      targetId: params.data.projectId,
-      result: result === "missing" ? "not_found" : result === "conflict" ? "conflict" : "success",
-    });
     return sendMutationResult(reply, result);
   });
 };

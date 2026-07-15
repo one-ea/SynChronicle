@@ -78,7 +78,10 @@ class MemoryAuditRepository implements AuditRepositoryLike {
 async function projectTestApp() {
   const projects = new MemoryProjectRepository();
   const audit = new MemoryAuditRepository();
-  const app = Fastify();
+  const app = Fastify({ genReqId: () => randomUUID() });
+  app.addHook("onSend", async (request, reply) => {
+    reply.header("x-request-id", request.id);
+  });
   app.decorateRequest("auth");
   app.decorate("authenticateRequest", async (request) => {
     request.auth = {
@@ -87,7 +90,36 @@ async function projectTestApp() {
       sessionId: `session-${request.headers["x-user-id"]}`,
     };
   });
-  await app.register(projectRoutes, { prefix: "/api/projects", repository: projects, audit });
+  const mutations = {
+    async create(auth: RequestAuth, input: CreateProjectInput, requestId: string) {
+      const project = await projects.create(auth, input);
+      await audit.write({ actorId: auth.userId, action: "project.create", targetId: project.id, result: "success", requestId });
+      return project;
+    },
+    async update(auth: RequestAuth, projectId: string, input: UpdateProjectInput, requestId: string) {
+      const result = await projects.update(auth, projectId, input);
+      await audit.write({
+        actorId: auth.userId,
+        action: "project.update",
+        targetId: projectId,
+        result: result === "missing" ? "not_found" : result === "conflict" ? "conflict" : "success",
+        requestId,
+      });
+      return result;
+    },
+    async archive(auth: RequestAuth, projectId: string, version: number, requestId: string) {
+      const result = await projects.archive(auth, projectId, version);
+      await audit.write({
+        actorId: auth.userId,
+        action: "project.archive",
+        targetId: projectId,
+        result: result === "missing" ? "not_found" : result === "conflict" ? "conflict" : "success",
+        requestId,
+      });
+      return result;
+    },
+  };
+  await app.register(projectRoutes, { prefix: "/api/projects", repository: projects, audit, mutations });
   await app.after();
   return { app, projects, audit };
 }
@@ -151,9 +183,9 @@ describe("project management", () => {
     expect(list.json()).toEqual({ projects: [] });
     expect(audit.events).toHaveLength(3);
     expect(audit.events.map(({ actorId, action, targetId, result, requestId }) => ({ actorId, action, targetId, result, requestId }))).toEqual([
-      { actorId: "alice", action: "project.create", targetId: created.id, result: "success", requestId: expect.any(String) },
-      { actorId: "alice", action: "project.update", targetId: created.id, result: "success", requestId: expect.any(String) },
-      { actorId: "alice", action: "project.archive", targetId: created.id, result: "success", requestId: expect.any(String) },
+      { actorId: "alice", action: "project.create", targetId: created.id, result: "success", requestId: createdResponse.headers["x-request-id"] },
+      { actorId: "alice", action: "project.update", targetId: created.id, result: "success", requestId: updatedResponse.headers["x-request-id"] },
+      { actorId: "alice", action: "project.archive", targetId: created.id, result: "success", requestId: archivedResponse.headers["x-request-id"] },
     ]);
     await app.close();
   });

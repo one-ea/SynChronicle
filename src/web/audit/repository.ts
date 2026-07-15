@@ -1,5 +1,6 @@
 import type { Database } from "../../db/client.js";
 import { auditEvents } from "../../db/schema/index.js";
+import type { DatabaseTransaction } from "../projects/repository.js";
 
 export interface AuditEventInput {
   actorId: string;
@@ -15,7 +16,7 @@ export interface AuditRepositoryLike {
 }
 
 export class AuditRepository implements AuditRepositoryLike {
-  constructor(private readonly db: Database) {}
+  constructor(private readonly db: Database | DatabaseTransaction) {}
 
   async write(event: AuditEventInput): Promise<void> {
     await this.db.insert(auditEvents).values({

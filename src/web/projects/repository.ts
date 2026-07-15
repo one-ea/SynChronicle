@@ -6,9 +6,11 @@ import type { CreateProjectInput, UpdateProjectInput } from "./schemas.js";
 
 export type ProjectRow = typeof projects.$inferSelect;
 export type ProjectMutationResult = ProjectRow | "missing" | "conflict";
+export type DatabaseTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
+export type ProjectDatabaseExecutor = Database | DatabaseTransaction;
 
 export class ProjectRepository {
-  constructor(private readonly db: Database) {}
+  constructor(private readonly db: ProjectDatabaseExecutor) {}
 
   async list(auth: RequestAuth): Promise<ProjectRow[]> {
     return this.db.select().from(projects).where(
