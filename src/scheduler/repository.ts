@@ -20,6 +20,52 @@ export interface SchedulerRepositoryOptions {
   platformConcurrency: number;
 }
 
+type SchedulerExecutor = Database | Parameters<Parameters<Database["transaction"]>[0]>[0];
+
+export function buildReleaseLeaseQuery(
+  executor: SchedulerExecutor,
+  taskId: string,
+  workerId: string,
+  outcome: ReleaseLeaseOutcome,
+  now: Date,
+) {
+  return executor.update(tasks).set({
+    status: outcome.status,
+    scheduledAt: outcome.scheduledAt ?? now,
+    leaseOwner: null,
+    leaseExpiresAt: null,
+    updatedAt: now,
+  }).where(and(
+    eq(tasks.id, taskId),
+    eq(tasks.leaseOwner, workerId),
+    inArray(tasks.status, activeTaskStatuses),
+    sql`${tasks.leaseExpiresAt} > ${now}`,
+  )).returning({ id: tasks.id });
+}
+
+export function buildEligibleTaskQuery(executor: SchedulerExecutor, now: Date) {
+  return executor.select({ task: tasks })
+    .from(tasks)
+    .innerJoin(users, eq(tasks.userId, users.id))
+    .innerJoin(runs, and(
+      eq(tasks.runId, runs.id),
+      eq(tasks.userId, runs.userId),
+      eq(tasks.projectId, runs.projectId),
+    ))
+    .where(and(
+      eq(tasks.status, "queued"),
+      sql`${tasks.attempts} < ${tasks.maxAttempts}`,
+      lte(tasks.scheduledAt, now),
+      eq(users.status, "active"),
+      or(isNull(runs.resumeData), sql`${runs.resumeData}->>'desiredState' = 'running'`),
+      sql`(select count(*) from tasks active_user where active_user.user_id = ${tasks.userId} and active_user.status in ('leased', 'running')) < ${users.concurrencyLimit}`,
+      sql`(${tasks.type} <> 'write' or not exists (select 1 from tasks active_write where active_write.project_id = ${tasks.projectId} and active_write.type = 'write' and active_write.status in ('leased', 'running')))`,
+    ))
+    .orderBy(sql`${tasks.priority} desc`, asc(tasks.createdAt))
+    .limit(1)
+    .for("update", { skipLocked: true });
+}
+
 export class SchedulerRepository {
   private readonly platformConcurrency: number;
 
@@ -30,7 +76,7 @@ export class SchedulerRepository {
     this.platformConcurrency = options.platformConcurrency;
   }
 
-  async enqueueRun(auth: RequestAuth, projectId: string, input: EnqueueRunInput = {}): Promise<RunRow | null> {
+  async enqueueRun(auth: RequestAuth, projectId: string, input: EnqueueRunInput): Promise<RunRow | null> {
     return this.db.transaction(async (transaction) => {
       const [project] = await transaction.select({ id: projects.id }).from(projects).where(and(
         eq(projects.id, projectId),
@@ -39,9 +85,17 @@ export class SchedulerRepository {
       )).limit(1).for("update");
       if (!project) return null;
 
+      const [existing] = await transaction.select().from(runs).where(and(
+        eq(runs.userId, auth.userId),
+        eq(runs.projectId, projectId),
+        eq(runs.idempotencyKey, input.idempotencyKey),
+      )).limit(1);
+      if (existing) return existing;
+
       const [run] = await transaction.insert(runs).values({
         userId: auth.userId,
         projectId,
+        idempotencyKey: input.idempotencyKey,
         budgetSnapshot: input.budgetSnapshot ?? {},
         resumeData: { desiredState: "running" } satisfies RunResumeData,
       }).returning();
@@ -76,6 +130,15 @@ export class SchedulerRepository {
         sql`${tasks.attempts} >= ${tasks.maxAttempts}`,
       ));
       await transaction.update(tasks).set({
+        status: "failed",
+        leaseOwner: null,
+        leaseExpiresAt: null,
+        updatedAt: now,
+      }).where(and(
+        eq(tasks.status, "queued"),
+        sql`${tasks.attempts} >= ${tasks.maxAttempts}`,
+      ));
+      await transaction.update(tasks).set({
         status: "queued",
         leaseOwner: null,
         leaseExpiresAt: null,
@@ -92,53 +155,16 @@ export class SchedulerRepository {
         .where(inArray(tasks.status, activeTaskStatuses));
       if (platformActive >= this.platformConcurrency) return null;
 
-      const candidates = await transaction.select({ task: tasks, userLimit: users.concurrencyLimit })
-        .from(tasks)
-        .innerJoin(users, eq(tasks.userId, users.id))
-        .innerJoin(runs, and(
-          eq(tasks.runId, runs.id),
-          eq(tasks.userId, runs.userId),
-          eq(tasks.projectId, runs.projectId),
-        ))
-        .where(and(
-          eq(tasks.status, "queued"),
-          lte(tasks.scheduledAt, now),
-          eq(users.status, "active"),
-          or(isNull(runs.resumeData), sql`${runs.resumeData}->>'desiredState' = 'running'`),
-        ))
-        .orderBy(sql`${tasks.priority} desc`, asc(tasks.createdAt))
-        .limit(100)
-        .for("update", { skipLocked: true });
-
-      for (const { task, userLimit } of candidates) {
-        const [{ value: userActive = 0 } = {}] = await transaction
-          .select({ value: count() })
-          .from(tasks)
-          .where(and(eq(tasks.userId, task.userId), inArray(tasks.status, activeTaskStatuses)));
-        if (userActive >= userLimit) continue;
-
-        if (task.type === "write") {
-          const [{ value: projectWrites = 0 } = {}] = await transaction
-            .select({ value: count() })
-            .from(tasks)
-            .where(and(
-              eq(tasks.projectId, task.projectId),
-              eq(tasks.type, "write"),
-              inArray(tasks.status, activeTaskStatuses),
-            ));
-          if (projectWrites > 0) continue;
-        }
-
-        const [claimed] = await transaction.update(tasks).set({
-          status: "leased",
-          leaseOwner: workerId,
-          leaseExpiresAt: new Date(now.getTime() + leaseMs),
-          attempts: sql`${tasks.attempts} + 1`,
-          updatedAt: now,
-        }).where(and(eq(tasks.id, task.id), eq(tasks.status, "queued"))).returning();
-        if (claimed) return claimed;
-      }
-      return null;
+      const [candidate] = await buildEligibleTaskQuery(transaction, now);
+      if (!candidate) return null;
+      const [claimed] = await transaction.update(tasks).set({
+        status: "leased",
+        leaseOwner: workerId,
+        leaseExpiresAt: new Date(now.getTime() + leaseMs),
+        attempts: sql`${tasks.attempts} + 1`,
+        updatedAt: now,
+      }).where(and(eq(tasks.id, candidate.task.id), eq(tasks.status, "queued"))).returning();
+      return claimed ?? null;
     });
   }
 
@@ -158,19 +184,11 @@ export class SchedulerRepository {
   }
 
   async releaseLease(taskId: string, workerId: string, outcome: ReleaseLeaseOutcome): Promise<boolean> {
-    const now = new Date();
-    const [released] = await this.db.update(tasks).set({
-      status: outcome.status,
-      scheduledAt: outcome.scheduledAt ?? now,
-      leaseOwner: null,
-      leaseExpiresAt: null,
-      updatedAt: now,
-    }).where(and(
-      eq(tasks.id, taskId),
-      eq(tasks.leaseOwner, workerId),
-      inArray(tasks.status, activeTaskStatuses),
-    )).returning({ id: tasks.id });
-    return Boolean(released);
+    return this.db.transaction(async (transaction) => {
+      await transaction.execute(sql`select pg_advisory_xact_lock(${schedulerAdvisoryLock})`);
+      const [released] = await buildReleaseLeaseQuery(transaction, taskId, workerId, outcome, new Date());
+      return Boolean(released);
+    });
   }
 
   async command(
@@ -194,9 +212,13 @@ export class SchedulerRepository {
       if (resumeData.desiredState === "cancelled" && command !== "abort") return "conflict";
       let next: RunResumeData;
       if (command === "steer") {
-        if (typeof payload !== "string" || !payload.trim()) return "conflict";
+        if (!payload || typeof payload !== "object") return "conflict";
+        const { commandId, instruction } = payload as { commandId?: unknown; instruction?: unknown };
+        if (typeof commandId !== "string" || !commandId.trim() || typeof instruction !== "string" || !instruction.trim()) return "conflict";
         const commands = resumeData.steerCommands ?? [];
-        next = commands.at(-1) === payload ? resumeData : { ...resumeData, steerCommands: [...commands, payload] };
+        next = commands.some((candidate) => candidate.commandId === commandId)
+          ? resumeData
+          : { ...resumeData, steerCommands: [...commands, { commandId, instruction }] };
       } else {
         const desiredState = command === "pause" ? "paused" : command === "abort" ? "cancelled" : "running";
         next = resumeData.desiredState === desiredState ? resumeData : { ...resumeData, desiredState };

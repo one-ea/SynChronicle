@@ -36,6 +36,7 @@ export const runs = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
     projectId: uuid("project_id").notNull(),
+    idempotencyKey: text("idempotency_key"),
     status: runStatus("status").notNull().default("queued"),
     latestCheckpointId: uuid("latest_checkpoint_id"),
     budgetSnapshot: jsonb("budget_snapshot").notNull().default({}),
@@ -57,6 +58,7 @@ export const runs = pgTable(
       foreignColumns: checkpointOwnershipColumns(),
     }),
     unique("runs_user_project_id_uq").on(table.userId, table.projectId, table.id),
+    uniqueIndex("runs_start_idempotency_uq").on(table.userId, table.projectId, table.idempotencyKey),
     index("runs_user_project_status_idx").on(table.userId, table.projectId, table.status),
   ],
 );

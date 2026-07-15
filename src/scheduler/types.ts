@@ -6,6 +6,7 @@ export type TaskType = TaskRow["type"];
 export type TaskTerminalStatus = Extract<TaskRow["status"], "completed" | "failed" | "cancelled">;
 
 export interface EnqueueRunInput {
+  idempotencyKey: string;
   type?: TaskType;
   priority?: number;
   payload?: Record<string, unknown>;
@@ -22,6 +23,6 @@ export type RunCommandResult = RunRow | "missing" | "conflict";
 
 export interface RunResumeData {
   desiredState: "running" | "paused" | "cancelled";
-  steerCommands?: string[];
+  steerCommands?: Array<{ commandId: string; instruction: string }>;
   [key: string]: unknown;
 }

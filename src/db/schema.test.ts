@@ -79,6 +79,7 @@ describe("database schema", () => {
     const chapters = getTableConfig(schema.chapters);
     const runEvents = getTableConfig(schema.runEvents);
     const tasks = getTableConfig(schema.tasks);
+    const runs = getTableConfig(schema.runs);
 
     expect(users.indexes.map((index) => index.config.name)).toContain("users_username_uq");
     expect(users.columns.find((column) => column.name === "auth_version")?.getSQLType()).toBe("integer");
@@ -100,6 +101,8 @@ describe("database schema", () => {
       "project_id",
     ]);
     expect(activeWriteIndex?.config.where).toBeDefined();
+    expect(runs.columns.find((column) => column.name === "idempotency_key")?.getSQLType()).toBe("text");
+    expect(runs.indexes.find((index) => index.config.name === "runs_start_idempotency_uq")?.config.unique).toBe(true);
   });
 
   it("enforces tenant ownership through composite keys", () => {
@@ -179,7 +182,8 @@ describe("database schema", () => {
       "utf8",
     );
     const storeScopeSql = await readFile(new URL("../../drizzle/0003_lonely_shiva.sql", import.meta.url), "utf8");
-    const sql = `${foundationSql}\n${ownershipSql}\n${authenticationSql}\n${storeScopeSql}`;
+    const schedulerSql = await readFile(new URL("../../drizzle/0004_redundant_magma.sql", import.meta.url), "utf8");
+    const sql = `${foundationSql}\n${ownershipSql}\n${authenticationSql}\n${storeScopeSql}\n${schedulerSql}`;
 
     for (const table of requiredTables) {
       expect(sql).toContain(`CREATE TABLE \"${table}\"`);
@@ -192,6 +196,8 @@ describe("database schema", () => {
     expect(storeScopeSql).toContain('CONSTRAINT "artifacts_user_project_run_fk"');
     expect(storeScopeSql).toContain('CONSTRAINT "chapters_user_project_run_fk"');
     expect(sql).toContain('CREATE UNIQUE INDEX "run_events_run_sequence_uq"');
+    expect(sql).toContain('ALTER TABLE "runs" ADD COLUMN "idempotency_key" text');
+    expect(sql).toContain('CREATE UNIQUE INDEX "runs_start_idempotency_uq"');
     expect(sql).toMatch(
       /CREATE UNIQUE INDEX "tasks_active_write_project_uq"[\s\S]+WHERE .*"type" = 'write'.*"status" in \('leased', 'running'\)/i,
     );

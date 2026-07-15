@@ -5,12 +5,16 @@ import type { EnqueueRunInput, RunCommand, RunCommandResult, RunRow } from "../.
 
 const ParamsSchema = z.object({ projectId: z.string().min(1), runId: z.string().uuid().optional() }).strict();
 const StartSchema = z.object({
+  idempotencyKey: z.string().trim().min(1).max(200),
   type: z.enum(["write", "review", "maintenance"]).optional(),
   priority: z.number().int().optional(),
   payload: z.record(z.string(), z.unknown()).optional(),
   budgetSnapshot: z.record(z.string(), z.unknown()).optional(),
 }).strict();
-const SteerSchema = z.object({ instruction: z.string().trim().min(1) }).strict();
+const SteerSchema = z.object({
+  commandId: z.string().trim().min(1).max(200),
+  instruction: z.string().trim().min(1),
+}).strict();
 
 export type RunRecord = RunRow;
 
@@ -43,13 +47,13 @@ export const runRoutes: FastifyPluginAsync<RunRoutesOptions> = async (app, optio
       const params = ParamsSchema.safeParse(request.params);
       const input = command === "steer" ? SteerSchema.safeParse(request.body) : { success: true as const, data: undefined };
       if (!params.success || !params.data.runId || !input.success) return reply.code(400).send(invalidBody);
-      const instruction = command === "steer" && input.data ? input.data.instruction : undefined;
+      const steer = command === "steer" && input.data ? input.data : undefined;
       const result = await options.repository.command(
         request.auth,
         params.data.projectId,
         params.data.runId,
         command,
-        instruction,
+        steer,
       );
       if (result === "missing") return reply.code(404).send(notFoundBody);
       if (result === "conflict") return reply.code(409).send(conflictBody);

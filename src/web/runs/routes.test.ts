@@ -6,16 +6,21 @@ import { runRoutes, type RunCommandRepository, type RunRecord } from "./routes.j
 
 class MemoryRuns implements RunCommandRepository {
   readonly runs = new Map<string, RunRecord>();
+  readonly starts = new Map<string, string>();
 
-  async enqueueRun(auth: RequestAuth, projectId: string): Promise<RunRecord | null> {
+  async enqueueRun(auth: RequestAuth, projectId: string, input: { idempotencyKey: string }): Promise<RunRecord | null> {
     if (projectId === "missing") return null;
+    const existingId = this.starts.get(`${auth.userId}:${projectId}:${input.idempotencyKey}`);
+    if (existingId) return this.runs.get(existingId)!;
     const now = new Date();
     const run: RunRecord = {
       id: randomUUID(), userId: auth.userId, projectId, status: "queued", latestCheckpointId: null,
+      idempotencyKey: input.idempotencyKey,
       budgetSnapshot: {}, resumeData: { desiredState: "running" }, startedAt: null, completedAt: null,
       createdAt: now, updatedAt: now,
     };
     this.runs.set(run.id, run);
+    this.starts.set(`${auth.userId}:${projectId}:${input.idempotencyKey}`, run.id);
     return run;
   }
 
@@ -29,11 +34,13 @@ class MemoryRuns implements RunCommandRepository {
     if (command === "pause" && desiredState === "paused") return run;
     if (command === "resume" && desiredState === "running") return run;
     if (command === "abort" && desiredState === "cancelled") return run;
-    if (command === "steer" && typeof payload !== "string") return "conflict" as const;
+    if (command === "steer" && (!payload || typeof payload !== "object")) return "conflict" as const;
+    const steer = payload as { commandId: string; instruction: string };
+    const existingCommands = ((run.resumeData as { steerCommands?: Array<{ commandId: string; instruction: string }> }).steerCommands ?? []);
     const next = {
       ...run,
       resumeData: command === "steer"
-        ? { ...(run.resumeData as object), steerCommands: [payload] }
+        ? { ...(run.resumeData as object), steerCommands: existingCommands.some(({ commandId }) => commandId === steer.commandId) ? existingCommands : [...existingCommands, steer] }
         : { ...(run.resumeData as object), desiredState: command === "pause" ? "paused" : command === "abort" ? "cancelled" : "running" },
     };
     this.runs.set(run.id, next);
@@ -57,25 +64,25 @@ describe("run command routes", () => {
   it("starts a run and persists idempotent desired-state commands", async () => {
     const { app } = await testApp();
     const headers = { "x-user-id": "alice" };
-    const start = await app.inject({ method: "POST", url: "/api/projects/project-a/runs", headers, payload: {} });
+    const start = await app.inject({ method: "POST", url: "/api/projects/project-a/runs", headers, payload: { idempotencyKey: "start-1" } });
     const run = start.json().run as RunRecord;
 
     const pause = await app.inject({ method: "POST", url: `/api/projects/project-a/runs/${run.id}/pause`, headers });
     const repeated = await app.inject({ method: "POST", url: `/api/projects/project-a/runs/${run.id}/pause`, headers });
     const resume = await app.inject({ method: "POST", url: `/api/projects/project-a/runs/${run.id}/resume`, headers });
-    const steer = await app.inject({ method: "POST", url: `/api/projects/project-a/runs/${run.id}/steer`, headers, payload: { instruction: "Focus on pacing" } });
+    const steer = await app.inject({ method: "POST", url: `/api/projects/project-a/runs/${run.id}/steer`, headers, payload: { commandId: "steer-1", instruction: "Focus on pacing" } });
 
     expect(start.statusCode).toBe(201);
     expect(pause.json().run.resumeData.desiredState).toBe("paused");
     expect(repeated.json()).toEqual(pause.json());
     expect(resume.json().run.resumeData.desiredState).toBe("running");
-    expect(steer.json().run.resumeData.steerCommands).toEqual(["Focus on pacing"]);
+    expect(steer.json().run.resumeData.steerCommands).toEqual([{ commandId: "steer-1", instruction: "Focus on pacing" }]);
     await app.close();
   });
 
   it("isolates tenants and returns 409 for commands on terminal runs", async () => {
     const { app, repository } = await testApp();
-    const start = await app.inject({ method: "POST", url: "/api/projects/project-a/runs", headers: { "x-user-id": "alice" }, payload: {} });
+    const start = await app.inject({ method: "POST", url: "/api/projects/project-a/runs", headers: { "x-user-id": "alice" }, payload: { idempotencyKey: "start-2" } });
     const run = start.json().run as RunRecord;
     repository.runs.set(run.id, { ...run, status: "completed" });
 
@@ -90,7 +97,7 @@ describe("run command routes", () => {
   it("makes abort idempotent and rejects later state changes", async () => {
     const { app, repository } = await testApp();
     const headers = { "x-user-id": "alice" };
-    const start = await app.inject({ method: "POST", url: "/api/projects/project-a/runs", headers, payload: {} });
+    const start = await app.inject({ method: "POST", url: "/api/projects/project-a/runs", headers, payload: { idempotencyKey: "start-3" } });
     const run = start.json().run as RunRecord;
 
     const abort = await app.inject({ method: "POST", url: `/api/projects/project-a/runs/${run.id}/abort`, headers });
@@ -103,6 +110,38 @@ describe("run command routes", () => {
     expect(repeated.json()).toEqual(abort.json());
     expect(resume.statusCode).toBe(409);
     expect(appliedRepeat.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it("requires a start idempotency key and returns the same run on retry", async () => {
+    const { app } = await testApp();
+    const headers = { "x-user-id": "alice" };
+    const invalid = await app.inject({ method: "POST", url: "/api/projects/project-a/runs", headers, payload: {} });
+    const first = await app.inject({ method: "POST", url: "/api/projects/project-a/runs", headers, payload: { idempotencyKey: "stable-start" } });
+    const retry = await app.inject({ method: "POST", url: "/api/projects/project-a/runs", headers, payload: { idempotencyKey: "stable-start" } });
+    const otherTenant = await app.inject({ method: "POST", url: "/api/projects/project-a/runs", headers: { "x-user-id": "bob" }, payload: { idempotencyKey: "stable-start" } });
+
+    expect(invalid.statusCode).toBe(400);
+    expect(retry.json().run.id).toBe(first.json().run.id);
+    expect(otherTenant.json().run.id).not.toBe(first.json().run.id);
+    await app.close();
+  });
+
+  it("deduplicates steer by command ID while preserving repeated text with a new ID", async () => {
+    const { app } = await testApp();
+    const headers = { "x-user-id": "alice" };
+    const start = await app.inject({ method: "POST", url: "/api/projects/project-a/runs", headers, payload: { idempotencyKey: "steer-start" } });
+    const run = start.json().run as RunRecord;
+    const url = `/api/projects/project-a/runs/${run.id}/steer`;
+    const first = await app.inject({ method: "POST", url, headers, payload: { commandId: "command-1", instruction: "Revise" } });
+    const retry = await app.inject({ method: "POST", url, headers, payload: { commandId: "command-1", instruction: "Revise" } });
+    const repeatedText = await app.inject({ method: "POST", url, headers, payload: { commandId: "command-2", instruction: "Revise" } });
+
+    expect(retry.json()).toEqual(first.json());
+    expect(repeatedText.json().run.resumeData.steerCommands).toEqual([
+      { commandId: "command-1", instruction: "Revise" },
+      { commandId: "command-2", instruction: "Revise" },
+    ]);
     await app.close();
   });
 });
