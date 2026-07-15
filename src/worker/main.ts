@@ -3,6 +3,8 @@ import { loadAssets } from "../assets/load.js";
 import { loadConfig } from "../config/index.js";
 import { createDatabase } from "../db/client.js";
 import { Host } from "../runtime/host.js";
+import { PostgresEventBroker } from "../realtime/broker.js";
+import { DatabaseEventRepository } from "../realtime/eventRepository.js";
 import { SchedulerRepository } from "../scheduler/repository.js";
 import { DatabaseStore } from "../store/database/index.js";
 import { WorkerRunner, taskFingerprint } from "./runner.js";
@@ -15,6 +17,8 @@ export async function startWorker(): Promise<void> {
   const idleMs = positiveInteger(process.env.WORKER_IDLE_MS, 1_000, "WORKER_IDLE_MS");
   const database = createDatabase(databaseUrl);
   const scheduler = new SchedulerRepository(database);
+  const events = new DatabaseEventRepository(database);
+  const eventBroker = new PostgresEventBroker(database);
   const config = await loadConfig(process.env.CONFIG_PATH);
   const bundle = loadAssets(config.style);
   const runner = new WorkerRunner({
@@ -22,6 +26,10 @@ export async function startWorker(): Promise<void> {
     workerId,
     leaseMs,
     idleMs,
+    eventSink: {
+      appendEvent: (scope, event) => events.appendEvent(scope, event),
+      publish: (wakeup) => eventBroker.publish(wakeup),
+    },
     createHost: async (task) => Host.new(config, bundle, {
       store: new DatabaseStore(database, {
         userId: task.userId,
@@ -44,6 +52,8 @@ export async function startWorker(): Promise<void> {
   } finally {
     process.removeListener("SIGINT", shutdown);
     process.removeListener("SIGTERM", shutdown);
+    await eventBroker.close();
+    await database.$client.end();
   }
 }
 

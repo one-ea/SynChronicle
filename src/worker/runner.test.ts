@@ -200,6 +200,30 @@ describe("WorkerRunner", () => {
     expect(consumed).toEqual(["event", "stream"]);
   });
 
+  it("persists Host events and labeled stream deltas before publishing wakeups", async () => {
+    const claimed = task();
+    const repository = scheduler(claimed);
+    const fakeHost = host().value;
+    fakeHost.events = async function* () { yield { type: "system", message: "started" } as never; };
+    fakeHost.stream = async function* () { yield "draft text"; };
+    const calls: string[] = [];
+    const eventSink = {
+      appendEvent: vi.fn(async (_scope, value) => {
+        calls.push(`append:${value.type}`);
+        return { ..._scope, ...value, id: `event-${calls.length}`, sequence: calls.length, createdAt: new Date() };
+      }),
+      publish: vi.fn(async (value) => { calls.push(`publish:${value.sequence}`); }),
+    };
+
+    await new WorkerRunner({ scheduler: repository, createHost: async () => fakeHost, workerId: "worker-1", leaseMs: 30_000, eventSink }).runOnce();
+
+    expect(eventSink.appendEvent).toHaveBeenCalledWith(
+      { userId: claimed.userId, projectId: claimed.projectId, runId: claimed.runId },
+      { stableId: null, type: "stream.delta", payload: { agent: "write", text: "draft text" } },
+    );
+    expect(calls).toEqual(["append:system", "append:stream.delta", "publish:1", "publish:2"]);
+  });
+
   it("propagates shutdown abort to the active Host execution", async () => {
     const claimed = task();
     const repository = scheduler(claimed);

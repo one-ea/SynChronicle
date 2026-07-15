@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import Fastify, { type FastifyInstance } from "fastify";
 import { createDatabase, type Database } from "../db/client.js";
+import websocket from "@fastify/websocket";
+import { PostgresEventBroker } from "../realtime/broker.js";
+import { DatabaseEventRepository } from "../realtime/eventRepository.js";
 import { SchedulerRepository } from "../scheduler/repository.js";
 import { authPlugin } from "./auth/plugin.js";
 import { AuditRepository } from "./audit/repository.js";
@@ -13,6 +16,7 @@ import {
   ProjectMutationService,
 } from "./projects/service.js";
 import { runRoutes } from "./runs/routes.js";
+import { realtimeRoutes } from "./realtime/routes.js";
 
 type WebServerCommonOptions = Partial<Pick<WebConfig, "publicUrl" | "trustProxy">>;
 
@@ -40,6 +44,13 @@ export async function buildWebServer(options: WebServerOptions): Promise<Fastify
   await app.register(authPlugin, {
     db: database,
     publicUrl: options.publicUrl ?? "http://localhost:3000",
+  });
+  await app.register(websocket);
+  const eventBroker = new PostgresEventBroker(database);
+  app.addHook("onClose", async () => eventBroker.close());
+  await app.register(realtimeRoutes, {
+    repository: new DatabaseEventRepository(database),
+    broker: eventBroker,
   });
   const audit = new AuditRepository(database);
   const mutations = new ProjectMutationService(

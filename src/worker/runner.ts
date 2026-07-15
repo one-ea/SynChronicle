@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import type { ClaimedTask as SchedulerClaimedTask, ReleaseLeaseOutcome, RunResumeData } from "../scheduler/types.js";
+import type { EventWakeup } from "../realtime/broker.js";
+import type { NewRunEvent, RunEvent, RunEventScope } from "../realtime/eventRepository.js";
 import { TaskExecutionError, taskError, taskPrompt, type WorkerBoundary } from "./commands.js";
 
 export type ClaimedTask = SchedulerClaimedTask;
@@ -35,6 +37,10 @@ export interface WorkerRunnerDependencies {
   leaseMs?: number;
   idleMs?: number;
   clock?: Pick<typeof globalThis, "setTimeout" | "clearTimeout">;
+  eventSink?: {
+    appendEvent(scope: RunEventScope, event: NewRunEvent): Promise<RunEvent>;
+    publish(wakeup: EventWakeup): Promise<void>;
+  };
 }
 
 export function taskFingerprint(task: ClaimedTask): string {
@@ -71,7 +77,19 @@ export class WorkerRunner {
   async executeTask(task: ClaimedTask, signal?: AbortSignal): Promise<void> {
     const { scheduler, workerId } = this.dependencies;
     const host = await this.dependencies.createHost(task);
-    const drains = [host.events?.(), host.stream?.()].filter((value): value is AsyncIterable<unknown> => Boolean(value)).map(drain);
+    const scope = { userId: task.userId, projectId: task.projectId, runId: task.runId };
+    const drains = [
+      persist(host.events?.(), (value) => ({
+        stableId: eventStableId(value),
+        type: eventType(value),
+        payload: value,
+      }), scope, this.dependencies.eventSink),
+      persist(host.stream?.(), (value) => ({
+        stableId: null,
+        type: "stream.delta",
+        payload: { agent: task.type, text: String(value) },
+      }), scope, this.dependencies.eventSink),
+    ].filter((value): value is Promise<void> => Boolean(value));
     const executionState: { outcome: ReleaseLeaseOutcome["status"] } = { outcome: "completed" };
     let leaseLost: TaskExecutionError | null = null;
     let renewalTimer: ReturnType<typeof setTimeout> | undefined;
@@ -167,4 +185,28 @@ function delay(ms: number, signal: AbortSignal, clock: Pick<typeof globalThis, "
   });
 }
 
-async function drain(iterable: AsyncIterable<unknown>): Promise<void> { for await (const _value of iterable) { /* drain */ } }
+function persist(
+  iterable: AsyncIterable<unknown> | undefined,
+  map: (value: unknown) => NewRunEvent,
+  scope: RunEventScope,
+  sink: WorkerRunnerDependencies["eventSink"],
+): Promise<void> | undefined {
+  if (!iterable) return undefined;
+  return (async () => {
+    for await (const value of iterable) {
+      if (!sink) continue;
+      const event = await sink.appendEvent(scope, map(value));
+      await sink.publish({ runId: event.runId, sequence: event.sequence });
+    }
+  })();
+}
+
+function eventType(value: unknown): string {
+  if (value && typeof value === "object" && "type" in value && typeof value.type === "string") return value.type;
+  return "system";
+}
+
+function eventStableId(value: unknown): string | null {
+  if (value && typeof value === "object" && "id" in value && typeof value.id === "string") return value.id;
+  return null;
+}
