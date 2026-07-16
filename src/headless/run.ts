@@ -27,14 +27,14 @@ function formatEvent(event: RuntimeEvent): string | undefined {
   return event.message?.trim() || undefined;
 }
 
-export async function migrateFileProject(options: { databaseUrl: string; username: string; projectDir: string }): Promise<void> {
+export async function migrateFileProject(options: { databaseUrl: string; username: string; projectDir: string }, dependencies: { createDatabase?: typeof createDatabase; importFileProject?: typeof importFileProject; write?: (text: string) => unknown } = {}): Promise<void> {
   if (!options.databaseUrl || !options.username || !options.projectDir) throw new Error("迁移需要显式 database URL、用户名和项目目录");
-  const database = createDatabase(options.databaseUrl);
+  const database = (dependencies.createDatabase ?? createDatabase)(options.databaseUrl);
   try {
     const [user] = await database.select({ id: users.id }).from(users).where(eq(users.username, options.username)).limit(1);
     if (!user) throw new Error(`目标用户不存在: ${options.username}`);
-    const imported = await importFileProject(database, user.id, options.projectDir);
-    process.stderr.write(`迁移完成: ${imported.projectId}\n`);
+    const imported = await (dependencies.importFileProject ?? importFileProject)(database, user.id, options.projectDir);
+    (dependencies.write ?? process.stderr.write.bind(process.stderr))(`迁移完成: ${imported.projectId}\n`);
   } finally {
     await database.$client.end();
   }

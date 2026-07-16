@@ -50,6 +50,8 @@ export function ProjectsPage(props: ProjectsPageProps) {
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const dialogRef = useRef<HTMLElement | null>(null);
   const mutationTokens = useRef(new Map<string, symbol>());
+  const importController = useRef<AbortController | null>(null);
+  const importPending = importProgress !== null;
 
   useEffect(() => {
     if (!dialog) return;
@@ -165,14 +167,17 @@ export function ProjectsPage(props: ProjectsPageProps) {
     if (!file) return;
     setMessage(null);
     setImportProgress(0);
+    const controller = new AbortController();
+    importController.current = controller;
     try {
       if (!props.api.importProject) throw new Error("Import unavailable");
-      await props.api.importProject(file, setImportProgress);
+      await props.api.importProject(file, setImportProgress, controller.signal);
       setMessage("导入完成，作品已加入书架。");
       await props.onReload();
     } catch (error) {
-      setMessage(requestMessage(error, "作品导入失败，请检查归档格式。"));
+      setMessage(error instanceof Error && error.name === "AbortError" ? "已取消导入。" : requestMessage(error, "作品导入失败，请检查归档格式。"));
     } finally {
+      importController.current = null;
       setImportProgress(null);
     }
   }
@@ -182,7 +187,7 @@ export function ProjectsPage(props: ProjectsPageProps) {
     setExportingId(project.id);
     try {
       if (!props.api.exportProject) throw new Error("Export unavailable");
-      await props.api.exportProject(project.id);
+      await props.api.exportProject(project.id, project.version);
     }
     catch (error) { setMessage(requestMessage(error, "作品导出失败。")); }
     finally { setExportingId(null); }
@@ -207,12 +212,12 @@ export function ProjectsPage(props: ProjectsPageProps) {
             <p>在这里整理每一条仍在生长的叙事线。</p>
           </div>
           <div className="page-actions">
-            <label className="button button-secondary import-button" htmlFor="project-import">导入作品<input id="project-import" aria-label="导入作品归档" type="file" accept=".sync.zip,application/zip" onChange={(event) => void importArchive(event)} /></label>
-            <button className="button button-primary" type="button" onClick={(event) => openDialog({ kind: "create" }, event.currentTarget)}>创建作品</button>
+            <label className="button button-secondary import-button" aria-disabled={importPending} htmlFor="project-import">导入作品<input id="project-import" aria-label="导入作品归档" type="file" disabled={importPending} accept=".sync.zip,application/zip" onChange={(event) => void importArchive(event)} /></label>
+            <button className="button button-primary" type="button" disabled={importPending} onClick={(event) => openDialog({ kind: "create" }, event.currentTarget)}>创建作品</button>
           </div>
         </header>
 
-        {importProgress !== null && <div className="import-progress" role="status" aria-live="polite"><progress max="100" value={importProgress} />正在导入 {importProgress}%</div>}
+        {importProgress !== null && <div className="import-progress" role="status" aria-live="polite"><progress aria-label="导入进度" max="100" value={importProgress} /><span>正在导入 {importProgress}%</span><button className="text-button" type="button" onClick={() => importController.current?.abort()}>取消导入</button></div>}
 
         {(message || props.error || props.logoutError) && (
           <div className="message message-error error-row" role="alert">
@@ -240,9 +245,9 @@ export function ProjectsPage(props: ProjectsPageProps) {
                   <p>最后整理于 {new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric" }).format(new Date(project.updatedAt))}</p>
                 </div>
                 <div className="project-actions">
-                  <button className="icon-button export-button" type="button" disabled={exportingId === project.id} aria-label={`导出《${project.title}》`} onClick={() => void exportArchive(project)}>导出</button>
-                  <button className="icon-button" type="button" aria-label={`重命名《${project.title}》`} onClick={(event) => openDialog({ kind: "rename", project }, event.currentTarget)}><PenIcon /></button>
-                  <button className="icon-button" type="button" aria-label={`归档《${project.title}》`} onClick={(event) => openDialog({ kind: "archive", project }, event.currentTarget)}><ArchiveIcon /></button>
+                  <button className="icon-button export-button" type="button" disabled={importPending || exportingId === project.id} aria-label={`导出《${project.title}》`} onClick={() => void exportArchive(project)}>导出</button>
+                  <button className="icon-button" type="button" disabled={importPending} aria-label={`重命名《${project.title}》`} onClick={(event) => openDialog({ kind: "rename", project }, event.currentTarget)}><PenIcon /></button>
+                  <button className="icon-button" type="button" disabled={importPending} aria-label={`归档《${project.title}》`} onClick={(event) => openDialog({ kind: "archive", project }, event.currentTarget)}><ArchiveIcon /></button>
                 </div>
               </article>
             ))}

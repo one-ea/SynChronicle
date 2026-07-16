@@ -49,7 +49,7 @@ export function createApiClient(options: ApiClientOptions = {}) {
     return await response.json() as T;
   }
 
-  function importProject<T>(file: File, onProgress: (percent: number) => void): Promise<T> {
+  function importProject<T>(file: File, onProgress: (percent: number) => void, signal?: AbortSignal): Promise<T> {
     return new Promise((resolve, reject) => {
       const request = new XMLHttpRequest();
       request.open("POST", `/api/projects/import?filename=${encodeURIComponent(file.name)}`);
@@ -58,6 +58,8 @@ export function createApiClient(options: ApiClientOptions = {}) {
       request.setRequestHeader("x-request-id", createRequestId());
       request.upload.onprogress = (event) => { if (event.lengthComputable) onProgress(Math.round(event.loaded / event.total * 100)); };
       request.onerror = () => reject(new ApiError("request", "网络连接失败", 0, null));
+      request.onabort = () => reject(Object.assign(new Error("Upload cancelled"), { name: "AbortError" }));
+      signal?.addEventListener("abort", () => request.abort(), { once: true });
       request.onload = () => {
         const requestId = request.getResponseHeader("x-request-id");
         if (request.status >= 200 && request.status < 300) { onProgress(100); resolve(request.response as T); return; }
@@ -69,8 +71,8 @@ export function createApiClient(options: ApiClientOptions = {}) {
     });
   }
 
-  async function exportProject(projectId: string): Promise<void> {
-    const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/export`, { credentials: "same-origin", headers: { "x-request-id": createRequestId() } });
+  async function exportProject(projectId: string, expectedVersion: number): Promise<void> {
+    const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/export?version=${expectedVersion}`, { credentials: "same-origin", headers: { "x-request-id": createRequestId() } });
     if (!response.ok) {
       const kind: ApiErrorKind = response.status === 401 ? "unauthorized" : response.status === 403 ? "forbidden" : response.status === 409 ? "conflict" : "request";
       throw new ApiError(kind, `请求失败 (${response.status})`, response.status, response.headers.get("x-request-id"));

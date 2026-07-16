@@ -95,7 +95,8 @@ export async function buildWebServer(options: WebServerOptions): Promise<Fastify
   await app.register(importExportRoutes, {
     prefix: "/api/projects",
     importer: (userId, source, requestId) => importProjectArchive(database, userId, source, requestId),
-    exporter: (userId, projectId, requestId) => exportDatabaseProject(database, userId, projectId, requestId),
+    exporter: (userId, projectId, expectedVersion, requestId) => exportDatabaseProject(database, userId, projectId, expectedVersion, requestId),
+    auditFailure: (event) => audit.write(event),
   });
   await app.register(runRoutes, {
     prefix: "/api/projects/:projectId/runs",

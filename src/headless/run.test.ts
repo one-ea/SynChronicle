@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { run } from "./run.js";
+import { migrateFileProject, run } from "./run.js";
 
 describe("headless run", () => {
   it("streams content to stdout and progress to stderr", async () => {
@@ -71,6 +71,24 @@ describe("headless run", () => {
     });
     expect(errors).toContain("[12:34:56] [REFLECTION] review.completed\n");
     expect(errors.join("")).not.toContain("undefined");
+  });
+});
+
+describe("file project CLI migration", () => {
+  it("closes the database after successful migration", async () => {
+    const end = vi.fn(async () => undefined);
+    const database = { $client: { end }, select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ id: "user-1" }] }) }) }) };
+    const importer = vi.fn(async () => ({ projectId: "project-1" }));
+    await migrateFileProject({ databaseUrl: "postgres://db", username: "alice", projectDir: "/book" }, { createDatabase: () => database as never, importFileProject: importer as never, write: vi.fn() });
+    expect(importer).toHaveBeenCalledWith(database, "user-1", "/book");
+    expect(end).toHaveBeenCalledOnce();
+  });
+
+  it("closes the database when lookup or import fails", async () => {
+    const end = vi.fn(async () => undefined);
+    const database = { $client: { end }, select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ id: "user-1" }] }) }) }) };
+    await expect(migrateFileProject({ databaseUrl: "postgres://db", username: "alice", projectDir: "/book" }, { createDatabase: () => database as never, importFileProject: vi.fn(async () => { throw new Error("import failed"); }) as never, write: vi.fn() })).rejects.toThrow("import failed");
+    expect(end).toHaveBeenCalledOnce();
   });
 });
 
