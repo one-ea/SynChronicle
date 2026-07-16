@@ -2,16 +2,16 @@
 
 ## Status
 
-Completed the responsive Playwright regression coverage requested by Task 3. No production CSS change was required after rebuilding the current source.
+Completed the Task 3 Playwright checks for reachable create-run controls and layout-safe responsive behavior. No production CSS change was required after rebuilding the current source.
 
 ## Changes
 
-- Added the workbench `modelConfiguration.modelSets` mock contract so the create-run card renders with a selectable model set.
+- Added a production-valid workbench model set with a configured Writer Agent and matching provider/model catalog.
 - Verified the layout trigger is hidden at 375px and 768px.
 - Verified the layout trigger is visible at 1024px and 1440px, opens the layout dialog, and keeps the dialog inside the viewport.
 - Used a 500px-tall viewport to verify the create-run card remains reachable by scrolling.
 - Verified the model-set select and start-run button have an actual rendered height of at least 48px.
-- Verified the start-run CTA can be scrolled fully inside the viewport.
+- Selected the model set, verified the start-run CTA becomes enabled, and verified it can be scrolled fully inside the viewport.
 
 ## TDD Evidence
 
@@ -22,6 +22,10 @@ The first responsive browser run used the existing build output and failed in th
 - 1024px and 1440px did not expose the layout trigger.
 
 After rebuilding the current source, the same eight responsive tests passed. This confirmed the prior UI polish source changes already contained the required breakpoint and 48px control styling, so Task 3 needed test coverage only.
+
+## Review Follow-up
+
+The review exposed that the initial browser fixture used an empty `agents` record and empty provider catalog. A new failing assertion exercised the production `validateModelSetInput` path and rejected that fixture at all four workbench widths. The fixture now contains a Writer Agent using `openai/gpt-5`, a matching provider/model catalog, and valid parameters. Each workbench case selects the model set before asserting that the enabled CTA remains fully reachable in the short viewport.
 
 ## Verification
 

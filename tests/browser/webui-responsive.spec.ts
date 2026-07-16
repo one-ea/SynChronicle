@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { validateModelSetInput } from "../../src/web/providers/modelConfig.js";
 
 const project = {
   id: "7ef5fd40-38a7-43dd-856c-b2c074fcf611",
@@ -11,10 +12,17 @@ const project = {
   updatedAt: "2026-07-15T00:00:00.000Z",
 };
 
+const modelSetInput = {
+  name: "主力模型",
+  agents: { writer: { provider: "openai", model: "gpt-5", parameters: { temperature: 0.4 } } },
+};
+
+const providerCatalog = [{ provider: "openai", models: ["gpt-5"], credentials: [] }];
+
 const modelConfiguration = {
   activeModelSetId: "set-1",
-  modelSets: [{ id: "set-1", name: "主力模型", version: 2, agents: {} }],
-  providers: [],
+  modelSets: [{ id: "set-1", version: 2, ...modelSetInput }],
+  providers: providerCatalog,
 };
 
 async function expectInsideViewport(page: Page, locator: Locator) {
@@ -29,7 +37,7 @@ async function expectInsideViewport(page: Page, locator: Locator) {
 }
 
 for (const width of [375, 768, 1024, 1440]) {
-  test(`project library remains operable at ${width}px`, async ({ page }) => {
+  test(`project library stays reachable at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await page.route("**/api/projects/", async (route) => {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [project] }) });
@@ -47,7 +55,11 @@ for (const width of [375, 768, 1024, 1440]) {
     }
   });
 
-  test(`creative workbench remains operable at ${width}px`, async ({ page }) => {
+  test(`creative workbench stays reachable and layout-safe at ${width}px`, async ({ page }) => {
+    expect(() => validateModelSetInput(modelSetInput, {
+      credentials: [],
+      platformModels: providerCatalog.flatMap(({ provider, models }) => models.map((model) => ({ provider, model }))),
+    })).not.toThrow();
     await page.setViewportSize({ width, height: 500 });
     await page.route("**/api/projects/", async (route) => {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [project] }) });
@@ -90,6 +102,8 @@ for (const width of [375, 768, 1024, 1440]) {
     await expect(createRun).toBeVisible();
     expect((await modelSet.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(48);
     expect((await createRun.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(48);
+    await modelSet.selectOption("set-1");
+    await expect(createRun).toBeEnabled();
     await createRun.scrollIntoViewIfNeeded();
     await expectInsideViewport(page, createRun);
   });
