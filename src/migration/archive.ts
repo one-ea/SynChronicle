@@ -170,22 +170,40 @@ export function assertArtifactSafe(encoding: "text" | "json", content: string): 
     rejectSensitiveKeys(value, "artifact");
     return;
   }
-  const sensitiveKey = String.raw`(?:(?:[a-z0-9]+_)*api_key|client_secret|refresh_token|private_key|database_url|authorization|secret|password|credential|access_token)`;
-  const assignment = new RegExp(String.raw`^\s*(?:export\s+)?(?:(?:const|let|var)\s+)?["']?${sensitiveKey}["']?\s*[:=]\s*\S{8,}`, "im");
-  const authorization = /^\s*authorization\s*[:=]\s*(?:basic|bearer)\s+[a-z0-9._~+\/-]{20,}/im;
-  if (assignment.test(content) || authorization.test(content)) throw new ArchiveValidationError("Sensitive text artifact content is forbidden");
+  const sensitiveKey = /^(?:(?:[a-z0-9]+[-_])*api[-_]key|client[-_]secret|refresh[-_]token|private[-_]key|database[-_]url|authorization|access[-_]token|auth[-_]token|github[-_]token|token|secret|password|credential)$/i;
+  const assignment = /^\s*(?:export\s+)?(?:(?:const|let|var)\s+)?["']?([a-z0-9_-]+)["']?\s*[:=]\s*(.*?)\s*[,;]?\s*$/i;
+  for (const line of content.split(/\r?\n/)) {
+    const match = assignment.exec(line);
+    if (!match?.[1] || !sensitiveKey.test(match[1])) continue;
+    const value = stripAssignmentQuotes(match[2] ?? "");
+    if (isLikelySecret(value)) throw new ArchiveValidationError("Sensitive text artifact content is forbidden");
+  }
+}
+
+function stripAssignmentQuotes(value: string): string { const trimmed = value.trim(); return trimmed.length >= 2 && ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'")) || (trimmed.startsWith("`") && trimmed.endsWith("`"))) ? trimmed.slice(1, -1) : trimmed; }
+function isLikelySecret(value: string): boolean {
+  if (/^(?:sk-(?:proj-)?|gh[pousr]_|github_pat_|glpat-|xox[baprs]-|AKIA|AIza|eyJ|-----BEGIN(?:_|\s)|(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?):\/\/|(?:basic|bearer)\s+)/i.test(value)) return true;
+  if (value.length < 12 || /\s/.test(value)) return false;
+  const counts = new Map<string, number>();
+  for (const char of value) counts.set(char, (counts.get(char) ?? 0) + 1);
+  let entropy = 0;
+  for (const count of counts.values()) { const probability = count / value.length; entropy -= probability * Math.log2(probability); }
+  return value.length >= 20 && entropy >= 3.2;
 }
 
 function unzip(data: Buffer, options: ArchiveLimits): Map<string, Buffer> {
   const files = new Map<string, Buffer>();
   const endOffset = findSignatureReverse(data, 0x06054b50, Math.max(0, data.length - 65_557));
   if (endOffset < 0 || endOffset + 22 > data.length) throw new ArchiveValidationError("ZIP central directory is missing");
+  const eocdCommentLength = data.readUInt16LE(endOffset + 20);
+  if (endOffset + 22 + eocdCommentLength !== data.length) throw new ArchiveValidationError("EOCD comment length does not match the archive boundary; trailing data is forbidden");
   if (data.readUInt16LE(endOffset + 4) !== 0 || data.readUInt16LE(endOffset + 6) !== 0) throw new ArchiveValidationError("Multi-disk ZIP is unsupported");
   const diskEntries = data.readUInt16LE(endOffset + 8), entryCount = data.readUInt16LE(endOffset + 10), centralSize = data.readUInt32LE(endOffset + 12), centralOffset = data.readUInt32LE(endOffset + 16);
   if ([entryCount, centralSize, centralOffset].includes(0xffff) || [centralSize, centralOffset].includes(0xffffffff)) throw new ArchiveValidationError("ZIP64 is unsupported");
   if (diskEntries !== entryCount || entryCount > (options.maxEntries ?? DEFAULT_MAX_ENTRIES)) throw new ArchiveValidationError("ZIP entry count is invalid or exceeds the entry count limit");
   if (centralOffset + centralSize !== endOffset) throw new ArchiveValidationError("ZIP central directory size is invalid");
   let cursor = centralOffset, declaredTotal = 0, actualTotal = 0;
+  const localIntervals: Array<{ start: number; end: number }> = [];
   for (let index = 0; index < entryCount; index++) {
     if (cursor + 46 > endOffset || data.readUInt32LE(cursor) !== 0x02014b50) throw new ArchiveValidationError("Invalid central directory entry");
     const flags = data.readUInt16LE(cursor + 8), method = data.readUInt16LE(cursor + 10), crc = data.readUInt32LE(cursor + 16), compressedSize = data.readUInt32LE(cursor + 20), size = data.readUInt32LE(cursor + 24);
@@ -219,11 +237,22 @@ function unzip(data: Buffer, options: ArchiveLimits): Map<string, Buffer> {
     actualTotal += content.length;
     if (actualTotal > (options.maxTotalUncompressedBytes ?? DEFAULT_MAX_TOTAL_UNCOMPRESSED_BYTES)) throw new ArchiveLimitError("Archive actual total uncompressed size limit exceeded", 413);
     if (content.length !== size || crc32(content) !== crc) throw new ArchiveValidationError("ZIP entry size or CRC checksum mismatch");
-    if (flags & 0x08) validateDescriptor(data, bodyEnd, crc, compressedSize, size);
+    const localEnd = flags & 0x08 ? validateDescriptor(data, bodyEnd, crc, compressedSize, size) : bodyEnd;
+    if (localEnd > centralOffset) throw new ArchiveValidationError("Local ZIP entry overlaps the central directory");
+    localIntervals.push({ start: localOffset, end: localEnd });
     files.set(path, content);
     cursor += 46 + nameLength + extraLength + commentLength;
   }
   if (cursor !== endOffset) throw new ArchiveValidationError("ZIP central directory length mismatch");
+  localIntervals.sort((left, right) => left.start - right.start);
+  let expectedOffset = 0;
+  for (const interval of localIntervals) {
+    if (interval.end <= interval.start) throw new ArchiveValidationError("Invalid local entry interval");
+    if (interval.start < expectedOffset) throw new ArchiveValidationError("Overlapping local entry intervals are forbidden");
+    if (interval.start > expectedOffset) throw new ArchiveValidationError("Gap or unindexed local entry detected in ZIP structure");
+    expectedOffset = interval.end;
+  }
+  if (expectedOffset !== centralOffset) throw new ArchiveValidationError("Local entries do not provide continuous coverage to the central directory");
   return files;
 }
 
@@ -246,7 +275,7 @@ function encodeEntry(rawName: string, data: Buffer, offset: number, options: Arc
 }
 
 function eocd(count: number, centralSize: number, centralOffset: number) { const end = Buffer.alloc(22); end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(count, 8); end.writeUInt16LE(count, 10); end.writeUInt32LE(centralSize, 12); end.writeUInt32LE(centralOffset, 16); return end; }
-function validateDescriptor(data: Buffer, offset: number, crc: number, compressed: number, size: number) { const signature = data.readUInt32LE(offset) === 0x08074b50, start = offset + (signature ? 4 : 0); if (start + 12 > data.length || data.readUInt32LE(start) !== crc || data.readUInt32LE(start + 4) !== compressed || data.readUInt32LE(start + 8) !== size) throw new ArchiveValidationError("ZIP data descriptor mismatch"); }
+function validateDescriptor(data: Buffer, offset: number, crc: number, compressed: number, size: number) { if (offset + 12 > data.length) throw new ArchiveValidationError("Truncated ZIP data descriptor"); const signature = offset + 16 <= data.length && data.readUInt32LE(offset) === 0x08074b50, start = offset + (signature ? 4 : 0); if (start + 12 > data.length || data.readUInt32LE(start) !== crc || data.readUInt32LE(start + 4) !== compressed || data.readUInt32LE(start + 8) !== size) throw new ArchiveValidationError("ZIP data descriptor mismatch"); return start + 12; }
 function hasZip64Extra(extra: Buffer) { for (let offset = 0; offset + 4 <= extra.length;) { const id = extra.readUInt16LE(offset), size = extra.readUInt16LE(offset + 2); if (id === 1) return true; offset += 4 + size; } return false; }
 function findSignatureReverse(data: Buffer, signature: number, start: number) { for (let offset = data.length - 4; offset >= start; offset--) if (data.readUInt32LE(offset) === signature) return offset; return -1; }
 function unique(values: string[], label: string, context: z.RefinementCtx) { const seen = new Set<string>(); for (const value of values) { if (seen.has(value)) { context.addIssue({ code: z.ZodIssueCode.custom, message: `Duplicate ${label}` }); return; } seen.add(value); } }

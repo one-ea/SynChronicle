@@ -67,6 +67,36 @@ describe("project migration archive", () => {
     await expect(parseProjectArchive(archive)).rejects.toThrow(/central|size|limit/i);
   });
 
+  it("requires local entry intervals to cover byte zero through the central directory without gaps or overlaps", async () => {
+    const base = createProjectArchive(manifest(), new Map([["chapters/1.md", Buffer.from("Chapter one")]]), { dataDescriptor: true });
+    const end = base.lastIndexOf(Buffer.from("PK\x05\x06", "binary")), centralOffset = base.readUInt32LE(end + 16);
+    const gap = Buffer.concat([base.subarray(0, centralOffset), Buffer.from("GAP"), base.subarray(centralOffset)]);
+    const gapEnd = gap.lastIndexOf(Buffer.from("PK\x05\x06", "binary"));
+    gap.writeUInt32LE(centralOffset + 3, gapEnd + 16);
+    await expect(parseProjectArchive(gap)).rejects.toThrow(/gap|local entry|structure|coverage/i);
+
+    const unindexedLocal = Buffer.concat([base.subarray(0, centralOffset), base.subarray(0, centralOffset), base.subarray(centralOffset)]);
+    const unindexedEnd = unindexedLocal.lastIndexOf(Buffer.from("PK\x05\x06", "binary"));
+    unindexedLocal.writeUInt32LE(centralOffset * 2, unindexedEnd + 16);
+    await expect(parseProjectArchive(unindexedLocal)).rejects.toThrow(/unindexed|local entry|structure|coverage/i);
+
+    const one = Buffer.from("one"), two = Buffer.from("two");
+    const withArtifact = manifest({ chapters: [{ ...manifest().chapters[0]!, path: "files/a.txt", checksum: createHash("sha256").update(one).digest("hex") }], artifacts: [{ type: "notes", status: "committed", version: 1, encoding: "text", path: "files/b.txt", checksum: createHash("sha256").update(two).digest("hex") }] });
+    const overlap = createProjectArchive(withArtifact, new Map([["files/a.txt", one], ["files/b.txt", two]]));
+    const centralHeaders = allOffsets(overlap, "PK\x01\x02");
+    overlap.writeUInt32LE(overlap.readUInt32LE(centralHeaders[0]! + 42), centralHeaders[1]! + 42);
+    await expect(parseProjectArchive(overlap)).rejects.toThrow(/overlap|disagree|duplicate|structure/i);
+  });
+
+  it("requires EOCD comment length to end exactly at the archive boundary", async () => {
+    const base = createProjectArchive(manifest(), new Map([["chapters/1.md", Buffer.from("Chapter one")]]));
+    await expect(parseProjectArchive(Buffer.concat([base, Buffer.from("polyglot")]))).rejects.toThrow(/trailing|comment|boundary/i);
+    const mismatched = Buffer.concat([base, Buffer.from("x")]);
+    const end = mismatched.lastIndexOf(Buffer.from("PK\x05\x06", "binary"));
+    mismatched.writeUInt16LE(2, end + 20);
+    await expect(parseProjectArchive(mismatched)).rejects.toThrow(/comment|boundary/i);
+  });
+
   it("rejects encrypted, symlink, ZIP64, duplicate normalized paths, excessive entries and compression bombs", async () => {
     const base = createProjectArchive(manifest(), new Map([["chapters/1.md", Buffer.from("Chapter one")]]));
     const encrypted = Buffer.from(base); encrypted.writeUInt16LE(encrypted.readUInt16LE(6) | 1, 6);
@@ -138,6 +168,12 @@ describe("project migration archive", () => {
     expect(() => assertArtifactSafe("text", "The detective searched for the stolen password in chapter twelve.")).not.toThrow();
     for (const assignment of [
       "OPENAI_API_KEY=abcdefghijklmnopqrstuvwxyz",
+      "api-key = sk-proj-1234567890abcdefghijklmnop",
+      "CLIENT-SECRET: ghp_1234567890abcdefghijklmnop",
+      "access_token = github_pat_1234567890abcdefghijklmnop",
+      "auth-token: glpat-1234567890abcdefghijklmnop",
+      "github-token=xoxb-1234567890abcdefghijklmnop",
+      "TOKEN = eyJhbGciOiJIUzI1NiJ9.abcdefghijklmnop.1234567890",
       "client_secret: abcdefghijklmnopqrstuvwxyz",
       "refresh_token = abcdefghijklmnopqrstuvwxyz",
       "private_key=-----BEGIN_PRIVATE_KEY-----",
@@ -145,6 +181,13 @@ describe("project migration archive", () => {
       "authorization: Basic abcdefghijklmnopqrstuvwxyz",
     ]) expect(() => assertArtifactSafe("text", assignment)).toThrow(/sensitive/i);
     expect(() => assertArtifactSafe("text", "The DATABASE_URL clue appeared in dialogue without an assigned value.")).not.toThrow();
+    for (const prose of [
+      "The api-key was the mystery at the center of the chapter.",
+      "client-secret is discussed by the security team.",
+      "token = friendship",
+      "github-token: repeated-repeated",
+      "She whispered authorization: granted, then closed the door.",
+    ]) expect(() => assertArtifactSafe("text", prose)).not.toThrow();
   });
 
   it("streams ZIP output without constructing one complete archive and enforces output limits", async () => {

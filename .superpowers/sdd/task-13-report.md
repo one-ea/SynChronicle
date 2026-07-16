@@ -101,3 +101,24 @@ Implemented tenant-isolated project import/export for PostgreSQL, legacy file-pr
 
 - Import parsing remains in bounded memory rather than temporary-file staging. The configured compressed, total-uncompressed, per-entry, ratio, and count limits provide a deterministic ceiling; deployments with smaller memory budgets should lower both byte limits together.
 - Native browser download errors that occur after navigation begins are handled by browser download UI. Tenant/version/stability errors are resolved by the metadata handshake before navigation and rechecked by the download endpoint.
+
+## Complete Archive Structure Follow-Up
+
+- Every central-directory record now produces a complete local interval from its local header through compressed data and the full optional data descriptor.
+- Local intervals are sorted and must provide exact continuous coverage from byte zero to `centralOffset`. Prefix data, gaps, unindexed local entries, overlaps, duplicate references, and local data extending into the central directory are rejected.
+- EOCD `commentLength` must make `endOffset + 22 + commentLength` equal the complete input length. Trailing polyglot bytes and mismatched comments are rejected.
+- Text assignment scanning accepts hyphen, underscore, and mixed-case key forms for provider-prefixed API keys, `api-key`, `client-secret`, `access-token`, `auth-token`, `github-token`, and generic `token` keys.
+- Text matching requires an explicit whole-key `:` or `=` assignment. Values are rejected when they have a known secret prefix or scheme, or when they are at least 20 characters with Shannon entropy of at least 3.2 bits per character. Values shorter than 12 characters, whitespace prose, and low-entropy narrative phrases are allowed.
+- Regression tests include central/local gaps, duplicated unindexed local regions, overlapping central references, EOCD trailing data, mismatched comments, all requested key spellings, and narrative false-positive examples.
+
+## Complete Structure Verification
+
+- Task 13 target tests: 55 passed, 3 PostgreSQL-conditional tests skipped.
+- `pnpm vitest run`: 605 passed, 62 skipped.
+- Final `pnpm test:browser`: 8 passed. The first run had the known 375px workbench readiness timeout; the isolated case and complete rerun passed.
+- `pnpm typecheck`, `pnpm build`, `pnpm exec drizzle-kit check`, and `git diff --check`: exit 0.
+
+## Complete Structure Concerns
+
+- The three PostgreSQL archive tests remain conditional and were skipped because `TEST_DATABASE_URL` is absent.
+- Entropy detection intentionally favors precision: short or low-entropy custom secrets without a recognized prefix can pass text scanning. Structured JSON secret keys remain rejected regardless of value shape.
