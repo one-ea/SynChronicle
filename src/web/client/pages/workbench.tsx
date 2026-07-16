@@ -37,6 +37,9 @@ function initialPanel(): WorkbenchPanel {
   return panel === "project" || panel === "status" ? panel : "writing";
 }
 function commandStorageKey(projectId: string, runId: string) { return `synchronicle:command:${projectId}:${runId}`; }
+function safeSessionGet(key: string) { try { return sessionStorage.getItem(key); } catch { return null; } }
+function safeSessionSet(key: string, value: string) { try { sessionStorage.setItem(key, value); } catch { /* Persistence is optional. */ } }
+function safeSessionRemove(key: string) { try { sessionStorage.removeItem(key); } catch { /* Persistence is optional. */ } }
 
 export function WorkbenchPage({ api, project, initialEvents, subscribe, connectionOverride }: WorkbenchPageProps) {
   const url = new URL(window.location.href);
@@ -53,7 +56,7 @@ export function WorkbenchPage({ api, project, initialEvents, subscribe, connecti
   const [pendingQuestion, setPendingQuestion] = useState(project.pendingQuestion);
   const [abortWaiting, setAbortWaiting] = useState(Boolean(project.latestRun?.waiting_for_durable_commit));
   const [commandFeedback, setCommandFeedback] = useState<string | null>(null);
-  const [pendingCommandId, setPendingCommandId] = useState<string | null>(() => initialRunId ? sessionStorage.getItem(commandStorageKey(project.id, initialRunId)) : null);
+  const [pendingCommandId, setPendingCommandId] = useState<string | null>(() => initialRunId ? safeSessionGet(commandStorageKey(project.id, initialRunId)) : null);
   const [lastModelSwitch, setLastModelSwitch] = useState<{ role: string; provider: string; model: string; credentialId?: string; parameters?: Record<string, unknown> } | null>(null);
   const scrollPositions = useRef<Record<WorkbenchPanel, number>>({ project: 0, writing: 0, status: 0 });
   const { state, connection } = useRunEvents({ runId, initialEvents, subscribe });
@@ -68,12 +71,12 @@ export function WorkbenchPage({ api, project, initialEvents, subscribe, connecti
     const command = state.commands[pendingCommandId];
     if (!command) return;
     setCommandFeedback(command.status === "applied" ? "模型切换已在安全边界应用。" : `模型切换失败：${command.message ?? command.category ?? "未知错误"}`);
-    if (runId) sessionStorage.removeItem(commandStorageKey(project.id, runId));
+    if (runId) safeSessionRemove(commandStorageKey(project.id, runId));
     setPendingCommandId(null);
   }, [pendingCommandId, state.commands]);
   useEffect(() => {
     if (!runId) { setPendingCommandId(null); return; }
-    setPendingCommandId(sessionStorage.getItem(commandStorageKey(project.id, runId)));
+    setPendingCommandId(safeSessionGet(commandStorageKey(project.id, runId)));
   }, [project.id, runId]);
   useEffect(() => {
     if (!runId || !pendingCommandId) return;
@@ -85,7 +88,7 @@ export function WorkbenchPage({ api, project, initialEvents, subscribe, connecti
         if (!active) return;
         if (result.command.status === "applied" || result.command.status === "failed") {
           setCommandFeedback(result.command.status === "applied" ? "模型切换已在安全边界应用。" : `模型切换失败：${result.command.errorMessage ?? result.command.failureCategory ?? "未知错误"}`);
-          sessionStorage.removeItem(commandStorageKey(project.id, runId));
+          safeSessionRemove(commandStorageKey(project.id, runId));
           setPendingCommandId(null);
           return;
         }
@@ -170,7 +173,7 @@ export function WorkbenchPage({ api, project, initialEvents, subscribe, connecti
     const selection = { role, provider, model, credentialId, parameters };
     const result = await api.request<{ command: { commandId: string } }>(`/api/projects/${project.id}/runs/${runId}/model`, { method: "POST", body: JSON.stringify(selection) });
     setPendingCommandId(result.command.commandId);
-    sessionStorage.setItem(commandStorageKey(project.id, runId), result.command.commandId);
+    safeSessionSet(commandStorageKey(project.id, runId), result.command.commandId);
     setLastModelSwitch(selection);
     setCommandFeedback("模型切换已排队，将在下一个 Agent 安全边界生效。");
   }

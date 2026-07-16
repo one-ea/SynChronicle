@@ -7,7 +7,7 @@ type LanguageModelInstance = Exclude<LanguageModel, string>;
 import { withExtra } from "./extra.js";
 import { resolveProviderType } from "./mapping.js";
 import { createResponsesModel } from "./responses.js";
-import { createSecureProviderFetch } from "./urlPolicy.js";
+import { createSecureProviderFetch, type ProviderAllowedHosts } from "./urlPolicy.js";
 
 interface OpenAIProviderLike { chat(model: string): LanguageModelInstance; responses(model: string): LanguageModelInstance }
 interface ProviderFactories {
@@ -18,9 +18,9 @@ interface ProviderFactories {
 
 const defaults: ProviderFactories = { openai: createOpenAI, anthropic: createAnthropic, google: createGoogleGenerativeAI };
 
-export function createProvider(name: string, pc: ProviderConfig, model: string, factories: Partial<ProviderFactories> = {}): LanguageModelInstance {
+export function createProvider(name: string, pc: ProviderConfig, model: string, factories: Partial<ProviderFactories> = {}, allowedHosts: ProviderAllowedHosts = new Map()): LanguageModelInstance {
   const type = resolveProviderType(name, pc.type);
-  const baseFetch = pc.base_url ? createSecureProviderFetch() : globalThis.fetch;
+  const baseFetch = pc.base_url ? createSecureProviderFetch(name, allowedHosts) : globalThis.fetch;
   const fetch = pc.extra_body || pc.extra ? withExtra(baseFetch, pc.extra_body, pc.extra) : pc.base_url ? baseFetch : undefined;
   if (type === "anthropic") return (factories.anthropic ?? defaults.anthropic)({ apiKey: pc.api_key, baseURL: pc.base_url, fetch })(model);
   if (type === "google") return (factories.google ?? defaults.google)({ apiKey: pc.api_key, baseURL: pc.base_url, fetch })(model);

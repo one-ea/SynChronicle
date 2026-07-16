@@ -1,5 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { parseProviderAllowedHosts, type ProviderAllowedHosts } from "../providers/urlPolicy.js";
+
+const ProviderAllowedHostsSchema = z.preprocess(
+  (value) => value === undefined ? "" : value,
+  z.union([
+    z.string().transform(parseProviderAllowedHosts),
+    z.custom<ProviderAllowedHosts>((value) => value instanceof Map),
+  ]),
+);
 
 export const WebConfigSchema = z.object({
   host: z.string().default("0.0.0.0"),
@@ -10,6 +19,7 @@ export const WebConfigSchema = z.object({
   sessionSecret: z.string().min(32),
   credentialMasterKeys: z.string().min(1),
   credentialMasterKeyVersion: z.string().min(1),
+  providerAllowedHosts: ProviderAllowedHostsSchema,
   workerId: z.string().min(1).default(() => randomUUID()),
 });
 
@@ -25,6 +35,7 @@ export function loadWebConfig(): WebConfig {
     sessionSecret: process.env.SESSION_SECRET,
     credentialMasterKeys: process.env.PROJECT_CREDENTIAL_MASTER_KEYS,
     credentialMasterKeyVersion: process.env.PROJECT_CREDENTIAL_MASTER_KEY_VERSION,
+    providerAllowedHosts: process.env.PROJECT_PROVIDER_ALLOWED_HOSTS,
     workerId: process.env.WORKER_ID,
   });
 }

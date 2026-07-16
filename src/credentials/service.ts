@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { decryptCredential, encryptCredential, type CredentialEnvelope, type MasterKeyRegistry } from "./envelope.js";
-import { validateProviderUrl, type DnsResolver } from "../providers/urlPolicy.js";
+import { validateProviderUrl, type DnsResolver, type ProviderAllowedHosts } from "../providers/urlPolicy.js";
 
 export type CredentialStatus = "active" | "disabled" | "revoked" | "invalid";
 export interface CredentialSecret { apiKey: string; baseUrl?: string }
@@ -33,10 +33,10 @@ function metadata(row: CredentialRecord): CredentialMetadata {
 }
 
 export class CredentialService {
-  constructor(private readonly repository: CredentialRepository, private readonly keys: MasterKeyRegistry, private readonly resolveDns?: DnsResolver) {}
+  constructor(private readonly repository: CredentialRepository, private readonly keys: MasterKeyRegistry, private readonly resolveDns?: DnsResolver, private readonly allowedHosts: ProviderAllowedHosts = new Map()) {}
 
   async create(userId: string, input: CredentialSecret & { provider: string; label?: string }, requestId: string): Promise<CredentialMetadata> {
-    await this.validateBaseUrl(input.baseUrl);
+    await this.validateBaseUrl(input.provider, input.baseUrl);
     const id = randomUUID();
     const now = new Date();
     const envelope = encryptCredential(this.keys, JSON.stringify({ apiKey: input.apiKey, ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}) }), { userId, credentialId: id, provider: input.provider });
@@ -46,7 +46,8 @@ export class CredentialService {
   async list(userId: string): Promise<CredentialMetadata[]> { return (await this.repository.list(userId)).map(metadata); }
 
   async replace(userId: string, id: string, input: CredentialSecret, requestId: string): Promise<CredentialMetadata | null> {
-    await this.validateBaseUrl(input.baseUrl);
+    const current = await this.repository.get(userId, id);
+    if (current) await this.validateBaseUrl(current.provider, input.baseUrl);
     const row = await this.repository.mutate(userId, id, "credential.replace", (current) => {
       if (current.status === "revoked") throw new CredentialServiceError("CREDENTIAL_REVOKED", "Credential is revoked", 409);
       const envelope = encryptCredential(this.keys, JSON.stringify(input), { userId, credentialId: id, provider: current.provider });
@@ -80,7 +81,7 @@ export class CredentialService {
       let secret: CredentialSecret & { provider: string };
       try { secret = { provider: row.provider, ...JSON.parse(plaintext) as CredentialSecret }; }
       catch (error) { await this.auditResolution({ userId, credentialId: id, provider: row.provider, runId: context.runId, result: "rejected", reason: "invalid_payload" }); throw error; }
-      try { await this.validateBaseUrl(secret.baseUrl); }
+      try { await this.validateBaseUrl(row.provider, secret.baseUrl); }
       catch (error) { await this.auditResolution({ userId, credentialId: id, provider: row.provider, runId: context.runId, result: "rejected", reason: error instanceof CredentialServiceError ? error.code.toLowerCase() : "validation_failed" }); throw error; }
       await this.auditResolution({ userId, credentialId: id, provider: row.provider, runId: context.runId, result: "success" });
       return secret;
@@ -89,9 +90,9 @@ export class CredentialService {
     }
   }
 
-  private async validateBaseUrl(baseUrl?: string) {
+  private async validateBaseUrl(provider: string, baseUrl?: string) {
     if (!baseUrl) return;
-    try { await validateProviderUrl(baseUrl, this.resolveDns); }
+    try { await validateProviderUrl(baseUrl, this.resolveDns, provider, this.allowedHosts); }
     catch (error) { throw new CredentialServiceError("CREDENTIAL_URL_UNSAFE", "Credential base URL is unsafe", 400); }
   }
   private async auditResolution(event: { userId: string; credentialId: string; provider: string; runId: string; result: "success" | "rejected"; reason?: string }) { await this.repository.auditResolution?.(event); }

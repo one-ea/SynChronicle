@@ -13,6 +13,7 @@ import { CredentialService } from "../credentials/service.js";
 import { DatabaseCredentialRepository } from "../credentials/database.js";
 import { masterKeyRegistryFromEnvironment } from "../credentials/envelope.js";
 import { createProvider, credentialScopedModel } from "../providers/index.js";
+import { parseProviderAllowedHosts } from "../providers/urlPolicy.js";
 
 export async function startWorker(): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL?.trim();
@@ -21,7 +22,8 @@ export async function startWorker(): Promise<void> {
   const leaseMs = positiveInteger(process.env.WORKER_LEASE_MS, 30_000, "WORKER_LEASE_MS");
   const idleMs = positiveInteger(process.env.WORKER_IDLE_MS, 1_000, "WORKER_IDLE_MS");
   const database = createDatabase(databaseUrl);
-  const credentialService = new CredentialService(new DatabaseCredentialRepository(database), masterKeyRegistryFromEnvironment(process.env.PROJECT_CREDENTIAL_MASTER_KEYS, process.env.PROJECT_CREDENTIAL_MASTER_KEY_VERSION));
+  const providerAllowedHosts = parseProviderAllowedHosts(process.env.PROJECT_PROVIDER_ALLOWED_HOSTS);
+  const credentialService = new CredentialService(new DatabaseCredentialRepository(database), masterKeyRegistryFromEnvironment(process.env.PROJECT_CREDENTIAL_MASTER_KEYS, process.env.PROJECT_CREDENTIAL_MASTER_KEY_VERSION), undefined, providerAllowedHosts);
   const events = new DatabaseEventRepository(database);
   const eventBroker = new PostgresEventBroker(database);
   const scheduler = new SchedulerRepository(database, { platformConcurrency: 4, eventBroker });
@@ -45,8 +47,8 @@ export async function startWorker(): Promise<void> {
             if (!secret || secret.provider !== expectedProvider) throw new Error("credential is unavailable for this provider");
             const lease = { apiKey: secret.apiKey, baseUrl: secret.baseUrl, release() { lease.apiKey = ""; lease.baseUrl = undefined; secret.apiKey = ""; secret.baseUrl = undefined; } };
             return lease;
-          })
-          : createProvider(provider, runConfig.providers?.[provider] ?? {}, model),
+          }, (name, providerConfig, selectedModel, factories) => createProvider(name, providerConfig, selectedModel, factories, providerAllowedHosts))
+          : createProvider(provider, runConfig.providers?.[provider] ?? {}, model, {}, providerAllowedHosts),
         persistStreamDelta: async (chunkSequence, text) => {
           const event = await events.appendEvent({ userId: task.userId, projectId: task.projectId, runId: task.runId }, {
             stableId: `stream:${task.runId}:${task.id}:${task.type}:${chunkSequence}`,

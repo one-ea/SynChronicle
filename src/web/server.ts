@@ -31,7 +31,7 @@ import { masterKeyRegistryFromEnvironment, type MasterKeyRegistry } from "../cre
 import { createLoginRateLimiter } from "./auth/plugin.js";
 import { redactSecrets } from "../credentials/redactor.js";
 
-type WebServerCommonOptions = Partial<Pick<WebConfig, "publicUrl" | "trustProxy" | "credentialMasterKeys" | "credentialMasterKeyVersion">> & { staticRoot?: string | null; credentialRegistry?: MasterKeyRegistry };
+type WebServerCommonOptions = Partial<Pick<WebConfig, "publicUrl" | "trustProxy" | "credentialMasterKeys" | "credentialMasterKeyVersion" | "providerAllowedHosts">> & { staticRoot?: string | null; credentialRegistry?: MasterKeyRegistry };
 
 const requestIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -100,7 +100,7 @@ export async function buildWebServer(options: WebServerOptions): Promise<Fastify
     ? masterKeyRegistryFromEnvironment(options.credentialMasterKeys, options.credentialMasterKeyVersion)
     : { currentVersion: "test", keys: new Map([["test", randomBytes(32)]]) });
   const credentialLimiter = createLoginRateLimiter({ max: 20, windowMs: 60_000 });
-  await app.register(modelConfigurationRoutes, { prefix: "/api/providers", repository: new ModelConfigurationRepository(database), credentials: new CredentialService(new DatabaseCredentialRepository(database), credentialRegistry), consumeCredentialMutation: (userId) => credentialLimiter.consume(userId) });
+  await app.register(modelConfigurationRoutes, { prefix: "/api/providers", repository: new ModelConfigurationRepository(database), credentials: new CredentialService(new DatabaseCredentialRepository(database), credentialRegistry, undefined, options.providerAllowedHosts), consumeCredentialMutation: (userId) => credentialLimiter.consume(userId) });
   app.get("/api/health", async () => ({ status: "ok" as const }));
   const clientRoot = options.staticRoot === undefined
     ? resolve(dirname(fileURLToPath(import.meta.url)), "client")

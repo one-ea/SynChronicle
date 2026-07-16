@@ -51,6 +51,20 @@ class MemoryCredentials implements CredentialRepository {
 }
 
 describe("CredentialService", () => {
+  it("enforces provider-aware base URL hosts on create, replace, and resolve", async () => {
+    const repository = new MemoryCredentials();
+    const resolve = async () => [{ address: "93.184.216.34", family: 4 as const }];
+    const service = new CredentialService(repository, keys, resolve);
+    const userId = randomUUID();
+
+    await expect(service.create(userId, { provider: "openai", apiKey: "secret", baseUrl: "https://api.anthropic.com" }, "req-1")).rejects.toMatchObject({ code: "CREDENTIAL_URL_UNSAFE" });
+    const saved = await service.create(userId, { provider: "openai", apiKey: "secret", baseUrl: "https://api.openai.com/v1" }, "req-2");
+    await expect(service.replace(userId, saved.id, { apiKey: "next", baseUrl: "https://api.example.com" }, "req-3")).rejects.toMatchObject({ code: "CREDENTIAL_URL_UNSAFE" });
+
+    repository.rows.get(saved.id)!.envelope = encryptCredential(keys, JSON.stringify({ apiKey: "secret", baseUrl: "https://api.anthropic.com" }), { userId, credentialId: saved.id, provider: "openai" });
+    await expect(service.resolve(userId, saved.id, { runId: "run-host-mismatch" })).rejects.toMatchObject({ code: "CREDENTIAL_URL_UNSAFE" });
+  });
+
   it("stores ciphertext, lists metadata, replaces with a fresh data key, and isolates tenants", async () => {
     const repository = new MemoryCredentials();
     const service = new CredentialService(repository, keys);
@@ -111,7 +125,7 @@ describe("CredentialService", () => {
     expect(repository.resolutionAudits.at(-1)).toMatchObject({ result: "rejected", reason: "invalid_payload" });
 
     const unsafe = await service.create(userId, { provider: "openai", apiKey: "secret" }, "req-2");
-    repository.rows.get(unsafe.id)!.envelope = encryptCredential(keys, JSON.stringify({ apiKey: "secret", baseUrl: "https://internal.example" }), { userId, credentialId: unsafe.id, provider: "openai" });
+    repository.rows.get(unsafe.id)!.envelope = encryptCredential(keys, JSON.stringify({ apiKey: "secret", baseUrl: "https://api.openai.com" }), { userId, credentialId: unsafe.id, provider: "openai" });
     await expect(service.resolve(userId, unsafe.id, { runId: "run-unsafe" })).rejects.toMatchObject({ code: "CREDENTIAL_URL_UNSAFE" });
     expect(repository.resolutionAudits.at(-1)).toMatchObject({ result: "rejected", reason: "credential_url_unsafe" });
 

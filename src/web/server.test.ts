@@ -56,6 +56,18 @@ describe("buildWebServer", () => {
     expect(WebConfigSchema.parse({ ...config, trustProxy: "true" }).trustProxy).toBe(true);
   });
 
+  it("strictly parses project provider host policy configuration", () => {
+    const base = {
+      databaseUrl: "postgres://test:test@localhost/test",
+      publicUrl: "https://app.example.test",
+      sessionSecret: "s".repeat(32),
+      credentialMasterKeys: `v1:${Buffer.alloc(32, "k").toString("base64")}`,
+      credentialMasterKeyVersion: "v1",
+    };
+    expect(WebConfigSchema.parse({ ...base, providerAllowedHosts: JSON.stringify({ openai: ["gateway.example.com"] }) }).providerAllowedHosts).toEqual(new Map([["openai", ["gateway.example.com"]]]));
+    expect(() => WebConfigSchema.parse({ ...base, providerAllowedHosts: JSON.stringify({ openai: ["*"] }) })).toThrow("PROJECT_PROVIDER_ALLOWED_HOSTS");
+  });
+
   it("awaits closing an owned injected database client", async () => {
     let release!: () => void;
     let markStarted!: () => void;

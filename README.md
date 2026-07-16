@@ -90,6 +90,16 @@ synchronicle --version
 
 项目级配置会与全局配置合并，适合为某本作品指定模型、代理地址或角色设置。
 
+### Provider 出站域名
+
+Web 与 Worker 对用户凭证的自定义 `base_url` 使用 Provider 维度的 HTTPS hostname allowlist。内置 Provider 仅允许各自官方 API 域名。管理员可通过项目专用环境变量追加精确域名或受控子域后缀：
+
+```bash
+PROJECT_PROVIDER_ALLOWED_HOSTS='{"openai":["gateway.example.com",".ai.example.net"]}'
+```
+
+配置值为 JSON 对象，键是小写 Provider 名，值是 hostname 数组。精确规则只匹配该 hostname；点前缀规则匹配其下级子域，并且至少包含三段域名。URL、IP、`localhost`、通配符及宽泛公共后缀会在启动时被拒绝。所有获准 hostname 仍需通过 DNS 解析、全局单播地址检查和连接固定。
+
 ### 反思执行
 
 Architect、Writer 和 Editor 默认采用反思执行：每轮由原 Agent 生成候选，再交给独立 Reviewer 会话评分。Reviewer 不注册创作业务工具，可使用 `reflection.reviewer_model` 指定独立模型；省略时沿用默认模型。

@@ -220,6 +220,27 @@ describe("WorkbenchPage", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
+  it("continues without command persistence when session storage is blocked", async () => {
+    const getItem = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new DOMException("blocked", "SecurityError"); });
+    const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new DOMException("blocked", "SecurityError"); });
+    const removeItem = vi.spyOn(Storage.prototype, "removeItem").mockImplementation(() => { throw new DOMException("blocked", "SecurityError"); });
+    const client = api();
+    const user = userEvent.setup();
+
+    render(<WorkbenchPage api={client} project={project} initialEvents={[]} />);
+    await user.selectOptions(screen.getByLabelText("Agent"), "writer");
+    await user.selectOptions(screen.getByLabelText("Provider"), "openai");
+    await user.selectOptions(screen.getByLabelText("模型"), "gpt-5");
+    await user.click(screen.getByRole("button", { name: "切换模型" }));
+
+    expect(await screen.findByText(/模型切换已排队/)).toBeVisible();
+    expect(getItem).toHaveBeenCalled();
+    expect(setItem).toHaveBeenCalled();
+    removeItem.mockRestore();
+    setItem.mockRestore();
+    getItem.mockRestore();
+  });
+
   it("restores panel, focus, chapter, and scroll on popstate", async () => {
     window.history.replaceState({}, "", "/projects/project-1?panel=writing&chapter=chapter-1");
     const user = userEvent.setup();
