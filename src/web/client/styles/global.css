@@ -163,6 +163,8 @@ input { background: transparent; border: 0; border-bottom: 1px solid var(--ink-m
 .run-create-card .muted-copy { line-height: 1.55; margin: 0; }
 .run-create-card label { display: grid; gap: 0.45rem; }
 .run-create-card select, .run-create-card button { min-height: 48px; }
+.run-create-card button:disabled:not([aria-busy="true"]) { cursor: not-allowed; }
+.run-create-status { margin: 0; min-height: 1lh; }
 .mobile-workbench-nav { display: none; }
 .layout-controls { position: relative; }
 .layout-controls-trigger { background: transparent; border: 1px solid var(--rule); color: var(--ink); min-height: 44px; min-width: 44px; padding: 0 var(--space-1); }

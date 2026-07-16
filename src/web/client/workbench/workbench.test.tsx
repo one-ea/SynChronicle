@@ -7,6 +7,7 @@ import type { ApiClient } from "../api/client.js";
 import { ApiError } from "../api/client.js";
 import { WorkbenchPage, type WorkbenchProject } from "../pages/workbench.js";
 import { initialRunViewState, reduceRunEvent, type RunEventMessage } from "../realtime/useRunEvents.js";
+import { RunSidebar } from "./runSidebar.js";
 
 const project: WorkbenchProject = {
   id: "project-1",
@@ -226,6 +227,67 @@ describe("WorkbenchPage", () => {
       "/api/projects/project-1/runs",
       expect.objectContaining({ method: "POST", body: expect.stringContaining('"modelSetId":"set-1"') }),
     );
+  });
+
+  it("clears a selected model set when refreshed options remove it", async () => {
+    const user = userEvent.setup();
+    const sidebarProps = {
+      state: initialRunViewState,
+      connection: "idle" as const,
+      agents: [],
+      modelConfiguration: project.modelConfiguration,
+      commandFeedback: null,
+      diagnostics: null,
+      abortWaiting: false,
+      controlsDisabled: true,
+      collapsed: false,
+      onToggle: vi.fn(),
+      onStart: vi.fn(),
+      onCommand: vi.fn(),
+      onAnswer: vi.fn(),
+      onSwitchModel: vi.fn(),
+      onDiagnose: vi.fn(),
+    };
+    const { rerender } = render(<RunSidebar {...sidebarProps} />);
+
+    const modelSet = screen.getByLabelText("模型集");
+    await user.selectOptions(modelSet, "set-1");
+    expect(screen.getByRole("button", { name: "启动运行" })).toBeEnabled();
+
+    rerender(<RunSidebar {...sidebarProps} modelConfiguration={{ ...project.modelConfiguration!, activeModelSetId: "set-2", modelSets: [{ id: "set-2", name: "备用模型", version: 1, agents: {} }] }} />);
+
+    expect(modelSet).toHaveValue("");
+    expect(screen.getByRole("button", { name: "启动运行" })).toBeDisabled();
+
+    rerender(<RunSidebar {...sidebarProps} />);
+    expect(modelSet).toHaveValue("");
+    expect(screen.getByRole("button", { name: "启动运行" })).toBeDisabled();
+  });
+
+  it("announces pending run creation and prevents duplicate submission", async () => {
+    let resolveRequest!: (value: { run: { id: string } }) => void;
+    const request = vi.fn(() => new Promise<{ run: { id: string } }>((resolve) => { resolveRequest = resolve; }));
+    const user = userEvent.setup();
+    render(<WorkbenchPage api={{ request: request as ApiClient["request"] }} project={{ ...project, latestRun: null }} initialEvents={[]} />);
+
+    await user.selectOptions(screen.getByLabelText("模型集"), "set-1");
+    await user.click(screen.getByRole("button", { name: "启动运行" }));
+
+    const pendingButton = screen.getByRole("button", { name: "正在启动" });
+    expect(pendingButton).toBeDisabled();
+    expect(pendingButton).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByText("正在启动运行。")).toHaveAttribute("aria-live", "polite");
+
+    await user.click(pendingButton);
+    expect(request).toHaveBeenCalledTimes(1);
+
+    await act(async () => { resolveRequest({ run: { id: "22222222-2222-4222-8222-222222222222" } }); await Promise.resolve(); });
+    await vi.waitFor(() => expect(screen.queryByRole("button", { name: "正在启动" })).not.toBeInTheDocument());
+  });
+
+  it("uses a not-allowed cursor for an unavailable create-run action", () => {
+    const css = readFileSync(resolve(process.cwd(), "src/web/client/styles/global.css"), "utf8");
+    expect(css).toContain('.run-create-card button:disabled:not([aria-busy="true"]) { cursor: not-allowed; }');
   });
 
   it("accepts incremental events without losing the current chapter", async () => {

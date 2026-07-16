@@ -27,3 +27,14 @@ Completed the reachable create-run card while preserving the existing run submis
 ## Concerns
 
 - Viewport-level reachability coverage remains assigned to Task 3's responsive Playwright checks.
+
+## Medium/Low Follow-up
+
+- RED: 3 new assertions failed for stale model-set selection, missing pending semantics, and the unavailable-action cursor; 29 existing assertions passed.
+- Cleared controlled selection when refreshed model-set options no longer contain the selected ID.
+- Based submit availability and the submit guard on membership in the current model-set options.
+- Added pending copy, `aria-busy`, a polite live status, and duplicate-click protection while the request remains unresolved.
+- Added a create-card-local `not-allowed` cursor for disabled non-busy submission while retaining the global wait cursor for pending work.
+- Added component coverage for option removal and restoration, unresolved submission, repeated click attempts, loading copy, busy semantics, live status, and the local cursor rule.
+- GREEN: Workbench and accessibility tests passed 32 assertions.
+- The 48px target and short-viewport reachability checks remain assigned to Task 3 browser coverage.
