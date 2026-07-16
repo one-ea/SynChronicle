@@ -90,11 +90,18 @@ describe("project migration archive", () => {
 
   it("requires EOCD comment length to end exactly at the archive boundary", async () => {
     const base = createProjectArchive(manifest(), new Map([["chapters/1.md", Buffer.from("Chapter one")]]));
-    await expect(parseProjectArchive(Buffer.concat([base, Buffer.from("polyglot")]))).rejects.toThrow(/trailing|comment|boundary/i);
+    await expect(parseProjectArchive(Buffer.concat([base, Buffer.from("polyglot")]))).rejects.toThrow(/trailing|comment|boundary|missing/i);
     const mismatched = Buffer.concat([base, Buffer.from("x")]);
     const end = mismatched.lastIndexOf(Buffer.from("PK\x05\x06", "binary"));
     mismatched.writeUInt16LE(2, end + 20);
-    await expect(parseProjectArchive(mismatched)).rejects.toThrow(/comment|boundary/i);
+    await expect(parseProjectArchive(mismatched)).rejects.toThrow(/comment|boundary|missing/i);
+
+    const embeddedSignature = Buffer.alloc(22);
+    embeddedSignature.writeUInt32LE(0x06054b50, 0);
+    const withEmbeddedSignature = Buffer.concat([base, embeddedSignature]);
+    const realEnd = base.lastIndexOf(Buffer.from("PK\x05\x06", "binary"));
+    withEmbeddedSignature.writeUInt16LE(embeddedSignature.length, realEnd + 20);
+    await expect(parseProjectArchive(withEmbeddedSignature)).resolves.toMatchObject({ manifest: { format: "synchronicle-project" } });
   });
 
   it("rejects encrypted, symlink, ZIP64, duplicate normalized paths, excessive entries and compression bombs", async () => {
@@ -179,14 +186,20 @@ describe("project migration archive", () => {
       "private_key=-----BEGIN_PRIVATE_KEY-----",
       "DATABASE_URL=postgres://user:password@example/db",
       "authorization: Basic abcdefghijklmnopqrstuvwxyz",
+      "password=hunter2",
+      "token=abc",
+      "api-key=x",
+      "github-token=short",
+      "deployment-auth-material=abcdefghijklmnopqrstuvwxyz0123456789",
     ]) expect(() => assertArtifactSafe("text", assignment)).toThrow(/sensitive/i);
     expect(() => assertArtifactSafe("text", "The DATABASE_URL clue appeared in dialogue without an assigned value.")).not.toThrow();
     for (const prose of [
       "The api-key was the mystery at the center of the chapter.",
       "client-secret is discussed by the security team.",
-      "token = friendship",
-      "github-token: repeated-repeated",
-      "She whispered authorization: granted, then closed the door.",
+      "The token was friendship, according to the narrator.",
+      "The github-token clue repeated throughout the chapter.",
+      "She whispered that authorization was granted, then closed the door.",
+      "deployment-auth-material=friendship",
     ]) expect(() => assertArtifactSafe("text", prose)).not.toThrow();
   });
 

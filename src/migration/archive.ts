@@ -171,12 +171,13 @@ export function assertArtifactSafe(encoding: "text" | "json", content: string): 
     return;
   }
   const sensitiveKey = /^(?:(?:[a-z0-9]+[-_])*api[-_]key|client[-_]secret|refresh[-_]token|private[-_]key|database[-_]url|authorization|access[-_]token|auth[-_]token|github[-_]token|token|secret|password|credential)$/i;
+  const suspiciousKey = /(?:^|[-_])(?:api|auth|token|secret|password|credential|key)(?:$|[-_])/i;
   const assignment = /^\s*(?:export\s+)?(?:(?:const|let|var)\s+)?["']?([a-z0-9_-]+)["']?\s*[:=]\s*(.*?)\s*[,;]?\s*$/i;
   for (const line of content.split(/\r?\n/)) {
     const match = assignment.exec(line);
-    if (!match?.[1] || !sensitiveKey.test(match[1])) continue;
+    if (!match?.[1]) continue;
     const value = stripAssignmentQuotes(match[2] ?? "");
-    if (isLikelySecret(value)) throw new ArchiveValidationError("Sensitive text artifact content is forbidden");
+    if (sensitiveKey.test(match[1]) || (suspiciousKey.test(match[1]) && isLikelySecret(value))) throw new ArchiveValidationError("Sensitive text artifact content is forbidden");
   }
 }
 
@@ -193,7 +194,7 @@ function isLikelySecret(value: string): boolean {
 
 function unzip(data: Buffer, options: ArchiveLimits): Map<string, Buffer> {
   const files = new Map<string, Buffer>();
-  const endOffset = findSignatureReverse(data, 0x06054b50, Math.max(0, data.length - 65_557));
+  const endOffset = findValidEocd(data);
   if (endOffset < 0 || endOffset + 22 > data.length) throw new ArchiveValidationError("ZIP central directory is missing");
   const eocdCommentLength = data.readUInt16LE(endOffset + 20);
   if (endOffset + 22 + eocdCommentLength !== data.length) throw new ArchiveValidationError("EOCD comment length does not match the archive boundary; trailing data is forbidden");
@@ -277,7 +278,19 @@ function encodeEntry(rawName: string, data: Buffer, offset: number, options: Arc
 function eocd(count: number, centralSize: number, centralOffset: number) { const end = Buffer.alloc(22); end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(count, 8); end.writeUInt16LE(count, 10); end.writeUInt32LE(centralSize, 12); end.writeUInt32LE(centralOffset, 16); return end; }
 function validateDescriptor(data: Buffer, offset: number, crc: number, compressed: number, size: number) { if (offset + 12 > data.length) throw new ArchiveValidationError("Truncated ZIP data descriptor"); const signature = offset + 16 <= data.length && data.readUInt32LE(offset) === 0x08074b50, start = offset + (signature ? 4 : 0); if (start + 12 > data.length || data.readUInt32LE(start) !== crc || data.readUInt32LE(start + 4) !== compressed || data.readUInt32LE(start + 8) !== size) throw new ArchiveValidationError("ZIP data descriptor mismatch"); return start + 12; }
 function hasZip64Extra(extra: Buffer) { for (let offset = 0; offset + 4 <= extra.length;) { const id = extra.readUInt16LE(offset), size = extra.readUInt16LE(offset + 2); if (id === 1) return true; offset += 4 + size; } return false; }
-function findSignatureReverse(data: Buffer, signature: number, start: number) { for (let offset = data.length - 4; offset >= start; offset--) if (data.readUInt32LE(offset) === signature) return offset; return -1; }
+function findValidEocd(data: Buffer): number {
+  const start = Math.max(0, data.length - 65_557);
+  for (let offset = data.length - 22; offset >= start; offset--) {
+    if (data.readUInt32LE(offset) !== 0x06054b50) continue;
+    const commentLength = data.readUInt16LE(offset + 20);
+    if (offset + 22 + commentLength !== data.length) continue;
+    const entryCount = data.readUInt16LE(offset + 10), centralSize = data.readUInt32LE(offset + 12), centralOffset = data.readUInt32LE(offset + 16);
+    if (entryCount === 0xffff || centralSize === 0xffffffff || centralOffset === 0xffffffff || centralOffset + centralSize !== offset) continue;
+    if (validCentralDirectoryShape(data, centralOffset, offset, entryCount)) return offset;
+  }
+  return -1;
+}
+function validCentralDirectoryShape(data: Buffer, start: number, end: number, count: number): boolean { let cursor = start; for (let index = 0; index < count; index++) { if (cursor + 46 > end || data.readUInt32LE(cursor) !== 0x02014b50) return false; const length = 46 + data.readUInt16LE(cursor + 28) + data.readUInt16LE(cursor + 30) + data.readUInt16LE(cursor + 32); if (cursor + length > end) return false; cursor += length; } return cursor === end; }
 function unique(values: string[], label: string, context: z.RefinementCtx) { const seen = new Set<string>(); for (const value of values) { if (seen.has(value)) { context.addIssue({ code: z.ZodIssueCode.custom, message: `Duplicate ${label}` }); return; } seen.add(value); } }
 
 function crc32(data: Buffer): number {

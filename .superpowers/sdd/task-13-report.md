@@ -122,3 +122,22 @@ Implemented tenant-isolated project import/export for PostgreSQL, legacy file-pr
 
 - The three PostgreSQL archive tests remain conditional and were skipped because `TEST_DATABASE_URL` is absent.
 - Entropy detection intentionally favors precision: short or low-entropy custom secrets without a recognized prefix can pass text scanning. Structured JSON secret keys remain rejected regardless of value shape.
+
+## Explicit Secret And EOCD Candidate Follow-Up
+
+- Explicit text assignments to a complete recognized sensitive key are now rejected regardless of value length or entropy. This includes short values such as `password=hunter2`, `token=abc`, `api-key=x`, and short provider-token assignments.
+- Entropy and known-prefix analysis is reserved for unknown but suspicious key names containing bounded `api`, `auth`, `token`, `secret`, `password`, `credential`, or `key` segments. Low-entropy unknown values remain allowed to reduce prose/config-example false positives.
+- EOCD discovery now scans candidates from the end toward the beginning. A candidate must have an exact comment tail and a central directory whose declared entries parse exactly to the candidate offset.
+- EOCD-like signatures embedded inside a valid ZIP comment are skipped when their central structure is invalid. The earlier real EOCD remains selectable.
+
+## Explicit Secret Verification
+
+- Task 13 target tests: 55 passed, 3 PostgreSQL-conditional tests skipped.
+- `pnpm vitest run`: 605 passed, 62 skipped.
+- `pnpm test:browser`: 8 passed.
+- `pnpm typecheck`, `pnpm build`, `pnpm exec drizzle-kit check`, and `git diff --check`: exit 0.
+
+## Explicit Secret Concerns
+
+- Unknown suspicious keys still use the precision-oriented entropy/prefix policy. Complete recognized sensitive keys and structured JSON sensitive keys have no value-length exception.
+- PostgreSQL archive tests remain skipped in this environment because `TEST_DATABASE_URL` is absent.
