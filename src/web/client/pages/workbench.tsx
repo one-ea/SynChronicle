@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { ApiClient } from "../api/client.js";
 import { useRunEvents, type ConnectionState, type RunEventMessage } from "../realtime/useRunEvents.js";
 import { ActivityFeed } from "../workbench/activityFeed.js";
+import { LayoutControls } from "../workbench/layoutControls.js";
 import { MobileNav, type WorkbenchPanel } from "../workbench/mobileNav.js";
 import { ProjectNav } from "../workbench/projectNav.js";
 import { PromptInput } from "../workbench/promptInput.js";
@@ -235,11 +236,7 @@ export function WorkbenchPage({ api, project: initialProject, initialEvents, sub
 
   return <div className="workbench-shell">
     <a className="skip-link" href="#main-content">跳到创作流</a>
-    <header className="workbench-topbar"><a href="/projects" className="wordmark">SynChronicle</a><p>{project.title}</p><span>{project.latestRun?.status === "running" ? "创作进行中" : "创作台"}</span></header>
-    <div className="panel-width-controls" aria-label="桌面栏宽调整">
-      <label>调整作品栏宽度<input type="range" min="220" max="420" value={leftWidth} onChange={(event) => setLeftWidth(event.currentTarget.valueAsNumber)} /></label>
-      <label>调整状态栏宽度<input type="range" min="240" max="420" value={rightWidth} onChange={(event) => setRightWidth(event.currentTarget.valueAsNumber)} /></label>
-    </div>
+    <header className="workbench-topbar"><a href="/projects" className="wordmark">SynChronicle</a><p>{project.title}</p><div className="workbench-topbar-actions"><span>{project.latestRun?.status === "running" ? "创作进行中" : "创作台"}</span><LayoutControls leftWidth={leftWidth} rightWidth={rightWidth} setLeftWidth={setLeftWidth} setRightWidth={setRightWidth} /></div></header>
     <div className={`workbench-grid left-${leftCollapsed ? "closed" : "open"} right-${rightCollapsed ? "closed" : "open"}`} style={{ "--left-open-width": `${leftWidth}px`, "--right-open-width": `${rightWidth}px` } as CSSProperties}>
       <div data-panel="project" data-mobile-active={panel === "project"}><ProjectNav title={project.title} chapters={project.chapters ?? []} selectedChapterId={selectedChapter?.id} collapsed={leftCollapsed} onToggle={() => setLeftCollapsed((value) => !value)} onSelect={selectChapter} /></div>
       <div className="writing-column" data-panel="writing" data-mobile-active={panel === "writing"}><ActivityFeed state={state} chapter={selectedChapter} /><PromptInput onSend={steer} /></div>

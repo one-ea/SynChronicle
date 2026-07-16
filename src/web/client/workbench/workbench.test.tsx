@@ -123,15 +123,58 @@ describe("WorkbenchPage", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("创作流过快");
   });
 
-  it("offers keyboard-operable desktop panel width controls", () => {
+  it("opens labeled layout controls and resets both panel widths", async () => {
+    const user = userEvent.setup();
     render(<WorkbenchPage api={api()} project={project} initialEvents={[]} />);
-    const leftWidth = screen.getByLabelText("调整作品栏宽度");
-    const rightWidth = screen.getByLabelText("调整状态栏宽度");
+    const trigger = screen.getByRole("button", { name: "布局" });
 
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    await user.click(trigger);
+
+    const dialog = screen.getByRole("dialog", { name: "布局" });
+    const leftWidth = within(dialog).getByRole("slider", { name: "作品栏" });
+    const rightWidth = within(dialog).getByRole("slider", { name: "状态栏" });
+
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(leftWidth).toHaveFocus();
     expect(leftWidth).toHaveAttribute("type", "range");
     expect(rightWidth).toHaveAttribute("type", "range");
-    fireEvent.change(leftWidth, { target: { value: "281" } });
-    expect(leftWidth).toHaveValue("281");
+    expect(within(dialog).getByText("280 px")).toBeVisible();
+    expect(within(dialog).getByText("300 px")).toBeVisible();
+
+    fireEvent.change(leftWidth, { target: { value: "340" } });
+    fireEvent.change(rightWidth, { target: { value: "360" } });
+    expect(within(dialog).getByText("340 px")).toBeVisible();
+    expect(within(dialog).getByText("360 px")).toBeVisible();
+
+    await user.click(within(dialog).getByRole("button", { name: "重置布局" }));
+    expect(leftWidth).toHaveValue("280");
+    expect(rightWidth).toHaveValue("300");
+    expect(within(dialog).getByText("280 px")).toBeVisible();
+    expect(within(dialog).getByText("300 px")).toBeVisible();
+  });
+
+  it("dismisses layout controls with Escape and restores trigger focus", async () => {
+    const user = userEvent.setup();
+    render(<WorkbenchPage api={api()} project={project} initialEvents={[]} />);
+    const trigger = screen.getByRole("button", { name: "布局" });
+
+    await user.click(trigger);
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByRole("dialog", { name: "布局" })).not.toBeInTheDocument();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).toHaveFocus();
+  });
+
+  it("dismisses layout controls on an outside pointer interaction", async () => {
+    const user = userEvent.setup();
+    render(<WorkbenchPage api={api()} project={project} initialEvents={[]} />);
+
+    await user.click(screen.getByRole("button", { name: "布局" }));
+    fireEvent.pointerDown(screen.getByRole("link", { name: "SynChronicle" }));
+
+    expect(screen.queryByRole("dialog", { name: "布局" })).not.toBeInTheDocument();
   });
 
   it("accepts incremental events without losing the current chapter", async () => {

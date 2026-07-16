@@ -25,6 +25,8 @@ it("has no detectable WCAG AA violations on the creative workbench", async () =>
     latestRun: null,
   }} initialEvents={[]} />);
   await screen.findByRole("heading", { name: "创作流" });
+  await userEvent.setup().click(screen.getByRole("button", { name: "布局" }));
+  await screen.findByRole("dialog", { name: "布局" });
 
   const result = await axe.run(container, { runOnly: { type: "tag", values: ["wcag2a", "wcag2aa"] } });
   expect(result.violations).toEqual([]);
