@@ -44,3 +44,48 @@ Implemented the production security layer, deterministic real-stack E2E harness,
 - Full Compose readiness/Worker smoke workflow.
 
 Task list and final acceptance remain unchecked for gates that require successful CI execution.
+
+## Follow-up: Full Worker Web Flow
+
+The follow-up replaces API-only command assertions with UI-driven controls and condition-based waits against a localhost-only test orchestrator. The orchestrator records real database state, controls Worker process death/restart, and exposes the test-only Provider call log without adding production routes.
+
+- The deterministic Provider uses the AI SDK v2 protocol directly and no longer imports `ai/test` or its unavailable optional test dependencies.
+- Provider calls record method, Provider, model, Worker ID, PID, timestamp, and prompt only when the explicit E2E test flags and log path are configured.
+- The first model invokes the real `ask_user` tool. The switched model invokes the real `reopen_book` tool against prepared fixture state, producing a matching checkpoint through the actual Host/Store path.
+- Playwright waits for task claim, Provider calls, live AskUser UI, command applied feedback, pause boundary, checkpoint, resume, lease expiry, second-Worker reclaim, resumed Provider execution, stream replay, task completion, usage, quota, chapter, and artifact facts.
+- Start, pause, resume, steer, AskUser answer, model switch, abort, import, and export are exercised through visible WebUI controls. Cross-tenant access remains a direct authorization assertion.
+- Playwright now discovers the original eight 375/768/1024/1440 responsive cases plus desktop and mobile full-stack cases.
+
+### Follow-up TDD Evidence
+
+- RED: fake Provider tests failed because `ai/test` required unavailable `msw`, calls were not logged, and tools were not executed. GREEN: the direct v2 model logs calls and completes real AskUser/reopen-book tool loops.
+- RED: orchestrator tests failed because process control did not exist and then because kill returned before process exit. GREEN: Worker kill waits for exit and restart uses a distinct identity.
+- RED: a live AskUser event appeared in the activity feed without rendering the answer form. GREEN: Workbench projects live tool events into the pending-question UI and submits the durable answer command.
+- RED: direct CLI dispatch coverage loaded real Web configuration. GREEN: injected lazy starters verify Web and Worker dispatch without starting services.
+
+### Minor Ledger
+
+Closed: Fastify test cleanup, direct CLI dispatch coverage, Argon2 build/test follow-up, ephemeral PostgreSQL CI configuration, dense artifact/chapter Schema formatting, unused `clearHandledSteer`, stale Task 9 reporting, and synchronous Provider transport timer cleanup.
+
+Retained risk: the IPv6 special-purpose range policy requires periodic maintenance as IANA assignments evolve.
+
+### Follow-up Local Verification
+
+- `pnpm typecheck`: passed.
+- `pnpm test`: 647 passed, 62 PostgreSQL-conditional skipped.
+- Follow-up target suite: 44 passed across fake Provider, orchestrator, Workbench, security, CLI, and server tests.
+- `pnpm build`: passed.
+- `pnpm exec playwright test --list`: passed; 8 responsive and 2 full-stack cases discovered.
+- `npm pack --dry-run`: passed; 50 files, 846.8 kB, including Vite client assets.
+- `git diff --check`: passed.
+
+PostgreSQL-backed Vitest, full Playwright execution, Docker build, Compose config, and Compose smoke remain pending CI evidence and stay unchecked.
+
+## Takeover Verification And Review Fixes
+
+- Re-ran the focused fake Provider, crash orchestrator, Workbench, security, CLI, and server suites: 44 passed.
+- Re-ran the complete local Vitest suite: 647 passed and 62 PostgreSQL-conditional tests skipped explicitly.
+- Re-ran typecheck, Playwright collection, and diff validation successfully. Playwright collects eight responsive cases across 375/768/1024/1440 plus desktop and mobile full-stack Worker cases.
+- Full-stack imports now generate unique run and checkpoint UUIDs per Playwright project, preventing the desktop and mobile cases from colliding in their shared PostgreSQL database.
+- The real Worker crash/recovery scenario now owns a 180-second test budget and always restores browser connectivity and disposes its control client on failure.
+- The progress ledger now has one consolidated Task 12 entry. PostgreSQL, full browser, Docker, Compose, and smoke gates remain explicitly assigned to CI and unchecked in the task list.

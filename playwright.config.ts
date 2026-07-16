@@ -1,7 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
-  testDir: "./e2e",
+  testDir: ".",
   timeout: 60_000,
   expect: { timeout: 10_000 },
   fullyParallel: false,
@@ -10,8 +10,9 @@ export default defineConfig({
   reporter: process.env.CI ? [["github"], ["html", { open: "never" }]] : "list",
   use: { baseURL: "http://127.0.0.1:4173", trace: "retain-on-failure" },
   projects: [
-    { name: "desktop", use: { ...devices["Desktop Chrome"] } },
-    { name: "mobile", use: { ...devices["Pixel 7"] } },
+    { name: "responsive", testMatch: "tests/browser/**/*.spec.ts", use: { ...devices["Desktop Chrome"] } },
+    { name: "fullstack-desktop", testMatch: "e2e/**/*.spec.ts", use: { ...devices["Desktop Chrome"] } },
+    { name: "fullstack-mobile", testMatch: "e2e/**/*.spec.ts", use: { ...devices["Pixel 7"] } },
   ],
   webServer: {
     command: "pnpm exec vite-node scripts/e2e-server.ts",

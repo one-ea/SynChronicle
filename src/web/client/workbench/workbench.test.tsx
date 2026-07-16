@@ -145,6 +145,20 @@ describe("WorkbenchPage", () => {
     expect(screen.getByText("她在退潮后的码头读完了第一封信。")).toBeVisible();
   });
 
+  it("renders and answers an AskUser question received from the live Worker stream", async () => {
+    let push!: (event: RunEventMessage) => void;
+    const client = api();
+    const withoutQuestion = { ...project, pendingQuestion: null };
+    render(<WorkbenchPage api={client} project={withoutQuestion} initialEvents={[]} subscribe={(listener) => { push = listener; return () => undefined; }} />);
+
+    act(() => push({ sequence: 8, type: "tool", payload: { id: "ask:question-live", tool: "ask_user", payload: { questions: [{ header: "篇幅", question: "希望写多长？", options: [{ label: "长篇" }, { label: "短篇" }] }] } } }));
+
+    const user = userEvent.setup();
+    await user.selectOptions(await screen.findByLabelText("希望写多长？"), "长篇");
+    await user.click(screen.getByRole("button", { name: "提交回答" }));
+    expect(client.request).toHaveBeenCalledWith(expect.stringMatching(/\/answer$/), expect.objectContaining({ body: expect.stringContaining("question-live") }));
+  });
+
   it("uses projected Agent/usage data and maps all workbench controls", async () => {
     const client = api();
     const user = userEvent.setup();

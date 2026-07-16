@@ -15,7 +15,7 @@ try {
   ];
   for (const identity of identities) {
     const [user] = await database.insert(users).values({ ...identity, passwordHash, concurrencyLimit: 2 }).onConflictDoUpdate({ target: users.username, set: { passwordHash, status: "active", concurrencyLimit: 2 } }).returning();
-    const agents = Object.fromEntries(["architect", "writer", "editor"].map((role) => [role, { provider: "e2e", model: "deterministic" }]));
+    const agents = Object.fromEntries(["coordinator", "architect", "writer", "editor"].map((role) => [role, { provider: "e2e", model: "deterministic" }]));
     const existing = await database.select({ id: userModelSets.id }).from(userModelSets).where(eq(userModelSets.userId, user!.id)).limit(1);
     if (!existing.length) await database.insert(userModelSets).values({ userId: user!.id, name: "E2E deterministic", version: 1, agents, active: 1 });
     const balance = await database.select({ id: quotaLedger.id }).from(quotaLedger).where(eq(quotaLedger.userId, user!.id)).limit(1);

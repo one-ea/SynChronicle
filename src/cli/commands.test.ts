@@ -39,4 +39,15 @@ describe("CLI commands", () => {
     await expect(dispatch({ command: "migrate-project", databaseUrl: "postgres://db", username: "alice", projectDir: "/book" }, { migrateFileProject: migrate })).resolves.toBe(0);
     expect(migrate).toHaveBeenCalledWith({ command: "migrate-project", databaseUrl: "postgres://db", username: "alice", projectDir: "/book" });
   });
+
+  it("dispatches web and worker entry points through lazy injected starters", async () => {
+    const startWebServer = vi.fn(async () => undefined);
+    const startWorker = vi.fn(async () => undefined);
+
+    await expect(dispatch({ command: "web" }, { startWebServer })).resolves.toBe(0);
+    await expect(dispatch({ command: "worker" }, { startWorker })).resolves.toBe(0);
+
+    expect(startWebServer).toHaveBeenCalledOnce();
+    expect(startWorker).toHaveBeenCalledOnce();
+  });
 });

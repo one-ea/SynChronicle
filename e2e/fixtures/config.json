@@ -8,6 +8,7 @@
     }
   },
   "roles": {
+    "coordinator": { "provider": "e2e", "model": "deterministic" },
     "architect": { "provider": "e2e", "model": "deterministic" },
     "writer": { "provider": "e2e", "model": "deterministic" },
     "editor": { "provider": "e2e", "model": "deterministic" }

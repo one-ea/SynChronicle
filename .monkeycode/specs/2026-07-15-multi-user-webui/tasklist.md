@@ -1031,7 +1031,7 @@ Run: `pnpm typecheck && pnpm test && pnpm build && pnpm playwright test && npm p
 
 Expected: all commands pass; existing CLI, TUI, Headless, 277 baseline tests, new Web tests, and E2E tests are green.
 
-- [x] **Step 7: Mark task list complete and commit**
+- [ ] **Step 7: Mark task list complete and commit**
 
 Update every completed checkbox only after its verification output succeeds.
 

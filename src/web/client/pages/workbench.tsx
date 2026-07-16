@@ -40,6 +40,20 @@ function commandStorageKey(projectId: string, runId: string) { return `synchroni
 function safeSessionGet(key: string) { try { return sessionStorage.getItem(key); } catch { return null; } }
 function safeSessionSet(key: string, value: string) { try { sessionStorage.setItem(key, value); } catch { /* Persistence is optional. */ } }
 function safeSessionRemove(key: string) { try { sessionStorage.removeItem(key); } catch { /* Persistence is optional. */ } }
+function liveQuestion(event: RunEventMessage | undefined): WorkbenchProject["pendingQuestion"] {
+  if (!event || event.type !== "tool" || !event.payload || typeof event.payload !== "object") return null;
+  const payload = event.payload as Record<string, unknown>;
+  const argumentsPayload = payload.payload && typeof payload.payload === "object" ? payload.payload as Record<string, unknown> : payload;
+  if (payload.tool !== "ask_user" || !Array.isArray(argumentsPayload.questions)) return null;
+  const questions = argumentsPayload.questions.flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object") return [];
+    const row = candidate as Record<string, unknown>;
+    const options = Array.isArray(row.options) ? row.options.flatMap((option) => typeof option === "string" ? [option] : option && typeof option === "object" && typeof (option as Record<string, unknown>).label === "string" ? [String((option as Record<string, unknown>).label)] : []) : [];
+    return typeof row.header === "string" && typeof row.question === "string" ? [{ header: row.header, question: row.question, options }] : [];
+  });
+  const id = typeof payload.id === "string" ? payload.id.replace(/^ask:/, "") : `event-${event.sequence}`;
+  return questions.length ? { id, questions } : null;
+}
 
 export function WorkbenchPage({ api, project, initialEvents, subscribe, connectionOverride }: WorkbenchPageProps) {
   const url = new URL(window.location.href);
@@ -65,6 +79,8 @@ export function WorkbenchPage({ api, project, initialEvents, subscribe, connecti
     const payload = latest?.payload && typeof latest.payload === "object" ? latest.payload as Record<string, unknown> : {};
     const message = typeof payload.message === "string" ? payload.message : latest?.message ?? "";
     if (/完成|cancel|abort|终止/i.test(message)) setAbortWaiting(false);
+    const question = liveQuestion(latest);
+    if (question) setPendingQuestion(question);
   }, [state.events]);
   useEffect(() => {
     if (!pendingCommandId) return;
