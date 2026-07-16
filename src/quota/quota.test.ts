@@ -63,6 +63,17 @@ describe("quota guarded platform model", () => {
     expect(provider).not.toHaveBeenCalled();
   });
 
+  it("releases a reservation when local provider preflight fails before provider_started", async () => {
+    const calls: string[] = [];
+    const ledger = { reserve: vi.fn(async () => { calls.push("reserve"); return { id: "reservation", balance: 9 }; }), markProviderStarted: vi.fn(async () => { calls.push("started"); }), settleDurably: vi.fn(), settleInterrupted: vi.fn(), releaseDurably: vi.fn(async () => { calls.push("release"); }), heartbeat: vi.fn() };
+    const model = quotaGuardedModel({ provider: "openai", modelName: "gpt", userId: randomUUID(), projectId: randomUUID(), runId: randomUUID(), taskId: randomUUID(), leaseVersion: 1, agent: "writer", inputPrice: 1, outputPrice: 1, ledger: ledger as never, model: { provider: "openai", modelId: "gpt", prepare: async () => { throw new Error("credential unavailable"); } } as never });
+
+    await expect((model as never as { doGenerate(input: unknown): Promise<unknown> }).doGenerate(callOptions("call", {}))).rejects.toThrow("credential unavailable");
+
+    expect(calls).toEqual(["reserve", "release"]);
+    expect(ledger.releaseDurably).toHaveBeenCalledWith(expect.objectContaining({ reason: "provider_preflight_failed", errorCategory: "local_preflight" }));
+  });
+
   it("uses durable invocation IDs across concurrent model wrappers", async () => {
     const reserved: string[] = [];
     const ledger = { allocateModelCall: vi.fn(), reserve: vi.fn(async ({ modelCallId }) => { reserved.push(modelCallId); return { id: `r-${modelCallId}`, balance: 9 }; }), markProviderStarted: vi.fn(), settleDurably: vi.fn(), settleInterrupted: vi.fn(), heartbeat: vi.fn() };
@@ -113,6 +124,16 @@ describe("quota guarded platform model", () => {
     expect(ledger.settleInterrupted).toHaveBeenCalledOnce();
   });
 
+  it("estimate-settles a finish chunk that omits usage", async () => {
+    const ledger = { reserve: vi.fn(async () => ({ id: "reservation", balance: 9 })), markProviderStarted: vi.fn(), settleDurably: vi.fn(), settleInterrupted: vi.fn(), heartbeat: vi.fn() };
+    const source = new ReadableStream({ start(controller) { controller.enqueue({ type: "finish", finishReason: "stop" }); controller.close(); } });
+    const model = quotaGuardedModel({ provider: "openai", modelName: "gpt", userId: randomUUID(), projectId: randomUUID(), runId: randomUUID(), taskId: randomUUID(), leaseVersion: 1, agent: "writer", inputPrice: 1, outputPrice: 1, ledger: ledger as never, model: { provider: "openai", modelId: "gpt", doStream: async () => ({ stream: source }) } as never });
+    const result = await (model as never as { doStream(input: unknown): Promise<{ stream: ReadableStream }> }).doStream(callOptions("call", {}));
+    await result.stream.getReader().read();
+    expect(ledger.settleDurably).not.toHaveBeenCalled();
+    expect(ledger.settleInterrupted).toHaveBeenCalledWith(expect.objectContaining({ errorCategory: "missing_usage" }));
+  });
+
   it("retries settlement intent persistence before returning generate completion", async () => {
     const calls: string[] = [];
     const ledger = { reserve: vi.fn(async () => ({ id: "reservation", balance: 9 })), markProviderStarted: vi.fn(), settleDurably: vi.fn(async () => { calls.push("intent"); if (calls.length < 3) throw new Error("transient"); }), settleInterrupted: vi.fn(), heartbeat: vi.fn() };
@@ -127,6 +148,34 @@ describe("quota guarded platform model", () => {
     const model = quotaGuardedModel({ provider: "openai", modelName: "gpt", userId: randomUUID(), projectId: randomUUID(), runId: randomUUID(), taskId: randomUUID(), leaseVersion: 1, agent: "writer", inputPrice: 1, outputPrice: 1, ledger: ledger as never, settlementRetry: { attempts: 2, baseDelayMs: 0 }, model: { provider: "openai", modelId: "gpt", doGenerate: async () => ({ usage: { inputTokens: 1 } }) } as never });
     await expect((model as never as { doGenerate(input: unknown): Promise<unknown> }).doGenerate(callOptions("call", {}))).resolves.toBeTruthy();
     expect(ledger.settleDurably).toHaveBeenCalledTimes(4);
+  });
+
+  it("stops settlement intent retry when the lease signal is cancelled", async () => {
+    const controller = new AbortController();
+    const reason = new Error("lease lost");
+    const ledger = { reserve: vi.fn(async () => ({ id: "reservation", balance: 9 })), markProviderStarted: vi.fn(), settleDurably: vi.fn(async () => { throw new Error("db down"); }), settleInterrupted: vi.fn(), heartbeat: vi.fn() };
+    const model = quotaGuardedModel({ provider: "openai", modelName: "gpt", userId: randomUUID(), projectId: randomUUID(), runId: randomUUID(), taskId: randomUUID(), leaseVersion: 1, agent: "writer", inputPrice: 1, outputPrice: 1, ledger: ledger as never, settlementRetry: { attempts: 2, baseDelayMs: 100 }, model: { provider: "openai", modelId: "gpt", doGenerate: async () => ({ usage: { inputTokens: 1 } }) } as never });
+    const pending = (model as never as { doGenerate(input: unknown): Promise<unknown> }).doGenerate(callOptions("call", { abortSignal: controller.signal }));
+    await vi.waitFor(() => expect(ledger.settleDurably).toHaveBeenCalled());
+    controller.abort(reason);
+    await expect(pending).rejects.toBe(reason);
+    expect(ledger.settleInterrupted).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [401, "release", "authentication"],
+    [403, "release", "authentication"],
+    [400, "release", "validation"],
+    [404, "release", "validation"],
+    [429, "release", "rate_limit"],
+    [500, "estimate", "provider_unknown"],
+  ] as const)("classifies Provider status %s as %s", async (statusCode, outcome, errorCategory) => {
+    const error = Object.assign(new Error(`provider ${statusCode}`), { statusCode });
+    const ledger = { reserve: vi.fn(async () => ({ id: "reservation", balance: 9 })), markProviderStarted: vi.fn(), settleDurably: vi.fn(), settleInterrupted: vi.fn(), releaseDurably: vi.fn(), heartbeat: vi.fn() };
+    const model = quotaGuardedModel({ provider: "openai", modelName: "gpt", userId: randomUUID(), projectId: randomUUID(), runId: randomUUID(), taskId: randomUUID(), leaseVersion: 1, agent: "writer", inputPrice: 1, outputPrice: 1, ledger: ledger as never, model: { provider: "openai", modelId: "gpt", doGenerate: async () => { throw error; } } as never });
+    await expect((model as never as { doGenerate(input: unknown): Promise<unknown> }).doGenerate(callOptions("call", {}))).rejects.toBe(error);
+    const target = outcome === "release" ? ledger.releaseDurably : ledger.settleInterrupted;
+    expect(target).toHaveBeenCalledWith(expect.objectContaining({ errorCategory, reason: "provider_rejected_or_failed" }));
   });
 });
 

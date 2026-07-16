@@ -121,3 +121,18 @@ Implemented platform model quotas, append-only accounting, administrator control
 - `pnpm test:browser`: 8 passed.
 - `pnpm typecheck`, `pnpm build`, `pnpm exec drizzle-kit check`, and `git diff --check`: exit 0.
 - PostgreSQL-conditional tests include started/unstarted reconciliation and estimate-budget accounting; this environment skipped them because `TEST_DATABASE_URL` is absent.
+
+## Provider Billing Outcomes
+
+- Platform credential resolution, active/known-price checks, Provider factory creation, and method validation now run in a reusable local `prepare` phase before `provider_started`. Preflight failure releases the reservation with audited reason/category metadata.
+- `provider_started` is persisted immediately before the prepared Provider dispatch. SDK-local validation inside the Provider operation remains subject to Provider error classification when no transport dispatch hook is available.
+- Settlement intent retry accepts the AI SDK abort/lease signal, exits immediately on cancellation, and caps exponential delay. Cancellation leaves `provider_started` for reconciliation and cannot block graceful Worker shutdown.
+- Generate or stream finish results without billable usage settle at the estimate and remain `needs_reconciliation`.
+- Explicit rejected-request outcomes release reservations: authentication 401/403, validation 400/404, and 429 without usage. Timeout, connection interruption, 5xx, usage-bearing errors, and ambiguous execution outcomes settle at estimate by default. The ambiguous policy can be configured to release.
+- Release and estimate-settlement ledger metadata records `reason`, `errorCategory`, and bounded error text.
+
+## Billing Outcome Verification
+
+- `pnpm test`: 567 passed, 59 skipped.
+- `pnpm test:browser`: 8 passed on the final full rerun.
+- The first browser run had one first-page readiness timeout; the isolated case and complete rerun passed.

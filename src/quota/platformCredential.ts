@@ -26,19 +26,16 @@ export async function resolvePlatformCredential(input: { reference: string; prov
 }
 
 export function platformCredentialModel(input: { provider: string; model: string; runId: string; base: Record<string, unknown>; load(): Promise<{ credentialReference: string; metadata: unknown } | undefined>; environment: Record<string, string | undefined>; credentials: Parameters<typeof resolvePlatformCredential>[0]["credentials"]; factory(provider: string, config: Record<string, unknown>, model: string): unknown }) {
-  const invoke = async (method: "doGenerate" | "doStream", options: unknown) => {
+  const prepare = async (method: "doGenerate" | "doStream", options: unknown) => {
     const configured = await input.load();
     if (!configured) throw new Error("platform model is unavailable");
     const metadata = configured.metadata && typeof configured.metadata === "object" ? configured.metadata as Record<string, unknown> : {};
     const lease = await resolvePlatformCredential({ reference: configured.credentialReference, provider: input.provider, environment: input.environment, credentialOwnerId: typeof metadata.credentialOwnerId === "string" ? metadata.credentialOwnerId : undefined, credentials: input.credentials, runId: input.runId });
-    try {
-      const instance = input.factory(input.provider, { ...input.base, api_key: lease.apiKey, ...(lease.baseUrl ? { base_url: lease.baseUrl } : {}) }, input.model) as Record<string, (value: unknown) => Promise<unknown>>;
-      const operation = instance[method];
-      if (!operation) throw new Error(`provider model does not implement ${method}`);
-      return await operation.call(instance, options);
-    } finally {
-      lease.release();
-    }
+    const instance = input.factory(input.provider, { ...input.base, api_key: lease.apiKey, ...(lease.baseUrl ? { base_url: lease.baseUrl } : {}) }, input.model) as Record<string, (value: unknown) => Promise<unknown>>;
+    const operation = instance[method];
+    if (!operation) { lease.release(); throw new Error(`provider model does not implement ${method}`); }
+    return async () => { try { return await operation.call(instance, options); } finally { lease.release(); } };
   };
-  return { specificationVersion: "v2", provider: input.provider, modelId: input.model, supportedUrls: {}, doGenerate: (options: unknown) => invoke("doGenerate", options), doStream: (options: unknown) => invoke("doStream", options) };
+  const invoke = async (method: "doGenerate" | "doStream", options: unknown) => (await prepare(method, options))();
+  return { specificationVersion: "v2", provider: input.provider, modelId: input.model, supportedUrls: {}, prepare, doGenerate: (options: unknown) => invoke("doGenerate", options), doStream: (options: unknown) => invoke("doStream", options) };
 }

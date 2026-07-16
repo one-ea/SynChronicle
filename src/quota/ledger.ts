@@ -25,6 +25,7 @@ export interface SettleQuotaInput extends Omit<ReserveQuotaInput, "estimatedCost
   priceSource?: string;
   latencyMs?: number;
 }
+export type ReleaseQuotaInput = Omit<SettleQuotaInput, "actualCostUsd" | "usageId" | "usage"> & { reason?: string; errorCategory?: string; error?: string };
 
 const key = (runId: string, modelCallId: string, operation: string) => `${runId}:${modelCallId}:${operation}`;
 const money = (value: string | number | null | undefined) => Number(value ?? 0);
@@ -105,7 +106,7 @@ export class DatabaseQuotaLedger {
     });
   }
 
-  async release(input: Omit<SettleQuotaInput, "actualCostUsd" | "usageId" | "usage">): Promise<{ id: string; balance: number }> {
+  async release(input: ReleaseQuotaInput): Promise<{ id: string; balance: number }> {
     return this.db.transaction(async (tx) => {
       await this.lock(tx, input.userId);
       const idempotencyKey = key(input.runId, input.modelCallId, "release");
@@ -115,7 +116,7 @@ export class DatabaseQuotaLedger {
       if (!reservation) throw new Error("reservation not found");
       const terminal = await tx.select().from(quotaLedger).where(and(eq(quotaLedger.reservationId, reservation.id), inArray(quotaLedger.operation, ["settle", "release"]))).limit(1);
       if (terminal[0]) return { id: terminal[0].id, balance: money(terminal[0].balance) };
-      const result = await this.append(input.userId, -money(reservation.amount), { ...input, operation: "release", idempotencyKey, source: "reconcile" }, tx);
+      const result = await this.append(input.userId, -money(reservation.amount), { ...input, operation: "release", idempotencyKey, source: "reconcile", metadata: { reason: input.reason, errorCategory: input.errorCategory, error: input.error?.slice(0, 500) } }, tx);
       await tx.update(quotaReservations).set({ status: "released", updatedAt: new Date() }).where(eq(quotaReservations.id, reservation.id));
       return result;
     });
@@ -134,12 +135,12 @@ export class DatabaseQuotaLedger {
   async settleDurably(input: SettleQuotaInput & { credentialSource?: string; priceSource?: string; latencyMs?: number }): Promise<void> { await this.enqueueSettlementIntent(input); await this.processPendingOutbox(); }
   async releaseDurably(input: Parameters<DatabaseQuotaLedger["release"]>[0]): Promise<void> { await this.enqueueOutbox(input.reservationId, "release", input); await this.processPendingOutbox(); }
 
-  async settleInterrupted(input: Parameters<DatabaseQuotaLedger["release"]>[0] & { error: string }): Promise<void> {
+  async settleInterrupted(input: ReleaseQuotaInput & { error: string }): Promise<void> {
     await this.db.transaction(async (tx) => {
       const [reservation] = await tx.select({ row: quotaReservations, ledger: quotaLedger }).from(quotaReservations).innerJoin(quotaLedger, eq(quotaLedger.id, quotaReservations.id)).where(eq(quotaReservations.id, input.reservationId)).limit(1).for("update");
       if (!reservation || reservation.row.status === "settled" || reservation.row.status === "released" || reservation.row.status === "needs_reconciliation") return;
       const estimatedCostUsd = -money(reservation.ledger.amount);
-      await this.append(reservation.row.userId, 0, { ...input, operation: "estimate_settle", idempotencyKey: key(reservation.row.runId, reservation.row.modelCallId, "estimate_settle"), source: "platform_model_interrupted", metadata: { estimatedCostUsd, actualCostUsd: estimatedCostUsd, priceSource: "estimate", needsReconciliation: true, error: input.error.slice(0, 500) } }, tx);
+      await this.append(reservation.row.userId, 0, { ...input, operation: "estimate_settle", idempotencyKey: key(reservation.row.runId, reservation.row.modelCallId, "estimate_settle"), source: "platform_model_interrupted", metadata: { estimatedCostUsd, actualCostUsd: estimatedCostUsd, priceSource: "estimate", needsReconciliation: true, reason: input.reason, errorCategory: input.errorCategory, error: input.error.slice(0, 500) } }, tx);
       await tx.update(quotaReservations).set({ status: "needs_reconciliation", updatedAt: new Date() }).where(eq(quotaReservations.id, input.reservationId));
     });
   }
