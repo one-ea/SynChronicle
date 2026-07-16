@@ -15,10 +15,10 @@ The health and deployment tests first failed because `/api/health/live`, `/api/h
 
 ## Verification
 
-- Focused lifecycle and deployment tests: 17 passed.
+- Latest restore endpoint deployment tests: 10 passed.
 - `pnpm typecheck`: passed.
 - `pnpm build`: passed; generated CLI, Web, Worker, maintenance, and Vite client artifacts.
-- `pnpm test`: 628 passed and 62 PostgreSQL-conditional tests skipped because `TEST_DATABASE_URL` was unavailable.
+- `pnpm test`: 631 passed and 62 PostgreSQL-conditional tests skipped because `TEST_DATABASE_URL` was unavailable.
 - `git diff --check`: passed.
 - Secret-pattern scan found only intentional fake-token fixtures in pre-existing migration tests.
 
@@ -40,4 +40,11 @@ The implementation environment has no Docker CLI. `docker compose config`, image
 - Worker startup removes stale readiness before database initialization. The ready record contains the actual Node PID, a startup nonce, and timestamp; the container healthcheck validates the recorded PID, nonce/timestamp shape, process existence, and `/proc/<pid>/cmdline`. Matching readiness is removed during normal, signalled, and runner-error shutdown paths.
 - Restore requires `--confirm-restore`, an exact `DEPLOYMENT_ENV` match, and a non-empty PostgreSQL custom-format dump. It stops Web and Worker, restores into a new timestamped candidate database, runs migration and readiness there, renames the previous database to a timestamped backup, switches the candidate, and restarts only after validation. Failures keep services stopped and print retained database recovery guidance.
 - `SHUTDOWN_DRAIN_MS` now accepts only finite non-negative integer milliseconds from 0 through 30000, preserving at least 15 seconds inside the 45-second Compose stop grace period.
-- Local evidence for this follow-up: 17 focused tests, restore mock execution, shell syntax/help checks, 628 full-suite tests, typecheck, production build, and `git diff --check`. Docker CI evidence remains pending workflow execution.
+- Local evidence for this follow-up includes restore mock execution, shell syntax/help checks, typecheck, production build, and `git diff --check`. Current aggregate test counts are maintained in Verification. Docker CI evidence remains pending workflow execution.
+
+## Restore Endpoint Detection Follow-up
+
+- Restore readiness no longer reads host `PUBLIC_URL`, `WEB_PORT`, or an exported env-file variable. It queries `docker compose --env-file ... port web 3000`, validates the mapped port, and probes the corresponding loopback endpoint.
+- IPv4 mappings use `127.0.0.1`; bracketed IPv6 mappings use `[::1]`. When Compose reports no host mapping, readiness runs `curl` inside the Web container.
+- Mock tests cover a custom host port, bracketed IPv6 output, and the no-mapping container fallback. Docker runtime execution remains pending the configured CI workflow.
+- Local evidence: 10 focused restore deployment tests, 631 full-suite tests, typecheck, production build, shell syntax, and `git diff --check` passed. Runtime image curl installation and live Compose port output remain pending CI execution.

@@ -82,8 +82,42 @@ docker compose --env-file "$ENV_FILE" exec -T postgres sh -c 'psql --username="$
 docker compose --env-file "$ENV_FILE" exec -T postgres sh -c 'psql --username="$POSTGRES_USER" --dbname=postgres -c "ALTER DATABASE \"$1\" RENAME TO \"$2\";"' sh "$target_database" "$original_database"
 
 docker compose --env-file "$ENV_FILE" up -d web worker
+port_output="$(docker compose --env-file "$ENV_FILE" port web 3000 2>/dev/null || true)"
+readiness_url=""
+ipv6_port=""
+while IFS= read -r mapping; do
+  mapping="$(printf '%s' "$mapping" | tr -d '\r')"
+  case "$mapping" in
+    \[*\]:*)
+      candidate_port="${mapping##*:}"
+      case "$candidate_port" in ""|*[!0-9]*) continue ;; esac
+      if [ "$candidate_port" -lt 1 ] || [ "$candidate_port" -gt 65535 ]; then continue; fi
+      ipv6_port="$candidate_port"
+      ;;
+    *:*)
+      candidate_port="${mapping##*:}"
+      case "$candidate_port" in ""|*[!0-9]*) continue ;; esac
+      if [ "$candidate_port" -lt 1 ] || [ "$candidate_port" -gt 65535 ]; then continue; fi
+      readiness_url="http://127.0.0.1:${candidate_port}/api/health/ready"
+      break
+      ;;
+  esac
+done <<EOF
+$port_output
+EOF
+if [ -z "$readiness_url" ] && [ -n "$ipv6_port" ]; then
+  readiness_url="http://[::1]:${ipv6_port}/api/health/ready"
+fi
+
+check_restored_readiness() {
+  if [ -n "$readiness_url" ]; then
+    curl --fail --silent "$readiness_url" >/dev/null
+  else
+    docker compose --env-file "$ENV_FILE" exec -T web curl --fail --silent http://127.0.0.1:3000/api/health/ready >/dev/null
+  fi
+}
 attempts=0
-until curl --fail --silent "${PUBLIC_URL:-http://127.0.0.1:${WEB_PORT:-3000}}/api/health/ready" >/dev/null; do
+until check_restored_readiness; do
   attempts=$((attempts + 1))
   if [ "$attempts" -ge 30 ]; then
     echo "restored service readiness timed out" >&2

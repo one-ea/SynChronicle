@@ -31,7 +31,7 @@ Restore requires an explicit environment match and confirmation. The script stop
 ENV_FILE=.env.web scripts/restore-postgres.sh --confirm-restore --environment production synchronicle-backup.dump
 ```
 
-The dump must be a non-empty PostgreSQL custom-format archive. `--environment` must exactly match `DEPLOYMENT_ENV` inside the PostgreSQL container. Any failure leaves Web and Worker stopped and prints the retained database names plus rollback guidance. The script never drops the previous database.
+The dump must be a non-empty PostgreSQL custom-format archive. `--environment` must exactly match `DEPLOYMENT_ENV` inside the PostgreSQL container. After restart, readiness uses the actual host mapping reported by `docker compose port web 3000`, normalizing IPv4 to `127.0.0.1` and IPv6 to `[::1]`. Deployments without a host mapping are checked from inside the Web container. Any failure leaves Web and Worker stopped and prints the retained database names plus rollback guidance. The script never drops the previous database.
 
 ## Key rotation
 

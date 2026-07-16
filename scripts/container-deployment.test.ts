@@ -135,6 +135,43 @@ describe("container deployment contract", () => {
     expect(commands).toContain("DATABASE_NAME_OVERRIDE=");
     expect(commands).toContain("RENAME TO");
     expect(commands).toContain("up -d web worker");
+    expect(commands).toContain("port web 3000");
+    expect(commands).toContain("exec -T web curl");
     expect(commands).not.toContain("dropdb");
+  });
+
+  it.each([
+    ["0.0.0.0:49152", "http://127.0.0.1:49152/api/health/ready"],
+    ["[::]:49153", "http://[::1]:49153/api/health/ready"],
+  ])("detects the restored web endpoint from Compose mapping %s", async (mapping, expectedUrl) => {
+    const directory = await mkdtemp(join(tmpdir(), "synchronicle-restore-port-"));
+    const dump = join(directory, "backup.dump");
+    const docker = join(directory, "docker");
+    const curl = join(directory, "curl");
+    const curlLog = join(directory, "curl.log");
+    await writeFile(dump, "PGDMPfixture");
+    await writeFile(docker, `#!/bin/sh\ncase "$*" in\n  *DEPLOYMENT_ENV*) printf production ;;\n  *POSTGRES_DB*) printf synchronicle ;;\n  *"port web 3000"*) printf '%s\\n' "$MOCK_PORT_OUTPUT" ;;\nesac\n`);
+    await writeFile(curl, "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$MOCK_CURL_LOG\"\nexit 0\n");
+    await chmod(docker, 0o755);
+    await chmod(curl, 0o755);
+
+    const result = spawnSync("sh", ["scripts/restore-postgres.sh", "--confirm-restore", "--environment", "production", dump], {
+      cwd: new URL("..", import.meta.url),
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, ENV_FILE: ".env.web.example", WEB_PORT: "39999", MOCK_PORT_OUTPUT: mapping, MOCK_CURL_LOG: curlLog },
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(await readFile(curlLog, "utf8")).toContain(expectedUrl);
+  });
+
+  it("falls back to an in-container health request when Web has no host mapping", async () => {
+    const restore = await load("scripts/restore-postgres.sh");
+    const dockerfile = await load("Dockerfile");
+    expect(restore).toContain("port web 3000");
+    expect(restore).toContain("exec -T web curl");
+    expect(restore).not.toContain("PUBLIC_URL");
+    expect(restore).not.toContain("WEB_PORT");
+    expect(dockerfile).toMatch(/FROM node:24-bookworm-slim AS runtime[\s\S]*apt-get install[^\n]*curl/);
   });
 });
