@@ -49,6 +49,18 @@ export class ProjectArchiveExportError extends Error {
   constructor(message: string, readonly statusCode: 404 | 409 | 413 | 422, readonly code: string) { super(message); }
 }
 
+export async function validateDatabaseProjectExport(db: Database, userId: string, projectId: string, expectedVersion: number): Promise<"ok" | "missing" | "conflict"> {
+  return db.transaction(async (tx) => {
+    const [project] = await tx.select({ version: projects.version }).from(projects).where(and(eq(projects.userId, userId), eq(projects.id, projectId))).limit(1);
+    if (!project) return "missing";
+    if (project.version !== expectedVersion) return "conflict";
+    const [run] = await tx.select({ id: runs.id, latestCheckpointId: runs.latestCheckpointId, completedAt: runs.completedAt }).from(runs).where(and(eq(runs.userId, userId), eq(runs.projectId, projectId), eq(runs.status, "completed"))).orderBy(desc(runs.completedAt), desc(runs.updatedAt)).limit(1);
+    if (!run?.completedAt || !run.latestCheckpointId) return "conflict";
+    const [checkpoint] = await tx.select({ projectVersion: checkpoints.projectVersion }).from(checkpoints).where(and(eq(checkpoints.userId, userId), eq(checkpoints.projectId, projectId), eq(checkpoints.runId, run.id), eq(checkpoints.id, run.latestCheckpointId))).limit(1);
+    return checkpoint?.projectVersion === expectedVersion ? "ok" : "conflict";
+  }, { isolationLevel: "repeatable read", accessMode: "read only" });
+}
+
 export function exportDatabaseProject(db: Database, userId: string, projectId: string, expectedVersion: number, requestId: string = randomUUID(), limits: { maxBytes?: number; maxEntryBytes?: number; pageSize?: number } = {}): AsyncIterable<Uint8Array> {
   const channel = new BackpressureChannel();
   const produce = async () => db.transaction(async (tx) => {
@@ -88,7 +100,7 @@ export function exportDatabaseProject(db: Database, userId: string, projectId: s
     }
     for await (const chunk of streamProjectArchive(manifest, sources(), { maxBytes: limits.maxBytes ?? 100 * 1024 * 1024, maxEntryBytes: limits.maxEntryBytes ?? 10 * 1024 * 1024, compression: "stored", dataDescriptor: true })) await channel.push(chunk);
   }, { isolationLevel: "repeatable read" });
-  void produce().then(() => channel.close()).catch(async (error) => { try { await db.insert(auditEvents).values({ userId, action: "project.export", targetType: "project", targetId: projectId, result: error instanceof ProjectArchiveExportError && error.statusCode === 404 ? "not_found" : error instanceof ProjectArchiveExportError && error.statusCode === 409 ? "conflict" : "error", requestId: `${requestId}:failure`, metadata: { code: error instanceof ProjectArchiveExportError ? error.code : "export_failed" } }); } catch {} channel.fail(error); });
+  void produce().then(() => channel.close()).catch(async (error) => { try { await db.insert(auditEvents).values({ userId, action: "project.export", targetType: "project", targetId: projectId, result: error instanceof ProjectArchiveExportError && error.statusCode === 404 ? "not_found" : error instanceof ProjectArchiveExportError && error.statusCode === 409 ? "conflict" : "error", requestId, metadata: { code: error instanceof ProjectArchiveExportError ? error.code : "export_failed" } }); } catch {} channel.fail(error); });
   return channel;
 }
 

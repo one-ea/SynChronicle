@@ -72,16 +72,16 @@ export function createApiClient(options: ApiClientOptions = {}) {
   }
 
   async function exportProject(projectId: string, expectedVersion: number): Promise<void> {
-    const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/export?version=${expectedVersion}`, { credentials: "same-origin", headers: { "x-request-id": createRequestId() } });
+    const metadataPath = `/api/projects/${encodeURIComponent(projectId)}/export-metadata?version=${expectedVersion}`;
+    const response = await fetch(metadataPath, { credentials: "same-origin", headers: { "accept": "application/json", "x-request-id": createRequestId() } });
     if (!response.ok) {
       const kind: ApiErrorKind = response.status === 401 ? "unauthorized" : response.status === 403 ? "forbidden" : response.status === 409 ? "conflict" : "request";
       throw new ApiError(kind, `请求失败 (${response.status})`, response.status, response.headers.get("x-request-id"));
     }
-    const blob = await response.blob();
-    const disposition = response.headers.get("content-disposition") ?? "";
-    const filename = disposition.match(/filename="([a-zA-Z0-9._-]+)"/)?.[1] ?? `project-${projectId}.sync.zip`;
-    const url = URL.createObjectURL(blob), anchor = document.createElement("a");
-    anchor.href = url; anchor.download = filename; anchor.click(); URL.revokeObjectURL(url);
+    const metadata = await response.json() as { downloadUrl?: unknown };
+    if (typeof metadata.downloadUrl !== "string" || !metadata.downloadUrl.startsWith("/api/projects/") || !metadata.downloadUrl.includes("/export?version=")) throw new ApiError("request", "Invalid download metadata", 502, response.headers.get("x-request-id"));
+    const anchor = document.createElement("a");
+    anchor.href = metadata.downloadUrl; anchor.download = ""; anchor.rel = "noopener"; anchor.click();
   }
 
   return { request, importProject, exportProject };

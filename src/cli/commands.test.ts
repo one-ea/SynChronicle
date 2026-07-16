@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { evalCommand } from "./eval.js";
 import { updateCommand } from "./update.js";
 import { formatVersion } from "./version.js";
-import { loadPrompt } from "./dispatch.js";
+import { dispatch, loadPrompt } from "./dispatch.js";
 
 describe("CLI commands", () => {
   it("formats package version metadata", () => {
@@ -32,5 +32,11 @@ describe("CLI commands", () => {
     const read = vi.fn().mockResolvedValue("  prompt from file\n");
     await expect(loadPrompt("", "prompt.txt", read)).resolves.toBe("prompt from file");
     expect(read).toHaveBeenCalledWith("prompt.txt");
+  });
+
+  it("dispatches migration through an injected owner that closes its resources", async () => {
+    const migrate = vi.fn(async () => undefined);
+    await expect(dispatch({ command: "migrate-project", databaseUrl: "postgres://db", username: "alice", projectDir: "/book" }, { migrateFileProject: migrate })).resolves.toBe(0);
+    expect(migrate).toHaveBeenCalledWith({ command: "migrate-project", databaseUrl: "postgres://db", username: "alice", projectDir: "/book" });
   });
 });

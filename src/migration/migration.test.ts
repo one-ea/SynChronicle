@@ -64,7 +64,7 @@ describe("project migration archive", () => {
     await expect(parseProjectArchive(archive)).resolves.toMatchObject({ manifest: { version: 1 } });
     const central = archive.indexOf(Buffer.from("PK\x01\x02", "binary"));
     archive.writeUInt32LE(99, central + 24);
-    await expect(parseProjectArchive(archive)).rejects.toThrow(/central|size/i);
+    await expect(parseProjectArchive(archive)).rejects.toThrow(/central|size|limit/i);
   });
 
   it("rejects encrypted, symlink, ZIP64, duplicate normalized paths, excessive entries and compression bombs", async () => {
@@ -95,6 +95,35 @@ describe("project migration archive", () => {
     await expect(parseProjectArchive(duplicate)).rejects.toThrow(/duplicate normalized/i);
   });
 
+  it("bounds declared and actual total uncompressed bytes before inflate allocation", async () => {
+    const body = Buffer.alloc(100_000, 65);
+    const largeManifest = manifest({ chapters: [{ ...manifest().chapters[0]!, checksum: createHash("sha256").update(body).digest("hex") }] });
+    const archive = createProjectArchive(largeManifest, new Map([["chapters/1.md", body]]), { compression: "deflate" });
+    const deflateOffsets = allOffsets(archive, "chapters/1.md"), localName = deflateOffsets.at(-2)!, centralName = deflateOffsets.at(-1)!;
+    archive.writeUInt32LE(100, localName - 30 + 22);
+    archive.writeUInt32LE(100, centralName - 46 + 24);
+    await expect(parseProjectArchive(archive, { maxEntryBytes: 1_000, maxTotalUncompressedBytes: 2_000, maxCompressionRatio: 1_000 })).rejects.toMatchObject({ statusCode: 422 });
+
+    const first = Buffer.alloc(600, 65), second = Buffer.alloc(600, 66);
+    const twoEntryManifest = manifest({
+      chapters: [{ ...manifest().chapters[0]!, path: "files/one.txt", checksum: createHash("sha256").update(first).digest("hex") }],
+      artifacts: [{ type: "notes", status: "committed", version: 1, encoding: "text", path: "files/two.txt", checksum: createHash("sha256").update(second).digest("hex") }],
+    });
+    const twoEntries = createProjectArchive(twoEntryManifest, new Map([["files/one.txt", first], ["files/two.txt", second]]), { compression: "deflate" });
+    await expect(parseProjectArchive(twoEntries, { maxTotalUncompressedBytes: 1_000 })).rejects.toMatchObject({ statusCode: 413 });
+
+    const stored = createProjectArchive(largeManifest, new Map([["chapters/1.md", body]]));
+    const storedOffsets = allOffsets(stored, "chapters/1.md"), storedLocal = storedOffsets.at(-2)!, storedCentral = storedOffsets.at(-1)!;
+    stored.writeUInt32LE(100, storedLocal - 30 + 22);
+    stored.writeUInt32LE(100, storedCentral - 46 + 24);
+    await expect(parseProjectArchive(stored, { maxEntryBytes: 1_000, maxTotalUncompressedBytes: 2_000 })).rejects.toMatchObject({ statusCode: 422 });
+  });
+
+  it("defaults to at most 1000 archive entries", async () => {
+    const archive = createProjectArchive(manifest(), new Map([["chapters/1.md", Buffer.from("Chapter one")]]));
+    await expect(parseProjectArchive(archive, { maxEntries: 1 })).rejects.toThrow(/entry count/i);
+  });
+
   it("requires unique chapter, artifact, planning, review and normalized paths", () => {
     const chapter = manifest().chapters[0]!;
     const duplicate = manifest({ chapters: [chapter, { ...chapter, path: "chapters/./1.md" }] });
@@ -107,6 +136,15 @@ describe("project migration archive", () => {
     expect(() => assertArtifactSafe("json", JSON.stringify({ nested: { apiKey: "value" } }))).toThrow(/sensitive/i);
     expect(() => assertArtifactSafe("text", "Authorization: Bearer abcdefghijklmnopqrstuvwxyz")).toThrow(/sensitive/i);
     expect(() => assertArtifactSafe("text", "The detective searched for the stolen password in chapter twelve.")).not.toThrow();
+    for (const assignment of [
+      "OPENAI_API_KEY=abcdefghijklmnopqrstuvwxyz",
+      "client_secret: abcdefghijklmnopqrstuvwxyz",
+      "refresh_token = abcdefghijklmnopqrstuvwxyz",
+      "private_key=-----BEGIN_PRIVATE_KEY-----",
+      "DATABASE_URL=postgres://user:password@example/db",
+      "authorization: Basic abcdefghijklmnopqrstuvwxyz",
+    ]) expect(() => assertArtifactSafe("text", assignment)).toThrow(/sensitive/i);
+    expect(() => assertArtifactSafe("text", "The DATABASE_URL clue appeared in dialogue without an assigned value.")).not.toThrow();
   });
 
   it("streams ZIP output without constructing one complete archive and enforces output limits", async () => {
@@ -122,6 +160,7 @@ describe("project migration archive", () => {
   it("preflights exact stored ZIP size before the first response chunk", () => {
     expect(() => assertProjectArchiveSize(manifest(), [{ path: "chapters/1.md", size: 11 }], { maxBytes: 20, maxEntryBytes: 100_000 })).toThrow(expect.objectContaining({ statusCode: 413 }));
     expect(() => assertProjectArchiveSize(manifest(), [{ path: "chapters/1.md", size: 11 }], { maxBytes: 100_000, maxEntryBytes: 10 })).toThrow(expect.objectContaining({ statusCode: 422 }));
+    expect(() => assertProjectArchiveSize(manifest(), Array.from({ length: 1_000 }, (_, index) => ({ path: `files/${index}`, size: 0 })), { maxBytes: 1_000_000, maxEntryBytes: 10_000, maxEntries: 1_000 })).toThrow(/entry count/i);
   });
 });
 
@@ -166,3 +205,5 @@ describe("file project migration", () => {
     expect(JSON.stringify(parsed.manifest)).not.toMatch(/credential|must-not-export/);
   });
 });
+
+function allOffsets(buffer: Buffer, text: string): number[] { const positions: number[] = []; for (let offset = 0; offset < buffer.length;) { const found = buffer.indexOf(text, offset); if (found < 0) break; positions.push(found); offset = found + text.length; } return positions; }

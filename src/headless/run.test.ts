@@ -90,6 +90,13 @@ describe("file project CLI migration", () => {
     await expect(migrateFileProject({ databaseUrl: "postgres://db", username: "alice", projectDir: "/book" }, { createDatabase: () => database as never, importFileProject: vi.fn(async () => { throw new Error("import failed"); }) as never, write: vi.fn() })).rejects.toThrow("import failed");
     expect(end).toHaveBeenCalledOnce();
   });
+
+  it("closes the database when the target user does not exist", async () => {
+    const end = vi.fn(async () => undefined);
+    const database = { $client: { end }, select: () => ({ from: () => ({ where: () => ({ limit: async () => [] }) }) }) };
+    await expect(migrateFileProject({ databaseUrl: "postgres://db", username: "missing", projectDir: "/book" }, { createDatabase: () => database as never, importFileProject: vi.fn() as never, write: vi.fn() })).rejects.toThrow(/目标用户不存在/);
+    expect(end).toHaveBeenCalledOnce();
+  });
 });
 
 async function* iterable<T>(items: T[]): AsyncIterable<T> { for (const item of items) yield item; }

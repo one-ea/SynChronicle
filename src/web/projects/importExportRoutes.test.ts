@@ -9,10 +9,11 @@ async function appFor(userId = "alice") {
   app.decorate("authenticateRequest", async (request) => { request.auth = { userId, role: "user", sessionId: "session" }; });
   const importer = vi.fn(async () => ({ project: { id: "new", title: "Imported" } }));
   const exporter = vi.fn((_userId: string, projectId: string) => projectId === "foreign" ? null : (async function* () { yield Buffer.from("PK "); yield Buffer.from("archive"); })());
+  const preflight = vi.fn(async (_userId: string, projectId: string, version: number) => projectId === "foreign" ? "missing" as const : version === 3 ? "ok" as const : "conflict" as const);
   const auditFailure = vi.fn(async () => undefined);
-  await app.register(importExportRoutes, { prefix: "/api/projects", importer, exporter, auditFailure, maxArchiveBytes: 32 });
+  await app.register(importExportRoutes, { prefix: "/api/projects", importer, exporter, preflight, auditFailure, maxArchiveBytes: 32 });
   await app.after();
-  return { app, importer, exporter };
+  return { app, importer, exporter, preflight, auditFailure };
 }
 
 describe("project import and export routes", () => {
@@ -23,6 +24,21 @@ describe("project import and export routes", () => {
     expect(invalid.statusCode).toBe(415);
     expect(oversized.statusCode).toBe(413);
     expect(importer).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("returns a same-origin native download URL only after tenant and version preflight", async () => {
+    const { app, preflight, auditFailure } = await appFor();
+    const response = await app.inject({ method: "GET", url: "/api/projects/project/export-metadata?version=3" });
+    const conflict = await app.inject({ method: "GET", url: "/api/projects/project/export-metadata?version=2" });
+    const foreign = await app.inject({ method: "GET", url: "/api/projects/foreign/export-metadata?version=3" });
+    expect(response.json()).toEqual({ downloadUrl: "/api/projects/project/export?version=3" });
+    expect(conflict.statusCode).toBe(409);
+    expect(foreign.statusCode).toBe(404);
+    expect(preflight).toHaveBeenCalledWith("alice", "project", 3);
+    expect(auditFailure).toHaveBeenCalledTimes(2);
+    expect(auditFailure).toHaveBeenCalledWith(expect.objectContaining({ action: "project.export", result: "conflict", targetId: "project" }));
+    expect(auditFailure).toHaveBeenCalledWith(expect.objectContaining({ action: "project.export", result: "not_found", targetId: "foreign" }));
     await app.close();
   });
 
@@ -48,18 +64,18 @@ describe("project import and export routes", () => {
     await app.close();
   });
 
-  it("returns version conflicts before streaming and preserves the original error when failure audit fails", async () => {
+  it("leaves valid export failure auditing to the exporter and preserves the original error", async () => {
     const app = Fastify({ genReqId: () => randomUUID() });
     app.decorateRequest("auth");
     app.decorate("authenticateRequest", async (request) => { request.auth = { userId: "alice", role: "user", sessionId: "session" }; });
     const original = Object.assign(new Error("stable snapshot unavailable"), { statusCode: 409, code: "unstable" });
     const auditFailure = vi.fn(async () => { throw new Error("audit unavailable"); });
-    await app.register(importExportRoutes, { prefix: "/api/projects", importer: vi.fn(), exporter: () => (async function* () { throw original; })(), auditFailure });
+    await app.register(importExportRoutes, { prefix: "/api/projects", importer: vi.fn(), exporter: () => (async function* () { throw original; })(), preflight: vi.fn(), auditFailure });
     await app.after();
     const response = await app.inject({ method: "GET", url: "/api/projects/p1/export?version=2" });
     expect(response.statusCode).toBe(409);
     expect(response.json()).toEqual({ error: "Stable project version unavailable" });
-    expect(auditFailure).toHaveBeenCalledWith(expect.objectContaining({ action: "project.export", result: "conflict" }));
+    expect(auditFailure).not.toHaveBeenCalled();
     await app.close();
   });
 });

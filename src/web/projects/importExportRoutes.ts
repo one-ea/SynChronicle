@@ -7,6 +7,7 @@ interface ImportResult { project: unknown }
 interface ImportExportRoutesOptions {
   importer(userId: string, source: ArchiveSource, requestId: string): Promise<ImportResult>;
   exporter(userId: string, projectId: string, expectedVersion: number, requestId: string): AsyncIterable<Uint8Array> | null;
+  preflight(userId: string, projectId: string, expectedVersion: number): Promise<"ok" | "missing" | "conflict">;
   auditFailure?(event: { actorId: string; action: "project.import" | "project.export"; targetId: string | null; result: "invalid" | "conflict" | "not_found" | "error"; requestId: string; metadata?: Record<string, unknown> }): Promise<void>;
   maxArchiveBytes?: number;
 }
@@ -38,6 +39,15 @@ export const importExportRoutes: FastifyPluginAsync<ImportExportRoutesOptions> =
     }
   });
 
+  app.get("/:projectId/export-metadata", async (request, reply) => {
+    const params = ParamsSchema.safeParse(request.params), query = ExportQuerySchema.safeParse(request.query);
+    if (!params.success || !query.success) { await auditRejected(options, request, "project.export", params.success ? params.data.projectId : null, "invalid", { phase: "metadata" }); return reply.code(400).send({ error: "Invalid export request" }); }
+    const result = await options.preflight(request.auth.userId, params.data.projectId, query.data.version);
+    if (result === "missing") { await auditRejected(options, request, "project.export", params.data.projectId, "not_found", { phase: "metadata" }); return reply.code(404).send({ error: "Project not found" }); }
+    if (result === "conflict") { await auditRejected(options, request, "project.export", params.data.projectId, "conflict", { phase: "metadata" }); return reply.code(409).send({ error: "Stable project version unavailable" }); }
+    return { downloadUrl: `/api/projects/${encodeURIComponent(params.data.projectId)}/export?version=${query.data.version}` };
+  });
+
   app.get("/:projectId/export", async (request, reply) => {
     const params = ParamsSchema.safeParse(request.params);
     const query = ExportQuerySchema.safeParse(request.query);
@@ -49,8 +59,6 @@ export const importExportRoutes: FastifyPluginAsync<ImportExportRoutesOptions> =
     try { first = await iterator.next(); }
     catch (error) {
       const status = error && typeof error === "object" && "statusCode" in error && typeof error.statusCode === "number" ? error.statusCode : 500;
-      const result = status === 404 ? "not_found" : status === 409 ? "conflict" : status < 500 ? "invalid" : "error";
-      await auditRejected(options, request, "project.export", params.data.projectId, result);
       if (status === 409) return reply.code(409).send({ error: "Stable project version unavailable" });
       if (status === 413) return reply.code(413).send({ error: "Project archive is too large" });
       if (status === 422) return reply.code(422).send({ error: "Project entry is too large" });

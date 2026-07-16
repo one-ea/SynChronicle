@@ -5,6 +5,8 @@ import { z } from "zod";
 
 export const DEFAULT_MAX_ARCHIVE_BYTES = 50 * 1024 * 1024;
 export const DEFAULT_MAX_ENTRY_BYTES = 10 * 1024 * 1024;
+export const DEFAULT_MAX_TOTAL_UNCOMPRESSED_BYTES = 100 * 1024 * 1024;
+export const DEFAULT_MAX_ENTRIES = 1_000;
 
 const IndexedFileSchema = z.object({
   path: z.string().min(1),
@@ -54,7 +56,7 @@ export function safeArchivePath(path: string): string {
   return normalized;
 }
 
-interface ArchiveLimits { maxBytes?: number; maxEntryBytes?: number; maxEntries?: number; maxCompressionRatio?: number }
+interface ArchiveLimits { maxBytes?: number; maxEntryBytes?: number; maxEntries?: number; maxCompressionRatio?: number; maxTotalUncompressedBytes?: number }
 interface ArchiveWriteOptions extends ArchiveLimits { compression?: "stored" | "deflate"; dataDescriptor?: boolean }
 export interface ArchiveEntrySource { path: string; content: Uint8Array }
 
@@ -115,7 +117,7 @@ export async function* streamProjectArchive(manifestInput: ProjectArchiveManifes
     const path = safeArchivePath(source.path), content = Buffer.from(source.content);
     if (path !== "manifest.json" && !expected.delete(path)) throw new ArchiveValidationError(`Duplicate or unindexed archive entry: ${path}`);
     if (content.length > (options.maxEntryBytes ?? DEFAULT_MAX_ENTRY_BYTES)) throw new ArchiveLimitError("Archive entry size limit exceeded", 422);
-    if (++count > (options.maxEntries ?? 10_001)) throw new ArchiveValidationError("Archive entry count limit exceeded");
+    if (++count > (options.maxEntries ?? DEFAULT_MAX_ENTRIES)) throw new ArchiveValidationError("Archive entry count limit exceeded");
     const encoded = encodeEntry(path, content, offset, options);
     for (const chunk of emit(encoded.local)) yield chunk;
     central.push(encoded.central); offset += encoded.local.reduce((sum, chunk) => sum + chunk.length, 0);
@@ -125,8 +127,9 @@ export async function* streamProjectArchive(manifestInput: ProjectArchiveManifes
   for (const chunk of emit([centralData, end])) yield chunk;
 }
 
-export function assertProjectArchiveSize(manifest: ProjectArchiveManifest, entries: Array<{ path: string; size: number }>, limits: { maxBytes: number; maxEntryBytes: number }): number {
+export function assertProjectArchiveSize(manifest: ProjectArchiveManifest, entries: Array<{ path: string; size: number }>, limits: { maxBytes: number; maxEntryBytes: number; maxEntries?: number }): number {
   const all = [{ path: "manifest.json", size: Buffer.byteLength(JSON.stringify(manifest)) }, ...entries];
+  if (all.length > (limits.maxEntries ?? DEFAULT_MAX_ENTRIES)) throw new ArchiveValidationError("Archive entry count limit exceeded");
   let total = 22;
   for (const entry of all) {
     if (entry.size > limits.maxEntryBytes) throw new ArchiveLimitError("Archive entry size limit exceeded", 422);
@@ -167,9 +170,10 @@ export function assertArtifactSafe(encoding: "text" | "json", content: string): 
     rejectSensitiveKeys(value, "artifact");
     return;
   }
-  const assignment = /^\s*(?:export\s+)?(?:const\s+)?(?:api[-_]?key|secret|password|credential|access[-_]?token)\s*[:=]\s*\S{8,}/im;
-  const bearer = /\b(?:authorization\s*:\s*)?bearer\s+[a-z0-9._~+\/-]{20,}/i;
-  if (assignment.test(content) || bearer.test(content)) throw new ArchiveValidationError("Sensitive text artifact content is forbidden");
+  const sensitiveKey = String.raw`(?:(?:[a-z0-9]+_)*api_key|client_secret|refresh_token|private_key|database_url|authorization|secret|password|credential|access_token)`;
+  const assignment = new RegExp(String.raw`^\s*(?:export\s+)?(?:(?:const|let|var)\s+)?["']?${sensitiveKey}["']?\s*[:=]\s*\S{8,}`, "im");
+  const authorization = /^\s*authorization\s*[:=]\s*(?:basic|bearer)\s+[a-z0-9._~+\/-]{20,}/im;
+  if (assignment.test(content) || authorization.test(content)) throw new ArchiveValidationError("Sensitive text artifact content is forbidden");
 }
 
 function unzip(data: Buffer, options: ArchiveLimits): Map<string, Buffer> {
@@ -179,9 +183,9 @@ function unzip(data: Buffer, options: ArchiveLimits): Map<string, Buffer> {
   if (data.readUInt16LE(endOffset + 4) !== 0 || data.readUInt16LE(endOffset + 6) !== 0) throw new ArchiveValidationError("Multi-disk ZIP is unsupported");
   const diskEntries = data.readUInt16LE(endOffset + 8), entryCount = data.readUInt16LE(endOffset + 10), centralSize = data.readUInt32LE(endOffset + 12), centralOffset = data.readUInt32LE(endOffset + 16);
   if ([entryCount, centralSize, centralOffset].includes(0xffff) || [centralSize, centralOffset].includes(0xffffffff)) throw new ArchiveValidationError("ZIP64 is unsupported");
-  if (diskEntries !== entryCount || entryCount > (options.maxEntries ?? 10_001)) throw new ArchiveValidationError("ZIP entry count is invalid or exceeds the entry count limit");
+  if (diskEntries !== entryCount || entryCount > (options.maxEntries ?? DEFAULT_MAX_ENTRIES)) throw new ArchiveValidationError("ZIP entry count is invalid or exceeds the entry count limit");
   if (centralOffset + centralSize !== endOffset) throw new ArchiveValidationError("ZIP central directory size is invalid");
-  let cursor = centralOffset;
+  let cursor = centralOffset, declaredTotal = 0, actualTotal = 0;
   for (let index = 0; index < entryCount; index++) {
     if (cursor + 46 > endOffset || data.readUInt32LE(cursor) !== 0x02014b50) throw new ArchiveValidationError("Invalid central directory entry");
     const flags = data.readUInt16LE(cursor + 8), method = data.readUInt16LE(cursor + 10), crc = data.readUInt32LE(cursor + 16), compressedSize = data.readUInt32LE(cursor + 20), size = data.readUInt32LE(cursor + 24);
@@ -192,6 +196,8 @@ function unzip(data: Buffer, options: ArchiveLimits): Map<string, Buffer> {
     if (method !== 0 && method !== 8) throw new ArchiveValidationError("Unsupported ZIP compression method");
     if (((external >>> 16) & 0o170000) === 0o120000) throw new ArchiveValidationError("ZIP symlink entries are forbidden");
     if (size > (options.maxEntryBytes ?? DEFAULT_MAX_ENTRY_BYTES)) throw new ArchiveLimitError("Archive entry size limit exceeded", 422);
+    declaredTotal += size;
+    if (declaredTotal > (options.maxTotalUncompressedBytes ?? DEFAULT_MAX_TOTAL_UNCOMPRESSED_BYTES)) throw new ArchiveLimitError("Archive total uncompressed size limit exceeded", 413);
     if (compressedSize === 0 ? size > 0 : size / compressedSize > (options.maxCompressionRatio ?? 100)) throw new ArchiveValidationError("Archive compression ratio limit exceeded");
     const centralName = data.subarray(cursor + 46, cursor + 46 + nameLength).toString("utf8"), path = safeArchivePath(centralName);
     if (files.has(path)) throw new ArchiveValidationError(`Duplicate normalized archive path: ${path}`);
@@ -204,7 +210,14 @@ function unzip(data: Buffer, options: ArchiveLimits): Map<string, Buffer> {
     if (!(flags & 0x08) && (localCrc !== crc || localCompressed !== compressedSize || localSize !== size)) throw new ArchiveValidationError("Local and central ZIP sizes or CRC disagree");
     const bodyOffset = localOffset + 30 + localNameLength + localExtraLength, bodyEnd = bodyOffset + compressedSize;
     if (bodyEnd > centralOffset) throw new ArchiveValidationError("Truncated ZIP entry");
-    const content = method === 8 ? inflateRawSync(data.subarray(bodyOffset, bodyEnd)) : Buffer.from(data.subarray(bodyOffset, bodyEnd));
+    const remainingTotal = (options.maxTotalUncompressedBytes ?? DEFAULT_MAX_TOTAL_UNCOMPRESSED_BYTES) - actualTotal;
+    const outputLimit = Math.min(size, options.maxEntryBytes ?? DEFAULT_MAX_ENTRY_BYTES, remainingTotal);
+    if (method === 0 && compressedSize > outputLimit) throw new ArchiveLimitError("Stored ZIP entry actual output exceeds its declared or configured limit", outputLimit === remainingTotal ? 413 : 422);
+    let content: Buffer;
+    try { content = method === 8 ? inflateRawSync(data.subarray(bodyOffset, bodyEnd), { maxOutputLength: Math.max(1, outputLimit) }) : Buffer.from(data.subarray(bodyOffset, bodyEnd)); }
+    catch (error) { if (error && typeof error === "object" && "code" in error && error.code === "ERR_BUFFER_TOO_LARGE") throw new ArchiveLimitError("Archive entry actual output exceeds its declared or configured limit", outputLimit === remainingTotal ? 413 : 422); throw error; }
+    actualTotal += content.length;
+    if (actualTotal > (options.maxTotalUncompressedBytes ?? DEFAULT_MAX_TOTAL_UNCOMPRESSED_BYTES)) throw new ArchiveLimitError("Archive actual total uncompressed size limit exceeded", 413);
     if (content.length !== size || crc32(content) !== crc) throw new ArchiveValidationError("ZIP entry size or CRC checksum mismatch");
     if (flags & 0x08) validateDescriptor(data, bodyEnd, crc, compressedSize, size);
     files.set(path, content);

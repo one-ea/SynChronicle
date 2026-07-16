@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import axe from "axe-core";
 import { describe, expect, it, vi } from "vitest";
 import { ProjectsPage, type Project } from "./projects.js";
 
@@ -25,12 +26,13 @@ describe("ProjectsPage import and export", () => {
   it("disables project operations during import and cancels the upload", async () => {
     let rejectUpload!: (error: unknown) => void;
     const importProject = vi.fn((_file: File, progress: (value: number) => void, signal?: AbortSignal) => new Promise((_resolve, reject) => { rejectUpload = reject; progress(37); signal?.addEventListener("abort", () => reject(Object.assign(new Error("cancelled"), { name: "AbortError" }))); }));
-    render(<ProjectsPage {...props({ importProject })} />);
+    const { container } = render(<ProjectsPage {...props({ importProject })} />);
     fireEvent.change(screen.getByLabelText("导入作品归档"), { target: { files: [new File(["PK"], "novel.sync.zip", { type: "application/zip" })] } });
     expect(screen.getByLabelText("导入作品归档")).toBeDisabled();
     expect(screen.getByRole("button", { name: "创建作品" })).toBeDisabled();
     expect(screen.getByRole("progressbar", { name: "导入进度" })).toHaveValue(37);
     expect(screen.getByRole("status")).toHaveTextContent("正在导入 37%");
+    expect((await axe.run(container, { runOnly: { type: "tag", values: ["wcag2a", "wcag2aa"] } })).violations).toEqual([]);
     fireEvent.click(screen.getByRole("button", { name: "取消导入" }));
     await waitFor(() => expect(screen.getByText(/已取消导入/)).toBeVisible());
     rejectUpload(new Error("ignored"));

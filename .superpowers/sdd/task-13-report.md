@@ -74,3 +74,30 @@ Implemented tenant-isolated project import/export for PostgreSQL, legacy file-pr
 - The current environment has no `TEST_DATABASE_URL`, so the real PostgreSQL round-trip, tenant isolation, stable-run selection, and audit rollback tests could not execute here. They remain part of the normal conditional suite.
 - ZIP64 is explicitly rejected. Current project/export caps stay below classic ZIP field limits.
 - Entry bodies are bounded in memory one row at a time because PostgreSQL text/json values arrive as one field. Archive-wide buffering has been removed.
+
+## Extraction Resource Follow-Up
+
+- Deflate extraction now calls `inflateRawSync` with `maxOutputLength` equal to the minimum of the declared entry size, remaining per-entry allowance, and remaining archive-wide uncompressed allowance. Stored entries receive the equivalent pre-copy actual-size guard.
+- Declared uncompressed sizes are accumulated before each extraction. Actual outputs are accumulated immediately after extraction, and each entry must exactly match its central-directory declaration and CRC.
+- Default import limits are 50 MiB compressed input, 10 MiB per entry, 100 MiB total uncompressed payload, 1,000 entries, and a 100:1 compression ratio. Callers can lower these limits.
+- The bounded-buffer parser has a strict payload ceiling: at most 50 MiB compressed archive bytes plus at most 100 MiB retained uncompressed entry bytes. The current inflate output is included within that 100 MiB allowance. Additional JS/ZIP metadata is bounded by the 1,000-entry cap.
+- Export preflight now enforces the same reasonable entry-count bound before the first response byte.
+- Text secret assignment detection covers provider-prefixed `*_API_KEY`, `client_secret`, `refresh_token`, `private_key`, `DATABASE_URL`, `authorization`, generic secret/password/credential/access-token keys, and Basic/Bearer authorization values. Matching requires a key boundary and assignment shape, preserving narrative prose mentions.
+- Export failure auditing has one owner per phase. Metadata rejection is audited by the metadata route; actual download preflight and stream interruption are audited by the exporter using the original request ID. Transaction rollback removes the provisional success event before a failure event is inserted.
+- Browser downloads now perform a small same-origin JSON metadata handshake, then activate a native anchor URL. The browser streams the response directly to its download subsystem without `response.blob()` buffering. The actual download endpoint revalidates tenant, stable snapshot, and expected project version.
+- PostgreSQL archive tests now create independent users/projects/runs/checkpoints per test and cover exactly-one failure auditing before first byte and after stream cancellation.
+- CLI coverage now includes target-user absence, connection closure on success/failure/not-found, and dispatch through an injected migration owner.
+- The active upload DOM, including its progress live region and cancellation control, passes axe WCAG A/AA checks.
+
+## Extraction Verification
+
+- Task 13 target tests: 56 passed, 3 PostgreSQL-conditional tests skipped.
+- `pnpm vitest run`: 603 passed, 62 skipped.
+- `pnpm test:browser`: 8 passed.
+- `pnpm typecheck`, `pnpm build`, `pnpm exec drizzle-kit check`, and `git diff --check`: exit 0.
+- The three PostgreSQL archive tests were discovered and skipped because this environment has no `TEST_DATABASE_URL`.
+
+## Extraction Concerns
+
+- Import parsing remains in bounded memory rather than temporary-file staging. The configured compressed, total-uncompressed, per-entry, ratio, and count limits provide a deterministic ceiling; deployments with smaller memory budgets should lower both byte limits together.
+- Native browser download errors that occur after navigation begins are handled by browser download UI. Tenant/version/stability errors are resolved by the metadata handshake before navigation and rechecked by the download endpoint.
