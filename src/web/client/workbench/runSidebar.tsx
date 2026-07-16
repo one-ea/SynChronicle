@@ -38,6 +38,7 @@ export function RunSidebar(props: RunSidebarProps) {
   const { state, connection, status, collapsed, onToggle } = props;
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<{ message: string; retry: () => Promise<void> } | null>(null);
+  const [selectedModelSetId, setSelectedModelSetId] = useState("");
   const [selectedProvider, setSelectedProvider] = useState("");
   const configuredSet = props.modelConfiguration?.modelSets.find(({ id }) => id === props.modelConfiguration?.activeModelSetId) ?? props.modelConfiguration?.modelSets[0];
   async function run(action: () => Promise<void>) { setPending(true); setFailure(null); try { await action(); } catch (error) { const requestId = error instanceof ApiError && error.requestId ? ` 请求 ID：${error.requestId}` : ""; setFailure({ message: `${error instanceof ApiError && error.kind === "request" ? "网络或服务请求失败" : "操作失败"}。${requestId}`, retry: action }); } finally { setPending(false); } }
@@ -56,7 +57,7 @@ export function RunSidebar(props: RunSidebarProps) {
     const credentialId = String(data.get("credentialId") ?? "") || selection?.credentialId;
     await run(() => props.onSwitchModel(role, String(data.get("provider")), String(data.get("model")), credentialId, selection?.parameters));
   }
-  async function start(event: FormEvent<HTMLFormElement>) { event.preventDefault(); const data = new FormData(event.currentTarget); await run(() => props.onStart(String(data.get("modelSetId")))); }
+  async function start(event: FormEvent<HTMLFormElement>) { event.preventDefault(); if (!selectedModelSetId) return; await run(() => props.onStart(selectedModelSetId)); }
   const connectionRole = connection === "backpressure" || connection === "error" ? "alert" : "status";
   return <aside className="workbench-panel run-sidebar" aria-label="运行状态" data-collapsed={collapsed}>
     <header className="panel-heading">
@@ -72,7 +73,7 @@ export function RunSidebar(props: RunSidebarProps) {
       </section>}
       <section className="agent-list"><h3>Agents</h3>{props.agents.length ? props.agents.map((agent) => <p key={agent.name}><span>{agent.name}</span><small>{agent.summary ?? agent.state}</small></p>) : <p className="muted-copy">暂无 Agent 状态事件。</p>}</section>
       <section className="usage-card"><h3>Usage</h3>{props.usage ? <><p>{props.usage.totalTokens} tokens</p><p>${props.usage.cost}</p></> : <p>暂无用量记录。</p>}</section>
-      {props.controlsDisabled && <form className="sidebar-form" onSubmit={(event) => void start(event)}><h3>创建运行</h3><label>模型集<select name="modelSetId" required defaultValue={props.modelConfiguration?.activeModelSetId ?? ""}><option value="" disabled>请选择</option>{props.modelConfiguration?.modelSets.map((set) => <option key={set.id} value={set.id}>{set.name} · v{set.version}</option>)}</select></label><button type="submit" disabled={pending}>启动运行</button></form>}
+      {props.controlsDisabled && <form className="sidebar-form run-create-card" onSubmit={(event) => void start(event)}><h3>创建运行</h3><p id="model-set-helper" className="muted-copy">选择本次运行使用的模型集。启动后仍可在安全边界切换模型。</p><label>模型集<select name="modelSetId" required value={selectedModelSetId} aria-describedby="model-set-helper" onChange={(event) => setSelectedModelSetId(event.currentTarget.value)}><option value="" disabled>请选择</option>{props.modelConfiguration?.modelSets.map((set) => <option key={set.id} value={set.id}>{set.name} · v{set.version}</option>)}</select></label><button type="submit" disabled={!selectedModelSetId || pending}>启动运行</button></form>}
       <div className="control-placeholder" aria-label="运行控制"><button type="button" disabled={props.controlsDisabled || pending} onClick={() => void run(() => props.onCommand("pause"))} aria-label="暂停运行">暂停</button><button type="button" disabled={props.controlsDisabled || pending} onClick={() => void run(() => props.onCommand("resume"))} aria-label="继续运行">继续</button><button type="button" disabled={props.controlsDisabled || pending} onClick={() => void run(() => props.onCommand("abort"))} aria-label="终止运行">终止</button></div>
       {props.abortWaiting && <p className="message" role="status">正在等待 durable commit 完成，终止将在安全边界生效。</p>}
       {props.commandFeedback && <p className="message" role="status">{props.commandFeedback}{props.commandRetry && <button type="button" onClick={() => void run(props.commandRetry!)}>重试模型切换</button>}</p>}

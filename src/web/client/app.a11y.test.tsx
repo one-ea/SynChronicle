@@ -23,8 +23,14 @@ it("has no detectable WCAG AA violations on the creative workbench", async () =>
     title: "雾港来信",
     chapters: [{ id: "chapter-1", title: "潮声抵达前", sequence: 1, status: "draft", body: "正文" }],
     latestRun: null,
+    modelConfiguration: {
+      activeModelSetId: "set-1",
+      modelSets: [{ id: "set-1", name: "主力模型", version: 2, agents: {} }],
+      providers: [],
+    },
   }} initialEvents={[]} />);
   await screen.findByRole("heading", { name: "创作流" });
+  expect(screen.getByLabelText("模型集")).toHaveAccessibleDescription("选择本次运行使用的模型集。启动后仍可在安全边界切换模型。");
   await userEvent.setup().click(screen.getByRole("button", { name: "布局" }));
   await screen.findByRole("dialog", { name: "布局" });
 

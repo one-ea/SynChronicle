@@ -138,7 +138,7 @@ input { background: transparent; border: 0; border-bottom: 1px solid var(--ink-m
 .prompt-input label { font-size: 0.78rem; }
 .prompt-input > div { align-items: end; display: grid; gap: var(--space-1); grid-template-columns: 1fr auto; }
 .prompt-input input { min-width: 0; }
-.run-sidebar-body { padding: var(--space-2); }
+.run-sidebar-body { padding: var(--space-2) var(--space-2) max(var(--space-6), env(safe-area-inset-bottom)); }
 .connection-state { border-left: 3px solid var(--purple); font-size: 0.82rem; padding: 0.65rem 0.8rem; }
 .connection-backpressure, .connection-error { background: #f8e8e5; border-color: var(--danger); }
 .run-facts { margin: var(--space-3) 0; }
@@ -159,6 +159,10 @@ input { background: transparent; border: 0; border-bottom: 1px solid var(--ink-m
 .sidebar-form label { font-size: 0.78rem; margin: 0; }
 .sidebar-form input, .sidebar-form select { background: var(--paper-raised); border: 1px solid var(--rule); min-height: 44px; padding: 0.5rem; width: 100%; }
 .sidebar-form button, .diagnostics-card button { min-height: 44px; }
+.run-create-card { background: var(--paper-raised); border: 1px solid var(--rule); gap: var(--space-2); padding: var(--space-2); }
+.run-create-card .muted-copy { line-height: 1.55; margin: 0; }
+.run-create-card label { display: grid; gap: 0.45rem; }
+.run-create-card select, .run-create-card button { min-height: 48px; }
 .mobile-workbench-nav { display: none; }
 .layout-controls { position: relative; }
 .layout-controls-trigger { background: transparent; border: 1px solid var(--rule); color: var(--ink); min-height: 44px; min-width: 44px; padding: 0 var(--space-1); }

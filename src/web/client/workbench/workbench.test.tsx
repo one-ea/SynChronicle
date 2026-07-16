@@ -205,6 +205,29 @@ describe("WorkbenchPage", () => {
     expect(responsiveWorkbench).toContain("display: grid;");
   });
 
+  it("requires an explicit model-set selection before creating a run", async () => {
+    const request = vi.fn().mockResolvedValue({ run: { id: "22222222-2222-4222-8222-222222222222" } });
+    const user = userEvent.setup();
+    render(<WorkbenchPage api={{ request: request as ApiClient["request"] }} project={{ ...project, latestRun: null }} initialEvents={[]} />);
+
+    const modelSet = screen.getByLabelText("模型集");
+    const start = screen.getByRole("button", { name: "启动运行" });
+
+    expect(modelSet).toHaveValue("");
+    expect(modelSet).toHaveAccessibleDescription("选择本次运行使用的模型集。启动后仍可在安全边界切换模型。");
+    expect(start).toBeDisabled();
+
+    await user.selectOptions(modelSet, "set-1");
+    expect(start).toBeEnabled();
+    await user.click(start);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith(
+      "/api/projects/project-1/runs",
+      expect.objectContaining({ method: "POST", body: expect.stringContaining('"modelSetId":"set-1"') }),
+    );
+  });
+
   it("accepts incremental events without losing the current chapter", async () => {
     let push!: (event: RunEventMessage) => void;
     render(<WorkbenchPage api={api()} project={project} initialEvents={[]} subscribe={(listener) => { push = listener; return () => undefined; }} />);
