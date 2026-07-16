@@ -27,12 +27,23 @@ After rebuilding the current source, the same eight responsive tests passed. Thi
 
 The review exposed that the initial browser fixture used an empty `agents` record and empty provider catalog. A new failing assertion exercised the production `validateModelSetInput` path and rejected that fixture at all four workbench widths. The fixture now contains a Writer Agent using `openai/gpt-5`, a matching provider/model catalog, and valid parameters. Each workbench case selects the model set before asserting that the enabled CTA remains fully reachable in the short viewport.
 
+## Responsive Server Isolation Follow-up
+
+The responsive validation command previously inherited the global full-stack `webServer` and failed before test collection when `TEST_DATABASE_URL` was absent. A tested server selector now uses Vite on port 4173 with the root page as its readiness URL when the selected project set contains only `responsive` and PostgreSQL is unavailable. Full-stack project selections, runs without a project filter, and runs with `TEST_DATABASE_URL` continue to use `scripts/e2e-server.ts` and `/api/health/ready`.
+
+TDD evidence for this follow-up:
+
+- The original `pnpm exec playwright test --project=responsive` command failed with `TEST_DATABASE_URL is required`.
+- The first selector assertion failed because responsive-only runs still returned the e2e-server command.
+- After wiring the selector into `playwright.config.ts`, the four configuration cases passed and the standard responsive command passed all eight tests without a database environment variable.
+
 ## Verification
 
+- `pnpm vitest run scripts/playwright-server.test.ts`: passed, 4 tests.
 - `pnpm vitest run src/web/client/workbench/workbench.test.tsx src/web/client/app.a11y.test.tsx`: passed, 32 tests.
 - `pnpm typecheck`: passed.
 - `pnpm build`: passed.
-- `TEST_DATABASE_URL=postgres://synchronicle:synchronicle@127.0.0.1:5432/synchronicle_test pnpm exec playwright test --project=responsive`: passed, 8 tests.
+- `pnpm exec playwright test --project=responsive`: passed, 8 tests with the isolated Vite server and no database environment variable.
 - Public preview connectivity on port 5173: passed.
 
 ## Preview

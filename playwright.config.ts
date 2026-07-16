@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { selectPlaywrightWebServer } from "./scripts/playwright-server.js";
 
 export default defineConfig({
   testDir: ".",
@@ -14,11 +15,5 @@ export default defineConfig({
     { name: "fullstack-desktop", testMatch: "e2e/**/*.spec.ts", use: { ...devices["Desktop Chrome"] } },
     { name: "fullstack-mobile", testMatch: "e2e/**/*.spec.ts", use: { ...devices["Pixel 7"] } },
   ],
-  webServer: {
-    command: "pnpm exec vite-node scripts/e2e-server.ts",
-    url: "http://127.0.0.1:4173/api/health/ready",
-    timeout: 120_000,
-    reuseExistingServer: false,
-    env: { ...process.env, TEST_DATABASE_URL: process.env.TEST_DATABASE_URL ?? "" },
-  },
+  webServer: selectPlaywrightWebServer(process.argv, process.env),
 });
