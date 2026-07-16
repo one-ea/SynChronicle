@@ -48,4 +48,13 @@ describe("admin routes", () => {
     await expect((model as never as { doGenerate(input: unknown): Promise<unknown> }).doGenerate({})).resolves.toEqual({ keySeen: "runtime-secret" });
     expect(factory).toHaveBeenCalledWith("openai", expect.objectContaining({ api_key: "runtime-secret" }), "gpt");
   });
+
+  it("releases an encrypted credential when provider factory creation fails", async () => {
+    const secret = { provider: "openai", apiKey: "encrypted-secret", baseUrl: "https://api.openai.com" };
+    const model = platformCredentialModel({ provider: "openai", model: "gpt", runId: "run", base: {}, load: async () => ({ credentialReference: "credential:22222222-2222-4222-8222-222222222222", metadata: { credentialOwnerId: "admin" } }), environment: {}, credentials: { resolve: vi.fn(async () => secret) } as never, factory: () => { throw new Error("factory failed"); } });
+
+    await expect((model as never as { doGenerate(input: unknown): Promise<unknown> }).doGenerate({})).rejects.toThrow("factory failed");
+
+    expect(secret).toEqual({ provider: "openai", apiKey: "", baseUrl: undefined });
+  });
 });

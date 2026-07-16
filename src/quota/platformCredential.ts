@@ -31,11 +31,15 @@ export function platformCredentialModel(input: { provider: string; model: string
     if (!configured) throw new Error("platform model is unavailable");
     const metadata = configured.metadata && typeof configured.metadata === "object" ? configured.metadata as Record<string, unknown> : {};
     const lease = await resolvePlatformCredential({ reference: configured.credentialReference, provider: input.provider, environment: input.environment, credentialOwnerId: typeof metadata.credentialOwnerId === "string" ? metadata.credentialOwnerId : undefined, credentials: input.credentials, runId: input.runId });
-    const instance = input.factory(input.provider, { ...input.base, api_key: lease.apiKey, ...(lease.baseUrl ? { base_url: lease.baseUrl } : {}) }, input.model) as Record<string, (value: unknown) => Promise<unknown>>;
+    let disposed = false;
+    const dispose = () => { if (disposed) return; disposed = true; lease.release(); };
+    let instance: Record<string, (value: unknown) => Promise<unknown>>;
+    try { instance = input.factory(input.provider, { ...input.base, api_key: lease.apiKey, ...(lease.baseUrl ? { base_url: lease.baseUrl } : {}) }, input.model) as Record<string, (value: unknown) => Promise<unknown>>; }
+    catch (error) { dispose(); throw error; }
     const operation = instance[method];
-    if (!operation) { lease.release(); throw new Error(`provider model does not implement ${method}`); }
-    return async () => { try { return await operation.call(instance, options); } finally { lease.release(); } };
+    if (!operation) { dispose(); throw new Error(`provider model does not implement ${method}`); }
+    return { dispatch: () => operation.call(instance, options), dispose };
   };
-  const invoke = async (method: "doGenerate" | "doStream", options: unknown) => (await prepare(method, options))();
+  const invoke = async (method: "doGenerate" | "doStream", options: unknown) => { const prepared = await prepare(method, options); try { return await prepared.dispatch(); } finally { prepared.dispose(); } };
   return { specificationVersion: "v2", provider: input.provider, modelId: input.model, supportedUrls: {}, prepare, doGenerate: (options: unknown) => invoke("doGenerate", options), doStream: (options: unknown) => invoke("doStream", options) };
 }

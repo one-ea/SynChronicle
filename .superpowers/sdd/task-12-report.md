@@ -136,3 +136,16 @@ Implemented platform model quotas, append-only accounting, administrator control
 - `pnpm test`: 567 passed, 59 skipped.
 - `pnpm test:browser`: 8 passed on the final full rerun.
 - The first browser run had one first-page readiness timeout; the isolated case and complete rerun passed.
+
+## Undispatched Credential Cleanup
+
+- Provider preflight now returns an owned `{ dispatch, dispose }` handle. The quota wrapper disposes it in `finally`, covering `provider_started` persistence failure, cancellation before dispatch, Provider success, and Provider failure.
+- Platform credential preparation releases encrypted/environment leases when Provider factory creation or method validation throws before a dispatch handle is returned.
+- Removed the unused `settlementRetry.attempts` option; retry duration remains signal-bound with capped exponential delay.
+- Invalid stream results now await interrupted estimate settlement and then throw a Provider stream contract error. No fire-and-forget settlement Promise remains.
+
+## Credential Cleanup Verification
+
+- Target suites: 166 passed, 29 skipped.
+- `pnpm test`: 570 passed, 59 skipped.
+- `pnpm test:browser`: 8 passed.

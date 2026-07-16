@@ -3,38 +3,40 @@ import type { DatabaseQuotaLedger } from "./ledger.js";
 
 type Model = Exclude<LanguageModel, string>;
 
-export function quotaGuardedModel(input: { provider: string; modelName: string; userId: string; projectId: string; runId: string; taskId: string; leaseVersion: number; agent: string; credentialSource?: string; inputPrice?: number | null; outputPrice?: number | null; resolvePricing?: () => Promise<{ inputPrice: number; outputPrice: number; priceSource?: string; credentialSource?: string } | null>; ledger: DatabaseQuotaLedger; model: Model; heartbeatMs?: number; settlementRetry?: { attempts?: number; baseDelayMs: number; maxDelayMs?: number }; ambiguousErrorPolicy?: "estimate" | "release" }): Model {
+export function quotaGuardedModel(input: { provider: string; modelName: string; userId: string; projectId: string; runId: string; taskId: string; leaseVersion: number; agent: string; credentialSource?: string; inputPrice?: number | null; outputPrice?: number | null; resolvePricing?: () => Promise<{ inputPrice: number; outputPrice: number; priceSource?: string; credentialSource?: string } | null>; ledger: DatabaseQuotaLedger; model: Model; heartbeatMs?: number; settlementRetry?: { baseDelayMs: number; maxDelayMs?: number }; ambiguousErrorPolicy?: "estimate" | "release" }): Model {
   const invoke = async (method: "doGenerate" | "doStream", options: unknown) => {
     const modelCallId = invocationId(options);
     const pricing = input.resolvePricing ? await input.resolvePricing() : input.inputPrice === undefined || input.outputPrice === undefined ? null : { inputPrice: input.inputPrice, outputPrice: input.outputPrice };
     const estimatedCostUsd = estimateCost(options, pricing?.inputPrice ?? null, pricing?.outputPrice ?? null);
     const reservation = await input.ledger.reserve({ userId: input.userId, projectId: input.projectId, runId: input.runId, taskId: input.taskId, leaseVersion: input.leaseVersion, modelCallId, estimatedCostUsd, model: `${input.provider}/${input.modelName}` });
-    let dispatch: () => Promise<unknown>;
-    try { dispatch = await prepareProvider(input.model, method, options); }
+    let prepared: PreparedProviderCall;
+    try { prepared = await prepareProvider(input.model, method, options); }
     catch (error) { await input.ledger.releaseDurably({ ...releaseInput(input, reservation.id, modelCallId), reason: "provider_preflight_failed", errorCategory: "local_preflight", error: errorMessage(error) }); throw error; }
-    await input.ledger.markProviderStarted(reservation.id, input.taskId, input.leaseVersion);
-    const stopHeartbeat = heartbeat(input, reservation.id);
-    const startedAt = Date.now();
-    let providerCompleted = false;
     try {
-      const result = await dispatch() as Record<string, unknown>;
-      providerCompleted = true;
-      if (method === "doStream") { stopHeartbeat(); return wrapStreamResult(result, async (usage) => persistSettlement(input, settleInput(input, pricing, reservation.id, modelCallId, usage, Date.now() - startedAt), abortSignal(options)), async () => input.ledger.settleInterrupted({ ...releaseInput(input, reservation.id, modelCallId), reason: "provider_stream_missing_usage", errorCategory: "missing_usage", error: "provider stream ended without usage" }), () => input.ledger.heartbeat(reservation.id, input.taskId, input.leaseVersion)); }
-      const usage = usageFrom(result);
-      if (!hasBillableUsage(usage)) await input.ledger.settleInterrupted({ ...releaseInput(input, reservation.id, modelCallId), reason: "provider_result_missing_usage", errorCategory: "missing_usage", error: "provider result omitted usage" });
-      else await persistSettlement(input, settleInput(input, pricing, reservation.id, modelCallId, usage, Date.now() - startedAt), abortSignal(options));
-      stopHeartbeat();
-      return result;
-    } catch (error) {
-      stopHeartbeat();
-      if (!providerCompleted) {
-        const outcome = classifyProviderError(error, input.ambiguousErrorPolicy ?? "estimate");
-        const terminal = { ...releaseInput(input, reservation.id, modelCallId), reason: "provider_rejected_or_failed", errorCategory: outcome.category, error: errorMessage(error) };
-        if (outcome.billing === "release") await input.ledger.releaseDurably(terminal);
-        else await input.ledger.settleInterrupted(terminal);
+      await input.ledger.markProviderStarted(reservation.id, input.taskId, input.leaseVersion);
+      const stopHeartbeat = heartbeat(input, reservation.id);
+      const startedAt = Date.now();
+      let providerCompleted = false;
+      try {
+        const result = await prepared.dispatch() as Record<string, unknown>;
+        providerCompleted = true;
+        if (method === "doStream") { stopHeartbeat(); return await wrapStreamResult(result, async (usage) => persistSettlement(input, settleInput(input, pricing, reservation.id, modelCallId, usage, Date.now() - startedAt), abortSignal(options)), async () => input.ledger.settleInterrupted({ ...releaseInput(input, reservation.id, modelCallId), reason: "provider_stream_missing_usage", errorCategory: "missing_usage", error: "provider stream ended without usage" }), () => input.ledger.heartbeat(reservation.id, input.taskId, input.leaseVersion)); }
+        const usage = usageFrom(result);
+        if (!hasBillableUsage(usage)) await input.ledger.settleInterrupted({ ...releaseInput(input, reservation.id, modelCallId), reason: "provider_result_missing_usage", errorCategory: "missing_usage", error: "provider result omitted usage" });
+        else await persistSettlement(input, settleInput(input, pricing, reservation.id, modelCallId, usage, Date.now() - startedAt), abortSignal(options));
+        stopHeartbeat();
+        return result;
+      } catch (error) {
+        stopHeartbeat();
+        if (!providerCompleted) {
+          const outcome = classifyProviderError(error, input.ambiguousErrorPolicy ?? "estimate");
+          const terminal = { ...releaseInput(input, reservation.id, modelCallId), reason: "provider_rejected_or_failed", errorCategory: outcome.category, error: errorMessage(error) };
+          if (outcome.billing === "release") await input.ledger.releaseDurably(terminal);
+          else await input.ledger.settleInterrupted(terminal);
+        }
+        throw error;
       }
-      throw error;
-    }
+    } finally { prepared.dispose(); }
   };
   return { ...(input.model as unknown as Record<string, unknown>), doGenerate: (options: unknown) => invoke("doGenerate", options), doStream: (options: unknown) => invoke("doStream", options) } as unknown as Model;
 }
@@ -71,12 +73,14 @@ function usageFrom(result: Record<string, unknown>): Record<string, unknown> {
 function hasBillableUsage(usage: Record<string, unknown>): boolean { return finiteUsage(usage.inputTokens) || finiteUsage(usage.outputTokens); }
 function finiteUsage(value: unknown): boolean { return typeof value === "number" && Number.isFinite(value) && value >= 0; }
 
-async function prepareProvider(model: Model, method: "doGenerate" | "doStream", options: unknown): Promise<() => Promise<unknown>> {
+interface PreparedProviderCall { dispatch(): Promise<unknown>; dispose(): void }
+
+async function prepareProvider(model: Model, method: "doGenerate" | "doStream", options: unknown): Promise<PreparedProviderCall> {
   const record = model as unknown as Record<string, unknown>;
-  if (typeof record.prepare === "function") return (record.prepare as (method: "doGenerate" | "doStream", options: unknown) => Promise<() => Promise<unknown>>)(method, options);
+  if (typeof record.prepare === "function") return (record.prepare as (method: "doGenerate" | "doStream", options: unknown) => Promise<PreparedProviderCall>)(method, options);
   const operation = record[method];
   if (typeof operation !== "function") throw new Error(`provider model does not implement ${method}`);
-  return () => (operation as (options: unknown) => Promise<unknown>).call(model, options);
+  return { dispatch: () => (operation as (options: unknown) => Promise<unknown>).call(model, options), dispose() {} };
 }
 
 function classifyProviderError(error: unknown, ambiguous: "estimate" | "release"): { billing: "estimate" | "release"; category: string } {
@@ -110,9 +114,9 @@ function heartbeat(input: Parameters<typeof quotaGuardedModel>[0], reservationId
   return () => clearInterval(timer);
 }
 
-function wrapStreamResult(result: Record<string, unknown>, settle: (usage: Record<string, unknown>) => Promise<unknown>, release: () => Promise<unknown>, touch: () => Promise<unknown>) {
+async function wrapStreamResult(result: Record<string, unknown>, settle: (usage: Record<string, unknown>) => Promise<unknown>, release: () => Promise<unknown>, touch: () => Promise<unknown>) {
   const stream = result.stream;
-  if (!(stream instanceof ReadableStream)) { void release(); return result; }
+  if (!(stream instanceof ReadableStream)) { await release(); throw new Error("Provider stream contract requires a ReadableStream"); }
   const reader = stream.getReader();
   let terminal = false;
   const finish = async (usage?: Record<string, unknown>) => { if (terminal) return; terminal = true; if (usage) await settle(usage); else await release(); };
