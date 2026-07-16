@@ -7,6 +7,7 @@ import type { RequestAuth } from "../web/auth/plugin.js";
 import type { EventBroker } from "../realtime/broker.js";
 import { redactSecrets } from "../credentials/redactor.js";
 import { LEGACY_COMMAND_ID_PREFIX } from "./types.js";
+import { hasKnownPlatformPrice } from "../quota/pricing.js";
 import type {
   EnqueueRunInput,
   ClaimedTask,
@@ -132,11 +133,12 @@ export class SchedulerRepository {
     if (selection.credentialId) {
       const [credential] = await this.db.select({ id: providerCredentials.id }).from(providerCredentials).where(and(eq(providerCredentials.id, selection.credentialId), eq(providerCredentials.userId, auth.userId), eq(providerCredentials.provider, selection.provider), eq(providerCredentials.status, "active"))).limit(1);
       if (!credential) return false;
-      const configured = await this.db.select({ model: platformModels.model }).from(platformModels).where(and(eq(platformModels.provider, selection.provider), eq(platformModels.status, "active")));
-      return configured.length === 0 || configured.some(({ model }) => model === selection.model);
+      const configured = await this.db.select({ model: platformModels.model, metadata: platformModels.metadata, inputPrice: platformModels.inputPrice, outputPrice: platformModels.outputPrice }).from(platformModels).where(and(eq(platformModels.provider, selection.provider), eq(platformModels.status, "active")));
+      const available = configured.filter((model) => hasKnownPlatformPrice(model.metadata, model.inputPrice, model.outputPrice));
+      return available.length === 0 || available.some(({ model }) => model === selection.model);
     }
-    const [model] = await this.db.select({ id: platformModels.id }).from(platformModels).where(and(eq(platformModels.provider, selection.provider), eq(platformModels.model, selection.model), eq(platformModels.status, "active"))).limit(1);
-    return Boolean(model);
+    const [model] = await this.db.select({ metadata: platformModels.metadata, inputPrice: platformModels.inputPrice, outputPrice: platformModels.outputPrice }).from(platformModels).where(and(eq(platformModels.provider, selection.provider), eq(platformModels.model, selection.model), eq(platformModels.status, "active"))).limit(1);
+    return Boolean(model && hasKnownPlatformPrice(model.metadata, model.inputPrice, model.outputPrice));
   }
 
   async enqueueRun(auth: RequestAuth, projectId: string, input: EnqueueRunInput): Promise<RunRow | null> {

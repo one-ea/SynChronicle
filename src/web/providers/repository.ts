@@ -3,6 +3,7 @@ import type { Database } from "../../db/client.js";
 import { platformModels, providerCredentials, userModelSets } from "../../db/schema/index.js";
 import type { RequestAuth } from "../auth/plugin.js";
 import { validateModelSetInput, type ModelCatalog } from "./modelConfig.js";
+import { hasKnownPlatformPrice } from "../../quota/pricing.js";
 
 export class ModelConfigurationRepository {
   constructor(private readonly db: Database) {}
@@ -10,9 +11,9 @@ export class ModelConfigurationRepository {
   async catalog(auth: RequestAuth): Promise<ModelCatalog> {
     const [credentials, models] = await Promise.all([
       this.db.select({ id: providerCredentials.id, provider: providerCredentials.provider, label: providerCredentials.label }).from(providerCredentials).where(and(eq(providerCredentials.userId, auth.userId), eq(providerCredentials.status, "active"))),
-      this.db.select({ provider: platformModels.provider, model: platformModels.model }).from(platformModels).where(eq(platformModels.status, "active")),
+      this.db.select({ provider: platformModels.provider, model: platformModels.model, metadata: platformModels.metadata, inputPrice: platformModels.inputPrice, outputPrice: platformModels.outputPrice }).from(platformModels).where(eq(platformModels.status, "active")),
     ]);
-    return { credentials, platformModels: models };
+    return { credentials, platformModels: models.filter((model) => hasKnownPlatformPrice(model.metadata, model.inputPrice, model.outputPrice)).map(({ provider, model }) => ({ provider, model })) };
   }
 
   async list(auth: RequestAuth) {

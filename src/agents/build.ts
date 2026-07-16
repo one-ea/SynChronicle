@@ -141,7 +141,7 @@ export function buildCoordinator(
               ? context.task.objective
               : [context.task.objective, "Previous candidate snapshot:", JSON.stringify(context.previousCandidate ?? null), "Revision instructions:", ...context.revisionInstructions].join("\n");
             const transaction = store.recordingTransaction();
-            const output = await storeScope.run(transaction.store, () => generate(revisionPrompt, context.signal));
+            const output = await storeScope.run(transaction.store, () => generate(revisionPrompt, context.signal, { executionId, round: context.round, operation: "candidate" }));
             context.signal?.throwIfAborted();
             const stagedArtifactIds = await transaction.stage(staging, context.round);
             const artifacts = transaction.artifacts().map((artifact) => ({ target: artifact.target, content: typeof artifact.content === "string" ? artifact.content : new TextDecoder().decode(artifact.content) }));

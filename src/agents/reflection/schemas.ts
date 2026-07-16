@@ -57,6 +57,7 @@ export const ReflectionExecutionStateSchema = z.object({
   candidates: z.array(ReflectionCandidateSchema),
   revisionInstructions: z.array(z.string()),
   priorIssues: z.array(ReviewIssueSchema),
+  reviewerAttempt: z.number().int().positive().optional(),
   pendingCandidate: z.object({ round: z.number().int().positive(), execution: ExecutionCandidateSchema }).strict().optional(),
   selectedResult: ReflectiveResultSchema.optional(),
 }).strict();

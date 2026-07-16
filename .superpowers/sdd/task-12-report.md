@@ -103,3 +103,21 @@ Implemented platform model quotas, append-only accounting, administrator control
 - Migration `0014_worthless_beyonder.sql` is required for the new enum states, invocation key, Provider completion timestamp, outbox retry timestamp, and task/invocation uniqueness constraint. Its journal and snapshot match the TypeScript schema.
 - Final `pnpm test`: 551 passed, 58 skipped; PostgreSQL-conditional suites were skipped because `TEST_DATABASE_URL` is absent.
 - Final `pnpm test:browser`: 8 passed.
+
+## Interrupted Provider Call Accounting
+
+- Reservations now persist `provider_started` before entering the Provider. Failure to persist that state blocks the Provider call.
+- Reconciliation releases only reservations that never reached `provider_started`. Started or completed calls without durable actual usage settle at the reserved estimate and remain `needs_reconciliation`.
+- Stream cancellation, read failure, and EOF without a finish usage event use the same interrupted-call estimate settlement path.
+- Actual usage intent persistence retries indefinitely in the live process with bounded exponential delay. A process crash leaves `provider_started` for lease-based estimate reconciliation.
+- Reflection state persists `reviewerAttempt`. Candidate and Reviewer invocation keys include the persisted execution ID, reflection round, Reviewer attempt, operation, and task-scoped allocation.
+- Platform pricing uses `hasKnownPlatformPrice` across Worker resolution, Scheduler selection, model catalogs, usage projection, and Settings. `priceStatus: unknown` blocks platform usage even when numeric prices remain.
+- Budget spend includes actual settlements and unresolved estimate settlements, while a later actual settlement supersedes its estimate to prevent double counting.
+- Added migration `0015_charming_wither.sql` and matching snapshot for the `provider_started` reservation state.
+
+## Interrupted Call Verification
+
+- `pnpm test`: 558 passed, 59 skipped.
+- `pnpm test:browser`: 8 passed.
+- `pnpm typecheck`, `pnpm build`, `pnpm exec drizzle-kit check`, and `git diff --check`: exit 0.
+- PostgreSQL-conditional tests include started/unstarted reconciliation and estimate-budget accounting; this environment skipped them because `TEST_DATABASE_URL` is absent.

@@ -19,6 +19,7 @@ import { and, eq } from "drizzle-orm";
 import { DatabaseQuotaLedger, startQuotaMaintenance } from "../quota/ledger.js";
 import { quotaGuardedModel } from "../quota/model.js";
 import { platformCredentialModel, platformCredentialSource } from "../quota/platformCredential.js";
+import { hasKnownPlatformPrice } from "../quota/pricing.js";
 
 export async function startWorker(): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL?.trim();
@@ -57,7 +58,7 @@ export async function startWorker(): Promise<void> {
             const lease = { apiKey: secret.apiKey, baseUrl: secret.baseUrl, release() { lease.apiKey = ""; lease.baseUrl = undefined; secret.apiKey = ""; secret.baseUrl = undefined; } };
             return lease;
           }, (name, providerConfig, selectedModel, factories) => createProvider(name, providerConfig, selectedModel, factories, providerAllowedHosts));
-          const loadPlatformModel = async () => { const [configured] = await database.select().from(platformModels).where(and(eq(platformModels.provider, provider), eq(platformModels.model, model), eq(platformModels.status, "active"))).limit(1); return configured; };
+          const loadPlatformModel = async () => { const [configured] = await database.select().from(platformModels).where(and(eq(platformModels.provider, provider), eq(platformModels.model, model), eq(platformModels.status, "active"))).limit(1); return configured && hasKnownPlatformPrice(configured.metadata, configured.inputPrice, configured.outputPrice) ? configured : undefined; };
           const platformModel = platformCredentialModel({ provider, model, runId: task.runId, base: runConfig.providers?.[provider] ?? {}, load: loadPlatformModel, environment: process.env, credentials: credentialService, factory: (name, providerConfig, selectedModel) => createProvider(name, providerConfig, selectedModel, {}, providerAllowedHosts) }) as never;
           return quotaGuardedModel({ provider, modelName: model, userId: task.userId, projectId: task.projectId, runId: task.runId, taskId: task.id, leaseVersion: task.leaseVersion, agent: task.type, resolvePricing: async () => { const configured = await loadPlatformModel(); return configured ? { inputPrice: Number(configured.inputPrice), outputPrice: Number(configured.outputPrice), priceSource: "platform", credentialSource: platformCredentialSource(configured.credentialReference) } : null; }, ledger: quotaLedger, model: platformModel });
         },

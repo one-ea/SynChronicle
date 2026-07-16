@@ -7,7 +7,7 @@ import { runs, tasks } from "./runtime.js";
 export const credentialStatus = pgEnum("credential_status", ["active", "disabled", "revoked", "invalid"]);
 export const modelStatus = pgEnum("model_status", ["active", "disabled"]);
 export const quotaOperation = pgEnum("quota_operation", ["credit", "reserve", "settle", "estimate_settle", "release"]);
-export const quotaReservationStatus = pgEnum("quota_reservation_status", ["reserved", "provider_completed", "needs_reconciliation", "settled", "released"]);
+export const quotaReservationStatus = pgEnum("quota_reservation_status", ["reserved", "provider_started", "provider_completed", "needs_reconciliation", "settled", "released"]);
 export const quotaOutboxAction = pgEnum("quota_outbox_action", ["settle", "release"]);
 export const quotaOutboxStatus = pgEnum("quota_outbox_status", ["pending", "processed"]);
 

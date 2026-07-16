@@ -9,6 +9,7 @@ export function quotaGuardedModel(input: { provider: string; modelName: string; 
     const pricing = input.resolvePricing ? await input.resolvePricing() : input.inputPrice === undefined || input.outputPrice === undefined ? null : { inputPrice: input.inputPrice, outputPrice: input.outputPrice };
     const estimatedCostUsd = estimateCost(options, pricing?.inputPrice ?? null, pricing?.outputPrice ?? null);
     const reservation = await input.ledger.reserve({ userId: input.userId, projectId: input.projectId, runId: input.runId, taskId: input.taskId, leaseVersion: input.leaseVersion, modelCallId, estimatedCostUsd, model: `${input.provider}/${input.modelName}` });
+    await input.ledger.markProviderStarted(reservation.id, input.taskId, input.leaseVersion);
     const stopHeartbeat = heartbeat(input, reservation.id);
     const startedAt = Date.now();
     let providerCompleted = false;
@@ -17,13 +18,13 @@ export function quotaGuardedModel(input: { provider: string; modelName: string; 
       if (!operation) throw new Error(`provider model does not implement ${method}`);
       const result = await operation.call(input.model, options) as Record<string, unknown>;
       providerCompleted = true;
-      if (method === "doStream") { stopHeartbeat(); return wrapStreamResult(result, async (usage) => persistSettlement(input, settleInput(input, pricing, reservation.id, modelCallId, usage, Date.now() - startedAt)), async () => input.ledger.releaseDurably(releaseInput(input, reservation.id, modelCallId)), () => input.ledger.heartbeat(reservation.id, input.taskId, input.leaseVersion)); }
+      if (method === "doStream") { stopHeartbeat(); return wrapStreamResult(result, async (usage) => persistSettlement(input, settleInput(input, pricing, reservation.id, modelCallId, usage, Date.now() - startedAt)), async () => input.ledger.settleInterrupted({ ...releaseInput(input, reservation.id, modelCallId), error: "provider stream ended without usage" }), () => input.ledger.heartbeat(reservation.id, input.taskId, input.leaseVersion)); }
       await persistSettlement(input, settleInput(input, pricing, reservation.id, modelCallId, usageFrom(result), Date.now() - startedAt));
       stopHeartbeat();
       return result;
     } catch (error) {
       stopHeartbeat();
-      if (!providerCompleted) await input.ledger.releaseDurably(releaseInput(input, reservation.id, modelCallId));
+      if (!providerCompleted) await input.ledger.settleInterrupted({ ...releaseInput(input, reservation.id, modelCallId), error: error instanceof Error ? error.message : String(error) });
       throw error;
     }
   };
@@ -40,12 +41,10 @@ function invocationId(options: unknown): string {
 
 async function persistSettlement(input: Parameters<typeof quotaGuardedModel>[0], settlement: ReturnType<typeof settleInput>): Promise<void> {
   const retry = input.settlementRetry ?? { attempts: 3, baseDelayMs: 50 };
-  let lastError: unknown;
-  for (let attempt = 0; attempt < retry.attempts; attempt++) {
-    try { await input.ledger.settleDurably(settlement); return; } catch (error) { lastError = error; if (attempt + 1 < retry.attempts && retry.baseDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, retry.baseDelayMs * 2 ** attempt)); }
+  let attempt = 0;
+  for (;;) {
+    try { await input.ledger.settleDurably(settlement); return; } catch { if (retry.baseDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(60_000, retry.baseDelayMs * 2 ** Math.min(attempt++, 8)))); }
   }
-  await input.ledger.persistEstimateFallback({ ...settlement, needsReconciliation: true, error: lastError instanceof Error ? lastError.message : String(lastError) });
-  throw lastError;
 }
 
 function estimateCost(options: unknown, inputPrice: number | null, outputPrice: number | null): number | null {

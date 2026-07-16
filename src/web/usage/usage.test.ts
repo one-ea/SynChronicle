@@ -7,7 +7,7 @@ describe("usage projections", () => {
   });
 
   it("derives blocked unknown-price models from active platform configuration", () => {
-    expect(platformModelAvailability([{ provider: "openai", model: "known", status: "active", metadata: {} }, { provider: "custom", model: "unknown", status: "active", metadata: { priceStatus: "unknown" } }, { provider: "off", model: "disabled", status: "disabled", metadata: { priceStatus: "unknown" } }])).toEqual([
+    expect(platformModelAvailability([{ provider: "openai", model: "known", status: "active", metadata: {}, inputPrice: "1", outputPrice: "2" }, { provider: "custom", model: "unknown", status: "active", metadata: { priceStatus: "unknown" }, inputPrice: "1", outputPrice: "2" }, { provider: "off", model: "disabled", status: "disabled", metadata: { priceStatus: "unknown" } }])).toEqual([
       { model: "openai/known", available: true, unknownPrice: false },
       { model: "custom/unknown", available: false, unknownPrice: true, reason: "unknown_price" },
     ]);

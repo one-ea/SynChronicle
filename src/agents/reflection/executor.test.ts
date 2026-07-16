@@ -113,7 +113,7 @@ describe("ReflectiveExecutor", () => {
     }).execute(task);
     expect(review).toHaveBeenCalledWith(expect.objectContaining({
       candidate: expect.stringContaining("actual rejected draft"),
-    }), undefined);
+    }), undefined, expect.any(Object));
     expect(review.mock.calls[0]![0].candidate).not.toContain("summary says approved");
   });
 
@@ -176,6 +176,7 @@ describe("ReflectiveExecutor", () => {
       candidates: [],
       revisionInstructions: [],
       priorIssues: [],
+      reviewerAttempt: 2,
       pendingCandidate: { round: 1, execution: candidate("pending") },
     };
     const execute = vi.fn();
@@ -186,6 +187,23 @@ describe("ReflectiveExecutor", () => {
     expect(result.output).toBe("pending");
     expect(execute).not.toHaveBeenCalled();
     expect(review).toHaveBeenCalledOnce();
+    expect(review).toHaveBeenCalledWith(expect.anything(), undefined, expect.objectContaining({ executionId: "exec-pending", round: 1, startingAttempt: 2 }));
+  });
+
+  it("persists reviewer attempt two before a crash and resumes it", async () => {
+    let state: import("./executor.js").ReflectionExecutionState<string> | null = null;
+    const crash = new Error("worker crashed during reviewer attempt two");
+    const firstReview = vi.fn(async (_request, _signal, context) => {
+      await context.onAttempt(2);
+      throw crash;
+    });
+    const stateStore = { load: vi.fn(async () => state), save: vi.fn(async (next) => { state = structuredClone(next); }) };
+    await expect(createExecutor({ executionId: "exec-round-2", execute: vi.fn().mockResolvedValue(candidate("v2")), reviewer: { review: firstReview }, stateStore }).execute(task)).rejects.toBe(crash);
+    expect(state).toMatchObject({ executionId: "exec-round-2", nextRound: 1, reviewerAttempt: 2, pendingCandidate: { round: 1 } });
+
+    const resumedReview = vi.fn().mockResolvedValue(reviewResult(90, true));
+    await createExecutor({ executionId: "exec-round-2", execute: vi.fn(), reviewer: { review: resumedReview }, stateStore }).execute(task);
+    expect(resumedReview).toHaveBeenCalledWith(expect.anything(), undefined, expect.objectContaining({ startingAttempt: 2 }));
   });
 
   it("returns a persisted selected result without regenerating or rereviewing", async () => {
@@ -284,7 +302,7 @@ describe("ReflectiveExecutor", () => {
     controller.abort(new Error("review cancelled"));
 
     await expect(pending).rejects.toThrow("review cancelled");
-    expect(review).toHaveBeenCalledWith(expect.any(Object), controller.signal);
+    expect(review).toHaveBeenCalledWith(expect.any(Object), controller.signal, expect.any(Object));
   });
 
   it("emits start, review, and final events in order", async () => {

@@ -3,6 +3,7 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Database } from "../../db/client.js";
 import { auditEvents, platformModels, platformSettings, quotaLedger, users } from "../../db/schema/index.js";
+import { hasKnownPlatformPrice } from "../../quota/pricing.js";
 
 const Settings = z.object({ concurrencyLimit: z.number().int().min(1).max(10_000) }).strict();
 
@@ -10,10 +11,9 @@ export function normalizeUsageSummary(row: { key: string; costUsd: string; input
   return { key: row.key, costUsd: Number(row.costUsd), inputTokens: Number(row.inputTokens), outputTokens: Number(row.outputTokens), latencyMs: Number(row.latencyMs), credentialSources: row.credentialSources, priceSources: row.priceSources, unknownPrice: row.priceSources.includes("unknown") };
 }
 
-export function platformModelAvailability(rows: Array<{ provider: string; model: string; status: "active" | "disabled"; metadata: unknown }>) {
+export function platformModelAvailability(rows: Array<{ provider: string; model: string; status: "active" | "disabled"; metadata: unknown; inputPrice?: unknown; outputPrice?: unknown }>) {
   return rows.filter((row) => row.status === "active").map((row) => {
-    const metadata = row.metadata && typeof row.metadata === "object" ? row.metadata as Record<string, unknown> : {};
-    const unknownPrice = metadata.priceStatus === "unknown" || metadata.pricingUnknown === true;
+    const unknownPrice = !hasKnownPlatformPrice(row.metadata, row.inputPrice ?? 0, row.outputPrice ?? 0);
     return { model: `${row.provider}/${row.model}`, available: !unknownPrice, unknownPrice, ...(unknownPrice ? { reason: "unknown_price" as const } : {}) };
   });
 }
@@ -38,7 +38,7 @@ export const usageRoutes: FastifyPluginAsync<{ db: Database }> = async (app, { d
     const [user] = await db.select({ concurrencyLimit: users.concurrencyLimit, budgetUsd: users.budgetUsd }).from(users).where(eq(users.id, request.auth.userId)).limit(1);
     const [setting] = await db.select().from(platformSettings).where(eq(platformSettings.id, 1)).limit(1);
     const [latest] = await db.select({ balance: quotaLedger.balance }).from(quotaLedger).where(eq(quotaLedger.userId, request.auth.userId)).orderBy(desc(quotaLedger.createdAt)).limit(1);
-    const configuredModels = await db.select({ provider: platformModels.provider, model: platformModels.model, status: platformModels.status, metadata: platformModels.metadata }).from(platformModels);
+    const configuredModels = await db.select({ provider: platformModels.provider, model: platformModels.model, status: platformModels.status, metadata: platformModels.metadata, inputPrice: platformModels.inputPrice, outputPrice: platformModels.outputPrice }).from(platformModels);
     const fields = { key: sql<string>`''`, costUsd: sql<string>`sum(coalesce((${quotaLedger.metadata}->>'actualCostUsd')::numeric, 0))`, inputTokens: sql<string>`sum(coalesce((${quotaLedger.metadata}->'usage'->>'inputTokens')::bigint, 0))`, outputTokens: sql<string>`sum(coalesce((${quotaLedger.metadata}->'usage'->>'outputTokens')::bigint, 0))`, latencyMs: sql<string>`sum(coalesce((${quotaLedger.metadata}->>'latencyMs')::numeric, 0))`, credentialSources: sql<string[]>`array_agg(distinct coalesce(${quotaLedger.metadata}->>'credentialSource', 'unknown'))`, priceSources: sql<string[]>`array_agg(distinct coalesce(${quotaLedger.metadata}->>'priceSource', 'unknown'))` };
     const where = and(eq(quotaLedger.userId, request.auth.userId), eq(quotaLedger.operation, "settle"));
     const perAgentRows = await db.select({ ...fields, key: sql<string>`coalesce(${quotaLedger.metadata}->'usage'->>'agent', 'unknown')` }).from(quotaLedger).where(where).groupBy(sql`${quotaLedger.metadata}->'usage'->>'agent'`);

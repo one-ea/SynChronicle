@@ -122,29 +122,25 @@ export class DatabaseQuotaLedger {
   }
 
   async heartbeat(reservationId: string, taskId: string, leaseVersion: number): Promise<boolean> {
-    const [updated] = await this.db.update(quotaReservations).set({ heartbeatAt: new Date(), updatedAt: new Date() }).where(and(eq(quotaReservations.id, reservationId), eq(quotaReservations.taskId, taskId), eq(quotaReservations.leaseVersion, leaseVersion), eq(quotaReservations.status, "reserved"))).returning({ id: quotaReservations.id });
+    const [updated] = await this.db.update(quotaReservations).set({ heartbeatAt: new Date(), updatedAt: new Date() }).where(and(eq(quotaReservations.id, reservationId), eq(quotaReservations.taskId, taskId), eq(quotaReservations.leaseVersion, leaseVersion), inArray(quotaReservations.status, ["reserved", "provider_started"]))).returning({ id: quotaReservations.id });
     return Boolean(updated);
+  }
+
+  async markProviderStarted(reservationId: string, taskId: string, leaseVersion: number): Promise<void> {
+    const [updated] = await this.db.update(quotaReservations).set({ status: "provider_started", heartbeatAt: new Date(), updatedAt: new Date() }).where(and(eq(quotaReservations.id, reservationId), eq(quotaReservations.taskId, taskId), eq(quotaReservations.leaseVersion, leaseVersion), eq(quotaReservations.status, "reserved"))).returning({ id: quotaReservations.id });
+    if (!updated) throw new Error("reservation could not persist provider_started");
   }
 
   async settleDurably(input: SettleQuotaInput & { credentialSource?: string; priceSource?: string; latencyMs?: number }): Promise<void> { await this.enqueueSettlementIntent(input); await this.processPendingOutbox(); }
   async releaseDurably(input: Parameters<DatabaseQuotaLedger["release"]>[0]): Promise<void> { await this.enqueueOutbox(input.reservationId, "release", input); await this.processPendingOutbox(); }
 
-  async persistEstimateFallback(input: SettleQuotaInput & { needsReconciliation: true; error: string }): Promise<void> {
+  async settleInterrupted(input: Parameters<DatabaseQuotaLedger["release"]>[0] & { error: string }): Promise<void> {
     await this.db.transaction(async (tx) => {
       const [reservation] = await tx.select({ row: quotaReservations, ledger: quotaLedger }).from(quotaReservations).innerJoin(quotaLedger, eq(quotaLedger.id, quotaReservations.id)).where(eq(quotaReservations.id, input.reservationId)).limit(1).for("update");
       if (!reservation || reservation.row.status === "settled" || reservation.row.status === "released" || reservation.row.status === "needs_reconciliation") return;
-      const { needsReconciliation, error, ...settlementIntent } = input;
-      await this.append(reservation.row.userId, 0, { ...input, operation: "estimate_settle", idempotencyKey: key(reservation.row.runId, reservation.row.modelCallId, "estimate_settle"), source: "platform_model_fallback", metadata: { estimatedCostUsd: -money(reservation.ledger.amount), needsReconciliation, error: error.slice(0, 500), settlementIntent } }, tx);
-      await tx.update(quotaReservations).set({ status: "needs_reconciliation", providerCompletedAt: new Date(), updatedAt: new Date() }).where(eq(quotaReservations.id, input.reservationId));
-    });
-  }
-
-  async settleAtEstimate(input: Parameters<DatabaseQuotaLedger["release"]>[0] & { error: string }): Promise<void> {
-    await this.db.transaction(async (tx) => {
-      const [reservation] = await tx.select({ row: quotaReservations, ledger: quotaLedger }).from(quotaReservations).innerJoin(quotaLedger, eq(quotaLedger.id, quotaReservations.id)).where(eq(quotaReservations.id, input.reservationId)).limit(1).for("update");
-      if (!reservation || reservation.row.status === "settled" || reservation.row.status === "released") return;
-      await this.append(reservation.row.userId, 0, { ...input, operation: "estimate_settle", idempotencyKey: key(reservation.row.runId, reservation.row.modelCallId, "estimate_settle"), source: "platform_model_fallback", metadata: { estimatedCostUsd: -money(reservation.ledger.amount), priceSource: "estimate", error: input.error.slice(0, 500) } }, tx);
-      await tx.update(quotaReservations).set({ status: "settled", providerCompletedAt: new Date(), updatedAt: new Date() }).where(eq(quotaReservations.id, input.reservationId));
+      const estimatedCostUsd = -money(reservation.ledger.amount);
+      await this.append(reservation.row.userId, 0, { ...input, operation: "estimate_settle", idempotencyKey: key(reservation.row.runId, reservation.row.modelCallId, "estimate_settle"), source: "platform_model_interrupted", metadata: { estimatedCostUsd, actualCostUsd: estimatedCostUsd, priceSource: "estimate", needsReconciliation: true, error: input.error.slice(0, 500) } }, tx);
+      await tx.update(quotaReservations).set({ status: "needs_reconciliation", updatedAt: new Date() }).where(eq(quotaReservations.id, input.reservationId));
     });
   }
 
@@ -169,30 +165,22 @@ export class DatabaseQuotaLedger {
   async reconcile(input: { olderThan: Date; now?: Date }): Promise<number> {
     const now = input.now ?? new Date();
     await this.processPendingOutbox();
-    const fallbacks = await this.db.select({ reservation: quotaReservations, metadata: quotaLedger.metadata }).from(quotaReservations).innerJoin(quotaLedger, and(eq(quotaLedger.reservationId, quotaReservations.id), eq(quotaLedger.operation, "estimate_settle"))).where(eq(quotaReservations.status, "needs_reconciliation"));
-    let reconciled = 0;
-    for (const fallback of fallbacks) {
-      const settlementIntent = fallback.metadata && typeof fallback.metadata === "object" ? (fallback.metadata as Record<string, unknown>).settlementIntent : undefined;
-      if (!settlementIntent || typeof settlementIntent !== "object") continue;
-      await this.enqueueSettlementIntent(settlementIntent as SettleQuotaInput);
-      reconciled++;
-    }
-    if (reconciled > 0) await this.processPendingOutbox();
-    const reservations = await this.db.select({ reservation: quotaReservations }).from(quotaReservations).leftJoin(tasks, eq(tasks.id, quotaReservations.taskId)).where(and(inArray(quotaReservations.status, ["reserved", "provider_completed"]), lt(quotaReservations.heartbeatAt, input.olderThan), or(sql`${tasks.id} is null`, ne(tasks.leaseVersion, quotaReservations.leaseVersion), sql`${tasks.status} not in ('leased', 'running')`, sql`${tasks.leaseExpiresAt} is null`, sql`${tasks.leaseExpiresAt} <= ${now}`)));
-    let released = reconciled;
+    const reservations = await this.db.select({ reservation: quotaReservations }).from(quotaReservations).leftJoin(tasks, eq(tasks.id, quotaReservations.taskId)).where(and(inArray(quotaReservations.status, ["reserved", "provider_started", "provider_completed"]), lt(quotaReservations.heartbeatAt, input.olderThan), or(sql`${tasks.id} is null`, ne(tasks.leaseVersion, quotaReservations.leaseVersion), sql`${tasks.status} not in ('leased', 'running')`, sql`${tasks.leaseExpiresAt} is null`, sql`${tasks.leaseExpiresAt} <= ${now}`)));
+    let released = 0;
     for (const { reservation } of reservations) {
       const terminalInput = { reservationId: reservation.id, userId: reservation.userId, projectId: reservation.projectId, runId: reservation.runId, modelCallId: reservation.modelCallId, taskId: reservation.taskId, leaseVersion: reservation.leaseVersion };
       if (reservation.status === "provider_completed") {
         const [intent] = await this.db.select({ id: quotaSettlementOutbox.id }).from(quotaSettlementOutbox).where(and(eq(quotaSettlementOutbox.reservationId, reservation.id), eq(quotaSettlementOutbox.action, "settle"))).limit(1);
         if (intent) continue;
-        await this.settleAtEstimate({ ...terminalInput, error: "actual usage intent missing after provider completion" });
-      } else await this.releaseDurably(terminalInput);
+        await this.settleInterrupted({ ...terminalInput, error: "actual usage intent missing after provider completion" });
+      } else if (reservation.status === "provider_started") await this.settleInterrupted({ ...terminalInput, error: "provider call interrupted after lease loss" });
+      else await this.releaseDurably(terminalInput);
       released++;
     }
     return released;
   }
 
-  async reservationState(runId: string, modelCallId: string): Promise<"reserved" | "provider_completed" | "needs_reconciliation" | "settled" | "released" | null> {
+  async reservationState(runId: string, modelCallId: string): Promise<"reserved" | "provider_started" | "provider_completed" | "needs_reconciliation" | "settled" | "released" | null> {
     const [row] = await this.db.select({ status: quotaReservations.status }).from(quotaReservations).where(and(eq(quotaReservations.runId, runId), eq(quotaReservations.modelCallId, modelCallId))).limit(1);
     return row?.status ?? null;
   }
@@ -212,9 +200,9 @@ export class DatabaseQuotaLedger {
   private lock(tx: Executor, userId: string) { return tx.execute(sql`select pg_advisory_xact_lock(hashtext(${userId}))`); }
   private async byKey(tx: Executor, idempotencyKey: string) { const [row] = await tx.select().from(quotaLedger).where(eq(quotaLedger.idempotencyKey, idempotencyKey)).limit(1); return row; }
   private async reservation(tx: Executor, reservationId: string, userId: string) { const [row] = await tx.select().from(quotaLedger).where(and(eq(quotaLedger.id, reservationId), eq(quotaLedger.userId, userId), eq(quotaLedger.operation, "reserve"))).limit(1); return row; }
-  private async settledSpend(tx: Executor, userId: string) { const [row] = await tx.select({ value: sql<string>`coalesce(sum((metadata->>'actualCostUsd')::numeric), 0)` }).from(quotaLedger).where(and(eq(quotaLedger.userId, userId), eq(quotaLedger.operation, "settle"))); return money(row?.value); }
+  private async settledSpend(tx: Executor, userId: string) { const [row] = await tx.select({ value: sql<string>`coalesce(sum(case when ${quotaLedger.operation} = 'settle' then coalesce((${quotaLedger.metadata}->>'actualCostUsd')::numeric, 0) when ${quotaLedger.operation} = 'estimate_settle' and not exists (select 1 from quota_ledger settled where settled.reservation_id = ${quotaLedger.reservationId} and settled.operation = 'settle') then coalesce((${quotaLedger.metadata}->>'estimatedCostUsd')::numeric, 0) else 0 end), 0)` }).from(quotaLedger).where(and(eq(quotaLedger.userId, userId), inArray(quotaLedger.operation, ["settle", "estimate_settle"]))); return money(row?.value); }
   private async enqueueOutbox(reservationId: string, action: "settle" | "release", payload: unknown) { await this.db.insert(quotaSettlementOutbox).values({ reservationId, action, payload }).onConflictDoNothing({ target: [quotaSettlementOutbox.reservationId, quotaSettlementOutbox.action] }); }
-  private async enqueueSettlementIntent(input: SettleQuotaInput) { await this.db.transaction(async (tx) => { await tx.insert(quotaSettlementOutbox).values({ reservationId: input.reservationId, action: "settle", payload: input }).onConflictDoNothing({ target: [quotaSettlementOutbox.reservationId, quotaSettlementOutbox.action] }); await tx.update(quotaReservations).set({ status: "provider_completed", providerCompletedAt: new Date(), heartbeatAt: new Date(), updatedAt: new Date() }).where(and(eq(quotaReservations.id, input.reservationId), eq(quotaReservations.status, "reserved"))); }); }
+  private async enqueueSettlementIntent(input: SettleQuotaInput) { await this.db.transaction(async (tx) => { await tx.insert(quotaSettlementOutbox).values({ reservationId: input.reservationId, action: "settle", payload: input }).onConflictDoNothing({ target: [quotaSettlementOutbox.reservationId, quotaSettlementOutbox.action] }); await tx.update(quotaReservations).set({ status: "provider_completed", providerCompletedAt: new Date(), heartbeatAt: new Date(), updatedAt: new Date() }).where(and(eq(quotaReservations.id, input.reservationId), eq(quotaReservations.status, "provider_started"))); }); }
 }
 
 export const reserveQuota = (ledger: DatabaseQuotaLedger, input: ReserveQuotaInput) => ledger.reserve(input);

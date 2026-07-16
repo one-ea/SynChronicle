@@ -15,6 +15,13 @@ export interface ReviewRequest {
   priorIssues: string[];
 }
 
+export interface ReviewExecutionContext {
+  executionId: string;
+  round: number;
+  startingAttempt: number;
+  onAttempt(attempt: number): Promise<void>;
+}
+
 export interface ReviewerOptions {
   model: LanguageModelInstance;
   generate?: Generate;
@@ -61,17 +68,20 @@ export class Reviewer {
     this.nextInvocationId = nextInvocationId;
   }
 
-  async review(request: ReviewRequest, signal?: AbortSignal): Promise<ReviewResult> {
+  async review(request: ReviewRequest, signal?: AbortSignal, context?: ReviewExecutionContext): Promise<ReviewResult> {
     let lastError: unknown;
 
-    for (let attempt = 0; attempt <= this.retryLimit; attempt++) {
+    const firstAttempt = context?.startingAttempt ?? 1;
+    for (let attempt = firstAttempt; attempt <= this.retryLimit + 1; attempt++) {
       signal?.throwIfAborted();
       if (!this.canContinue()) throw new ReviewerError("review stopped by budget policy", { cause: lastError });
+      await context?.onAttempt(attempt);
       let raw: Awaited<ReturnType<Generate>>;
       const startedAt = this.now();
       try {
         const options = this.generationOptions?.() ?? {};
-        const invocationId = this.nextInvocationId ? await this.nextInvocationId({ agent: "reviewer", kind: "generate", logicalKey: `reviewer:generate:${++this.invocationSequence}` }) : undefined;
+        const logicalKey = context ? `${context.executionId}:round:${context.round}:reviewer:attempt:${attempt}:generate` : `reviewer:generate:${++this.invocationSequence}`;
+        const invocationId = this.nextInvocationId ? await this.nextInvocationId({ agent: "reviewer", kind: "generate", logicalKey }) : undefined;
         raw = await this.generate({
           model: this.model,
           prompt: buildReviewPrompt(request),

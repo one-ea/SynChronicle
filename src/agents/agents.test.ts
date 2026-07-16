@@ -201,6 +201,21 @@ describe("Agent", () => {
 
     expect(logicalKeys).toEqual(["writer:generate:1", "writer:generate:2"]);
   });
+
+  it("uses persisted reflection execution and round in candidate invocation IDs", async () => {
+    const logicalKeys: string[] = [];
+    const executor = {
+      execute: async (_task: unknown, generate: (prompt: string, signal?: AbortSignal, context?: { executionId: string; round: number; operation: string }) => Promise<ReturnType<typeof generated>>) => ({
+        executionId: "exec-resumed",
+        output: await generate("round two", undefined, { executionId: "exec-resumed", round: 2, operation: "candidate" }),
+      }),
+    };
+    const agent = createAgent({ name: "writer", model: mockModel({}), system: "system", executor: executor as never, nextInvocationId: async ({ logicalKey }) => { logicalKeys.push(logicalKey); return "call-id"; } });
+
+    await agent.generate("objective");
+
+    expect(logicalKeys).toEqual(["exec-resumed:round:2:writer:candidate:generate"]);
+  });
 });
 
 describe("ContextManager", () => {

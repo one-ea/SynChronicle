@@ -15,6 +15,11 @@ it("diagnoses unknown versions and extra fields in persisted execution state", (
   expect(() => parseReflectionExecutionState({ ...base, unexpected: true })).toThrow(/schema\/version invalid/);
 });
 
+it("preserves reviewerAttempt in durable reflection state", () => {
+  const state = { version: 1, executionId: "exec", status: "running", task: { objective: "write", constraints: [] }, nextRound: 2, candidates: [], revisionInstructions: [], priorIssues: [], reviewerAttempt: 2 };
+  expect(parseReflectionExecutionState(state)).toMatchObject({ reviewerAttempt: 2 });
+});
+
 describe("reflection schemas", () => {
   it.each([0, 85, 100])("accepts review score %s", (score) => {
     expect(ReviewResultSchema.parse(reviewResult(score)).score).toBe(score);

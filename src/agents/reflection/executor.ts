@@ -1,5 +1,5 @@
 import { getReviewRubric } from "./rubrics.js";
-import type { ReviewRequest } from "./reviewer.js";
+import type { ReviewExecutionContext, ReviewRequest } from "./reviewer.js";
 import type { AgentRole, ReflectionCandidate, ReflectiveResult, ReviewIssue, ReviewResult } from "./types.js";
 
 export interface ReflectionTask {
@@ -38,6 +38,7 @@ export interface ReflectionExecutionState<T> {
   candidates: ReflectionCandidate<T>[];
   revisionInstructions: string[];
   priorIssues: ReviewIssue[];
+  reviewerAttempt?: number;
   pendingCandidate?: { round: number; execution: ExecutionCandidate<T> };
   selectedResult?: ReflectiveResult<T>;
 }
@@ -48,7 +49,7 @@ export interface ReflectionStateStore<T> {
 }
 
 interface ReviewerLike {
-  review(request: ReviewRequest, signal?: AbortSignal): Promise<ReviewResult>;
+  review(request: ReviewRequest, signal?: AbortSignal, context?: ReviewExecutionContext): Promise<ReviewResult>;
 }
 
 export interface ReflectiveExecutorOptions<T> {
@@ -122,7 +123,7 @@ export class ReflectiveExecutor<T> {
     if (restored?.executionId === this.executionId && restored.status === "selected" && restored.selectedResult) return restored.selectedResult;
     const state: ReflectionExecutionState<T> = restored?.executionId === this.executionId && restored.status === "running"
       ? restored
-      : { version: 1, executionId: this.executionId, status: "running", task, nextRound: 1, candidates: [], revisionInstructions: [], priorIssues: [] };
+      : { version: 1, executionId: this.executionId, status: "running", task, nextRound: 1, candidates: [], revisionInstructions: [], priorIssues: [], reviewerAttempt: 1 };
     const candidates = state.candidates;
     const activeTask = state.task;
     let revisionInstructions = state.revisionInstructions;
@@ -152,7 +153,7 @@ export class ReflectiveExecutor<T> {
         candidate: reviewCandidate(execution),
         rubric,
         priorIssues: priorIssues.map((issue) => issue.recommendation),
-      }, signal), signal);
+      }, signal, { executionId: this.executionId, round, startingAttempt: state.reviewerAttempt ?? 1, onAttempt: async (attempt) => { state.reviewerAttempt = attempt; await this.stateStore?.save(state); } }), signal);
       signal?.throwIfAborted();
       const review = { ...rawReview, passed: rawReview.score >= rubric.threshold };
       const candidate: ReflectionCandidate<T> = {
@@ -165,6 +166,7 @@ export class ReflectiveExecutor<T> {
       };
       candidates.push(candidate);
       state.pendingCandidate = undefined;
+      state.reviewerAttempt = 1;
       state.nextRound = round + 1;
       revisionInstructions = review.revisionInstructions;
       priorIssues = review.issues;

@@ -119,9 +119,20 @@ describe("Reviewer", () => {
       },
     });
 
-    await reviewer.review(request);
+    await reviewer.review(request, undefined, { executionId: "exec-1", round: 2, startingAttempt: 1, onAttempt: async () => {} });
 
-    expect(logicalKeys).toEqual(["reviewer:generate:1", "reviewer:generate:2"]);
+    expect(logicalKeys).toEqual(["exec-1:round:2:reviewer:attempt:1:generate", "exec-1:round:2:reviewer:attempt:2:generate"]);
+  });
+
+  it("resumes reviewer attempt two without rolling the durable key back", async () => {
+    const logicalKeys: string[] = [];
+    const attempts: number[] = [];
+    const reviewer = new Reviewer({ model, generate: vi.fn().mockResolvedValue({ text: JSON.stringify(validReview()), usage: {} }), retryLimit: 2, nextInvocationId: async ({ logicalKey }) => { logicalKeys.push(logicalKey); return "review-call"; } });
+
+    await reviewer.review(request, undefined, { executionId: "exec-crash", round: 2, startingAttempt: 2, onAttempt: async (attempt) => { attempts.push(attempt); } });
+
+    expect(attempts).toEqual([2]);
+    expect(logicalKeys).toEqual(["exec-crash:round:2:reviewer:attempt:2:generate"]);
   });
 
   it("checks the budget policy before each reviewer retry", async () => {

@@ -5,11 +5,12 @@ import { usageModelIdentity } from "../providers/failover.js";
 
 type LanguageModelInstance = Exclude<LanguageModel, string>;
 export type GenerateResult = Awaited<ReturnType<typeof generateText>>;
+export interface ModelInvocationContext { executionId: string; round: number; operation: string }
 
 export interface AgentExecutor {
   execute(
     task: { objective: string; constraints: string[] },
-    generate: (prompt: string, signal?: AbortSignal) => Promise<GenerateResult>,
+    generate: (prompt: string, signal?: AbortSignal, context?: ModelInvocationContext) => Promise<GenerateResult>,
     signal?: AbortSignal,
   ): Promise<{ executionId?: string; output: GenerateResult; qualityRisk?: unknown; finalReview?: unknown; rounds?: number; stagedArtifactIds?: string[] }>;
 }
@@ -93,9 +94,9 @@ export class Agent {
     try {
       result = await this.executor.execute(
         { objective: prompt, constraints: [] },
-        async (revisionPrompt, executionSignal) => {
+        async (revisionPrompt, executionSignal, context) => {
           this.history = structuredClone(baseline);
-          return this.generateDirect(revisionPrompt, executionSignal);
+          return this.generateDirect(revisionPrompt, executionSignal, context);
         },
         signal,
       );
@@ -109,11 +110,11 @@ export class Agent {
     return result.output;
   }
 
-  private async generateDirect(prompt: string, signal?: AbortSignal) {
+  private async generateDirect(prompt: string, signal?: AbortSignal, context?: ModelInvocationContext) {
     const messages = await this.prepare(prompt);
     signal?.throwIfAborted();
     const options = this.generationOptions?.() ?? {};
-    const invocationId = await this.invocationId("generate");
+    const invocationId = await this.invocationId("generate", context);
     const result = await generateText({ model: this.model, system: this.system, messages, tools: this.tools, stopWhen: stepCountIs(this.maxSteps), ...(invocationId ? { providerOptions: { synchronicle: { invocationId } } } : {}), ...(options.temperature === undefined ? {} : { temperature: options.temperature }), ...(options.maxTokens === undefined ? {} : { maxOutputTokens: options.maxTokens }), ...(signal ? { abortSignal: signal } : {}) });
     signal?.throwIfAborted();
     this.history.push({ role: "assistant", content: result.text });
@@ -152,8 +153,9 @@ export class Agent {
     return this.history;
   }
 
-  private invocationId(kind: "generate" | "stream"): Promise<string | undefined> {
+  private invocationId(kind: "generate" | "stream", context?: ModelInvocationContext): Promise<string | undefined> {
     if (!this.nextInvocationId) return Promise.resolve(undefined);
+    if (context) return this.nextInvocationId({ agent: this.name, kind, logicalKey: `${context.executionId}:round:${context.round}:${this.name}:${context.operation}:${kind}` });
     this.invocationSequence += 1;
     return this.nextInvocationId({ agent: this.name, kind, logicalKey: `${this.name}:${kind}:${this.invocationSequence}` });
   }
