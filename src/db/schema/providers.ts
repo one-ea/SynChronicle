@@ -118,7 +118,7 @@ export const modelCallContexts = pgTable("model_call_contexts", {
   sequence: integer("sequence").notNull(),
   leaseVersion: integer("lease_version").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-}, (table) => [uniqueIndex("model_call_contexts_task_scope_sequence_uq").on(table.taskId, table.scope, table.sequence), uniqueIndex("model_call_contexts_task_invocation_uq").on(table.taskId, table.invocationKey)]);
+}, (table) => [uniqueIndex("model_call_contexts_task_lease_scope_sequence_uq").on(table.taskId, table.leaseVersion, table.scope, table.sequence), uniqueIndex("model_call_contexts_task_lease_invocation_uq").on(table.taskId, table.leaseVersion, table.invocationKey)]);
 
 export const quotaReservations = pgTable("quota_reservations", {
   id: uuid("id").primaryKey().references(() => quotaLedger.id, { onDelete: "cascade" }),

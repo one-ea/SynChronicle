@@ -8,6 +8,7 @@ import {
   type AuthRole,
 } from "./session.js";
 import type { Database } from "../../db/client.js";
+import type { AuditRepositoryLike } from "../audit/repository.js";
 
 export interface RequestAuth {
   userId: string;
@@ -34,6 +35,7 @@ export interface AuthPluginOptions {
   repository?: AuthRepository;
   publicUrl: string;
   loginRateLimit?: { max: number; windowMs: number; capacity?: number };
+  audit?: AuditRepositoryLike;
 }
 
 export interface LoginRateLimiter {
@@ -102,5 +104,5 @@ export const authPlugin = fp<AuthPluginOptions>(async (app, options) => {
     return limiter.consume(ip);
   }
 
-  await app.register(authRoutes, { prefix: "/api/auth", repository, consumeLoginAttempt });
+  await app.register(authRoutes, { prefix: "/api/auth", repository, consumeLoginAttempt, audit: options.audit });
 }, { name: "synchronicle-auth" });

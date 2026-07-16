@@ -115,7 +115,7 @@ beforeAll(async () => {
   fixturePasswordHash = await hashPassword("correct horse battery staple");
 });
 
-async function authenticatedTestApp() {
+async function authenticatedTestApp(audit?: { write: ReturnType<typeof vi.fn> }) {
   const repository = new MemoryAuthRepository();
   const app = Fastify();
   await app.register(productionSecurityPlugin, { publicUrl: "https://app.example.test", rateLimits: { default: { max: 100, windowMs: 60_000 } } });
@@ -123,6 +123,7 @@ async function authenticatedTestApp() {
     repository,
     publicUrl: "https://app.example.test",
     loginRateLimit: { max: 2, windowMs: 60_000 },
+    audit,
   });
   await app.after();
   return { app, repository };
@@ -143,6 +144,18 @@ async function addUser(repository: MemoryAuthRepository, overrides: Partial<Auth
 }
 
 describe("password authentication", () => {
+  it("audits login success and unknown-user failure without storing the username", async () => {
+    const audit = { write: vi.fn(async () => undefined) };
+    const { app, repository } = await authenticatedTestApp(audit);
+    await addUser(repository);
+    await app.inject({ method: "POST", url: "/api/auth/login", headers: { origin: "https://app.example.test" }, payload: { username: "alice", password: "correct horse battery staple" } });
+    await app.inject({ method: "POST", url: "/api/auth/login", headers: { origin: "https://app.example.test" }, payload: { username: "unknown-user", password: "wrong" } });
+
+    expect(audit.write).toHaveBeenNthCalledWith(1, expect.objectContaining({ actorId: "user-1", action: "auth.login", result: "success", requestId: expect.any(String), metadata: expect.objectContaining({ ip: expect.any(String), time: expect.any(String) }) }));
+    expect(audit.write).toHaveBeenNthCalledWith(2, expect.objectContaining({ actorId: null, action: "auth.login", result: "invalid", metadata: expect.objectContaining({ usernameHash: expect.stringMatching(/^[a-f0-9]{64}$/) }) }));
+    expect(JSON.stringify(audit.write.mock.calls)).not.toContain("unknown-user");
+    await app.close();
+  });
   it("queries sessions by digest while excluding revoked and expired rows", () => {
     const now = new Date("2026-07-15T00:00:00.000Z");
     const query = buildActiveSessionQuery(

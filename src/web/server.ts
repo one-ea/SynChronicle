@@ -92,9 +92,11 @@ export async function buildWebServer(options: WebServerOptions): Promise<WebServ
       },
     },
   });
+  const audit = new AuditRepository(database);
   await app.register(authPlugin, {
     db: database,
     publicUrl,
+    audit,
   });
   await app.register(websocket);
   const eventBroker = new PostgresEventBroker(database);
@@ -103,7 +105,6 @@ export async function buildWebServer(options: WebServerOptions): Promise<WebServ
     repository: new DatabaseEventRepository(database),
     broker: eventBroker,
   });
-  const audit = new AuditRepository(database);
   const mutations = new ProjectMutationService(
     databaseTransactionRunner(database),
     (executor) => new ProjectRepository(asProjectExecutor(executor)),

@@ -3,8 +3,9 @@ import { auditEvents } from "../../db/schema/index.js";
 import type { DatabaseTransaction } from "../projects/repository.js";
 
 export interface AuditEventInput {
-  actorId: string;
+  actorId: string | null;
   action: string;
+  targetType?: string;
   targetId: string | null;
   result: "success" | "invalid" | "not_found" | "conflict" | "error";
   requestId: string;
@@ -22,7 +23,7 @@ export class AuditRepository implements AuditRepositoryLike {
     await this.db.insert(auditEvents).values({
       userId: event.actorId,
       action: event.action,
-      targetType: "project",
+      targetType: event.targetType ?? "project",
       targetId: event.targetId,
       result: event.result,
       requestId: event.requestId,

@@ -113,6 +113,13 @@
       "when": 1784167920460,
       "tag": "0015_charming_wither",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1784192105835,
+      "tag": "0016_lease_fencing",
+      "breakpoints": true
     }
   ]
 }

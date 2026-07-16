@@ -42,6 +42,7 @@ export interface WorkerRunnerDependencies {
   leaseMs?: number;
   idleMs?: number;
   clock?: Pick<typeof globalThis, "setTimeout" | "clearTimeout">;
+  logger?: { error(fields: Record<string, unknown>, message: string): void };
   eventSink?: {
     appendEvent(scope: RunEventScope, event: NewRunEvent): Promise<RunEvent>;
     publish(wakeup: EventWakeup): Promise<void>;
@@ -72,9 +73,19 @@ export class WorkerRunner {
   }
 
   async run(signal: AbortSignal): Promise<void> {
+    let consecutiveFailures = 0;
     while (!signal.aborted) {
       let worked = false;
-      try { worked = await this.runOnce(signal); } catch (error) { if (signal.aborted) throw error; }
+      try {
+        worked = await this.runOnce(signal);
+        consecutiveFailures = 0;
+      } catch (error) {
+        if (signal.aborted) throw error;
+        consecutiveFailures += 1;
+        this.dependencies.logger?.error({ workerId: this.dependencies.workerId, consecutiveFailures, error: redactWorkerError(error) }, "worker loop failed");
+        await delay(Math.min(30_000, this.idleMs * 2 ** Math.min(consecutiveFailures - 1, 8)), signal, this.clock);
+        continue;
+      }
       if (!worked) await delay(this.idleMs, signal, this.clock);
     }
   }
@@ -200,6 +211,11 @@ export class WorkerRunner {
       if (!hostClosed) await host.close().catch(() => undefined);
     }
   }
+}
+
+function redactWorkerError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.replace(/(password|token|secret|authorization|api[-_]?key)\s*[=:]\s*[^\s,;]+/gi, "$1=[REDACTED]").slice(0, 500);
 }
 
 function parseInteractiveCommand(instruction: string):

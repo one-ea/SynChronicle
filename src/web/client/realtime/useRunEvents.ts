@@ -23,6 +23,7 @@ export interface RunViewState {
 
 const MAX_VISIBLE_EVENTS = 200;
 export const initialRunViewState: RunViewState = { lastSequence: 0, stream: "", events: [], agents: [], commands: {} };
+type RunViewAction = RunEventMessage | { reset: RunEventMessage[] };
 
 export function reconnectDelay(attempt: number, random: () => number = Math.random): number {
   const base = Math.min(800 * 2 ** Math.max(0, attempt - 1), 15_000);
@@ -74,15 +75,26 @@ interface UseRunEventsOptions {
 }
 
 export function useRunEvents({ runId, initialEvents = [], subscribe }: UseRunEventsOptions) {
-  const [state, dispatch] = useReducer(reduceRunEvent, initialEvents, (events) => events.reduce(reduceRunEvent, initialRunViewState));
+  const [state, dispatch] = useReducer((current: RunViewState, action: RunViewAction) => "reset" in action ? action.reset.reduce(reduceRunEvent, initialRunViewState) : reduceRunEvent(current, action), initialEvents, (events) => events.reduce(reduceRunEvent, initialRunViewState));
   const [connection, setConnection] = useState<ConnectionState>(runId ? "connecting" : "idle");
   const cursorRef = useRef(state.lastSequence);
-  cursorRef.current = state.lastSequence;
+  const runRef = useRef(runId);
+  const runChanged = runRef.current !== runId;
+  if (runChanged) {
+    runRef.current = runId;
+    cursorRef.current = 0;
+  } else cursorRef.current = state.lastSequence;
+
+  useEffect(() => {
+    cursorRef.current = 0;
+    dispatch({ reset: initialEvents });
+    setConnection(runId ? "connecting" : "idle");
+  }, [runId]);
 
   useEffect(() => {
     if (subscribe) {
       setConnection("connected");
-      return subscribe(dispatch);
+      return subscribe((event) => dispatch(event));
     }
     if (!runId || typeof WebSocket === "undefined") {
       setConnection("idle");

@@ -9,21 +9,24 @@ export function quotaGuardedModel(input: { provider: string; modelName: string; 
     const pricing = input.resolvePricing ? await input.resolvePricing() : input.inputPrice === undefined || input.outputPrice === undefined ? null : { inputPrice: input.inputPrice, outputPrice: input.outputPrice };
     const estimatedCostUsd = estimateCost(options, pricing?.inputPrice ?? null, pricing?.outputPrice ?? null);
     const reservation = await input.ledger.reserve({ userId: input.userId, projectId: input.projectId, runId: input.runId, taskId: input.taskId, leaseVersion: input.leaseVersion, modelCallId, estimatedCostUsd, model: `${input.provider}/${input.modelName}` });
+    const providerAbort = new AbortController();
+    const sourceSignal = abortSignal(options);
+    if (sourceSignal) sourceSignal.addEventListener("abort", () => providerAbort.abort(sourceSignal.reason), { once: true });
     let prepared: PreparedProviderCall;
-    try { prepared = await prepareProvider(input.model, method, options); }
+    try { prepared = await prepareProvider(input.model, method, withAbortSignal(options, providerAbort.signal)); }
     catch (error) { await input.ledger.releaseDurably({ ...releaseInput(input, reservation.id, modelCallId), reason: "provider_preflight_failed", errorCategory: "local_preflight", error: errorMessage(error) }); throw error; }
     try {
       await input.ledger.markProviderStarted(reservation.id, input.taskId, input.leaseVersion);
-      const stopHeartbeat = heartbeat(input, reservation.id);
+      const stopHeartbeat = heartbeat(input, reservation.id, providerAbort);
       const startedAt = Date.now();
       let providerCompleted = false;
       try {
         const result = await prepared.dispatch() as Record<string, unknown>;
         providerCompleted = true;
-        if (method === "doStream") { stopHeartbeat(); return await wrapStreamResult(result, async (usage) => persistSettlement(input, settleInput(input, pricing, reservation.id, modelCallId, usage, Date.now() - startedAt), abortSignal(options)), async () => input.ledger.settleInterrupted({ ...releaseInput(input, reservation.id, modelCallId), reason: "provider_stream_missing_usage", errorCategory: "missing_usage", error: "provider stream ended without usage" }), () => input.ledger.heartbeat(reservation.id, input.taskId, input.leaseVersion)); }
+        if (method === "doStream") { stopHeartbeat(); return await wrapStreamResult(result, async (usage) => persistSettlement(input, settleInput(input, pricing, reservation.id, modelCallId, usage, Date.now() - startedAt), providerAbort.signal), async () => input.ledger.settleInterrupted({ ...releaseInput(input, reservation.id, modelCallId), reason: "provider_stream_missing_usage", errorCategory: "missing_usage", error: "provider stream ended without usage" }), () => input.ledger.heartbeat(reservation.id, input.taskId, input.leaseVersion)); }
         const usage = usageFrom(result);
         if (!hasBillableUsage(usage)) await input.ledger.settleInterrupted({ ...releaseInput(input, reservation.id, modelCallId), reason: "provider_result_missing_usage", errorCategory: "missing_usage", error: "provider result omitted usage" });
-        else await persistSettlement(input, settleInput(input, pricing, reservation.id, modelCallId, usage, Date.now() - startedAt), abortSignal(options));
+        else await persistSettlement(input, settleInput(input, pricing, reservation.id, modelCallId, usage, Date.now() - startedAt), providerAbort.signal);
         stopHeartbeat();
         return result;
       } catch (error) {
@@ -108,11 +111,18 @@ function finite(value: unknown): number { return typeof value === "number" && Nu
 
 function releaseInput(input: Parameters<typeof quotaGuardedModel>[0], reservationId: string, modelCallId: string) { return { reservationId, userId: input.userId, projectId: input.projectId, runId: input.runId, taskId: input.taskId, leaseVersion: input.leaseVersion, modelCallId, model: `${input.provider}/${input.modelName}` }; }
 
-function heartbeat(input: Parameters<typeof quotaGuardedModel>[0], reservationId: string) {
-  const timer = setInterval(() => { void input.ledger.heartbeat(reservationId, input.taskId, input.leaseVersion); }, input.heartbeatMs ?? 10_000);
+function heartbeat(input: Parameters<typeof quotaGuardedModel>[0], reservationId: string, controller: AbortController) {
+  let running = false;
+  const timer = setInterval(() => {
+    if (running) return;
+    running = true;
+    void input.ledger.heartbeat(reservationId, input.taskId, input.leaseVersion).then((active) => { if (!active) controller.abort(new Error("task lease lost during provider call")); }).catch((error) => controller.abort(error)).finally(() => { running = false; });
+  }, input.heartbeatMs ?? 10_000);
   timer.unref?.();
   return () => clearInterval(timer);
 }
+
+function withAbortSignal(options: unknown, signal: AbortSignal): unknown { return options && typeof options === "object" ? { ...(options as Record<string, unknown>), abortSignal: signal } : { abortSignal: signal }; }
 
 async function wrapStreamResult(result: Record<string, unknown>, settle: (usage: Record<string, unknown>) => Promise<unknown>, release: () => Promise<unknown>, touch: () => Promise<unknown>) {
   const stream = result.stream;
@@ -123,7 +133,7 @@ async function wrapStreamResult(result: Record<string, unknown>, settle: (usage:
   const transformed = new ReadableStream({
     async pull(controller) {
       try {
-        await touch();
+        if (await touch() === false) throw new Error("task lease lost during provider stream");
         const next = await reader.read();
         if (next.done) { await finish(); controller.close(); return; }
         const value = next.value as { type?: string; usage?: Record<string, unknown> };

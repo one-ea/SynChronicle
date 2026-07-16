@@ -78,3 +78,25 @@ Retained risk: the IPv6 special-purpose range policy requires periodic maintenan
 - `git diff --check`: passed.
 
 PostgreSQL-backed Vitest, full Playwright execution, Docker build, Compose config, and Compose smoke remain pending CI evidence and stay unchecked.
+
+## Final Integration Gap Wave
+
+- Quota reservation, provider-started, heartbeat, settlement, release, and outbox writes now require the matching active task lease. Reclaimed attempts receive lease-scoped model call IDs; stale provider-started/provider-completed attempts are estimate-reconciled through the maintenance path.
+- Quota heartbeat and maintenance loops are serialized, rejection-safe, and observable. Lease loss aborts the Provider request and bounds settlement retries with the same abort signal.
+- Realtime client state resets cursor, reducer projection, stream, reconnect state, and command projection when `runId` changes. Regression covers sequence 99 on the old run followed by sequence 1 on the new run.
+- Workbench lifecycle events, control/start completion, and reconnect trigger a deduplicated deferred snapshot refresh. The full-stack Playwright scenario now asserts completed status and durable chapter body in browser UI.
+- Durable commit state stores `{ taskId, leaseVersion }`, clears on matching exit, finish, expiry, and reclaim, and cannot be cleared by an older Worker. API/UI waiting state only recognizes the current active task marker.
+- Authentication records login success/failure, logout, and password-change outcomes with request ID, actor/target, result, IP, and time. Unknown usernames are represented by SHA-256 only; audit failures are best-effort and logged.
+- Worker run-loop failures use injected structured logging with secret redaction and capped exponential backoff.
+
+### Final Wave Local Evidence
+
+- Target regressions: passed; PostgreSQL-conditional cases remain skipped without `TEST_DATABASE_URL`.
+- `pnpm typecheck`: passed.
+- `pnpm build`: passed.
+- `pnpm exec playwright test --list`: passed; 10 tests collected.
+- `npm pack --dry-run`: passed; 50 files, 860.7 kB package.
+- `pnpm drizzle-kit check`: passed.
+- `git diff --check`: passed.
+
+PostgreSQL-backed Vitest, full Playwright execution, Docker build, Compose config, and Compose smoke remain pending CI evidence and stay unchecked.

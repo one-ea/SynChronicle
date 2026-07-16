@@ -40,8 +40,9 @@ export async function startWorker(): Promise<void> {
   const eventBroker = new PostgresEventBroker(database);
   const scheduler = new SchedulerRepository(database, { eventBroker });
   const quotaLedger = new DatabaseQuotaLedger(database);
+  const logger = { error: (fields: Record<string, unknown>, message: string) => console.error(JSON.stringify({ level: "error", message, ...fields })) };
   await quotaLedger.reconcile({ olderThan: new Date(Date.now() - leaseMs * 2) });
-  const stopQuotaMaintenance = startQuotaMaintenance(quotaLedger, { intervalMs: Math.max(5_000, leaseMs), staleAfterMs: leaseMs * 2 });
+  const stopQuotaMaintenance = startQuotaMaintenance(quotaLedger, { intervalMs: Math.max(5_000, leaseMs), staleAfterMs: leaseMs * 2, logger });
   const config = await loadConfig(process.env.CONFIG_PATH);
   const bundle = loadAssets(config.style);
   const runner = new WorkerRunner({
@@ -49,6 +50,7 @@ export async function startWorker(): Promise<void> {
     workerId,
     leaseMs,
     idleMs,
+    logger,
     eventSink: {
       appendEvent: (scope, event) => events.appendEvent(scope, event),
       publish: (wakeup) => eventBroker.publish(wakeup),

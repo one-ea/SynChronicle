@@ -44,6 +44,7 @@ export interface RunCommandRepository {
   command(auth: RequestAuth, projectId: string, runId: string, command: RunCommand, payload?: unknown): Promise<RunCommandResult>;
   validateModelSelection?(auth: RequestAuth, selection: z.infer<typeof ModelSchema>): Promise<boolean>;
   commandStatus?(auth: RequestAuth, projectId: string, runId: string, commandId: string): Promise<{ commandId: string; status: string; retryable: boolean; failureCategory: string | null; errorMessage: string | null } | null>;
+  durableCommitActive?(runId: string, marker: unknown): Promise<boolean>;
 }
 
 interface RunRoutesOptions {
@@ -87,7 +88,9 @@ export const runRoutes: FastifyPluginAsync<RunRoutesOptions> = async (app, optio
       if (result === "missing") return reply.code(404).send(notFoundBody);
       if (result === "conflict") return reply.code(409).send(conflictBody);
       const resumeData = result.resumeData && typeof result.resumeData === "object" ? result.resumeData as Record<string, unknown> : {};
-      return reply.code(200).send({ run: result, waiting_for_durable_commit: command === "abort" && resumeData.durableCommit === true });
+      const marker = resumeData.durableCommit;
+      const waiting = command === "abort" && options.repository.durableCommitActive ? await options.repository.durableCommitActive(result.id, marker) : false;
+      return reply.code(200).send({ run: result, waiting_for_durable_commit: waiting });
     });
   }
 

@@ -47,6 +47,7 @@ class MemoryRuns implements RunCommandRepository {
     return next;
   }
   async commandStatus(auth: RequestAuth, projectId: string, runId: string, commandId: string) { const run = this.runs.get(runId); return run?.userId === auth.userId && run.projectId === projectId ? { commandId, status: "applied" as const, retryable: false, failureCategory: null, errorMessage: null } : null; }
+  async durableCommitActive(_runId: string, marker: unknown) { return Boolean(marker && typeof marker === "object"); }
 }
 
 async function testApp() {
@@ -119,9 +120,9 @@ describe("run command routes", () => {
     const headers = { "x-user-id": "alice" };
     const start = await app.inject({ method: "POST", url: "/api/projects/project-a/runs", headers, payload: { idempotencyKey: "commit-abort" } });
     const run = start.json().run as RunRecord;
-    repository.runs.set(run.id, { ...run, resumeData: { desiredState: "running", durableCommit: true } });
+    repository.runs.set(run.id, { ...run, resumeData: { desiredState: "running", durableCommit: { taskId: "task-1", leaseVersion: 1 } } });
     const abort = await app.inject({ method: "POST", url: `/api/projects/project-a/runs/${run.id}/abort`, headers });
-    expect(abort.json()).toMatchObject({ waiting_for_durable_commit: true, run: { resumeData: { desiredState: "cancelled", durableCommit: true } } });
+    expect(abort.json()).toMatchObject({ waiting_for_durable_commit: true, run: { resumeData: { desiredState: "cancelled", durableCommit: { taskId: "task-1", leaseVersion: 1 } } } });
     await app.close();
   });
 

@@ -51,4 +51,20 @@ describe("reconnectDelay", () => {
     expect(FakeWebSocket.instances).toHaveLength(4);
     expect(FakeWebSocket.instances[3]!.url).toContain("after=1");
   });
+
+  it("resets the cursor and projection when switching runs", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const hook = renderHook(({ runId, initialEvents }) => useRunEvents({ runId, initialEvents }), {
+      initialProps: { runId: "run-old", initialEvents: [{ sequence: 99, type: "stream.delta", payload: { text: "old" } }] },
+    });
+
+    expect(hook.result.current.state.lastSequence).toBe(99);
+    hook.rerender({ runId: "run-new", initialEvents: [] });
+    await act(async () => undefined);
+
+    expect(hook.result.current.state).toMatchObject({ lastSequence: 0, stream: "", events: [], commands: {} });
+    expect(FakeWebSocket.instances.at(-1)!.url).toContain("/run-new?after=0");
+    await act(async () => FakeWebSocket.instances.at(-1)!.emit("message", { data: JSON.stringify({ sequence: 1, type: "stream.delta", payload: { text: "new" } }) }));
+    expect(hook.result.current.state).toMatchObject({ lastSequence: 1, stream: "new" });
+  });
 });

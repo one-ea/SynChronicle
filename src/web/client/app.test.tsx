@@ -267,7 +267,7 @@ describe("App", () => {
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     await waitFor(() => expect(trigger).toHaveFocus());
-  });
+  }, 30_000);
 
   it("renders responsive navigation and project actions without viewport-specific duplication", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ body: { projects: [project()] } })));

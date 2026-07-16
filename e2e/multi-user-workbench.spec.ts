@@ -140,6 +140,9 @@ test("real Web, database, and Worker execute controls, recovery, and durable out
   const completed = await waitForState(control, runId, projectId, (value) => value.tasks.some((task) => task.status === "completed") && value.chapters.some(({ id, body }) => !baselineChapterIds.has(id) && body.includes(streamText)) && value.artifacts.some(({ id, contentText }) => !baselineArtifactIds.has(id) && contentText?.includes(streamText)), "recovered durable chapter and artifact commit");
   await page.context().setOffline(false);
   await expect(page.getByText(streamText)).toHaveCount(1, { timeout: 15_000 });
+  await expect(page.getByRole("complementary", { name: "运行状态" })).toContainText("completed", { timeout: 15_000 });
+  await page.getByRole("button", { name: /查看章节/ }).first().click();
+  await expect(page.locator(".chapter-reader")).toContainText(streamText, { timeout: 15_000 });
 
   expect(completed.events.map(({ sequence }) => sequence)).toEqual([...completed.events.map(({ sequence }) => sequence)].sort((left, right) => left - right));
   expect(completed.events.map(({ stableId }) => stableId).filter(Boolean)).toHaveLength(new Set(completed.events.map(({ stableId }) => stableId).filter(Boolean)).size);

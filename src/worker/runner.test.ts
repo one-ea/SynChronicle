@@ -59,6 +59,29 @@ function host(options: { checkpoint?: { taskFingerprint: string; projectVersion:
 }
 
 describe("WorkerRunner", () => {
+  it("logs redacted infrastructure failures and exponentially backs off", async () => {
+    vi.useFakeTimers();
+    try {
+      const repository = scheduler(null);
+      vi.mocked(repository.claimNextTask)
+        .mockRejectedValueOnce(new Error("database password=secret-token"))
+        .mockRejectedValueOnce(new Error("database still unavailable"))
+        .mockResolvedValue(null);
+      const logger = { error: vi.fn() };
+      const controller = new AbortController();
+      const running = new WorkerRunner({ scheduler: repository, createHost: async () => host().value, workerId: "worker-1", idleMs: 100, logger }).run(controller.signal);
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(repository.claimNextTask).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(199);
+      expect(repository.claimNextTask).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(repository.claimNextTask).toHaveBeenCalledTimes(3);
+      expect(logger.error).toHaveBeenCalledWith(expect.objectContaining({ workerId: "worker-1", consecutiveFailures: 1, error: expect.not.stringContaining("secret-token") }), "worker loop failed");
+      controller.abort();
+      await expect(running).rejects.toBeDefined();
+    } finally { vi.useRealTimers(); }
+  });
   it("recovers an expired task from the latest matching checkpoint", async () => {
     const claimed = task({ attempts: 2 });
     const repository = scheduler(claimed);

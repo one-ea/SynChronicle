@@ -45,19 +45,21 @@ export class DatabaseQuotaLedger {
 
   async acquireModelCall(input: { taskId: string; runId: string; scope: string; sequence: number; leaseVersion: number }): Promise<{ id: string }> {
     return this.db.transaction(async (tx) => {
-      const [existing] = await tx.select({ id: modelCallContexts.id }).from(modelCallContexts).where(and(eq(modelCallContexts.taskId, input.taskId), eq(modelCallContexts.scope, input.scope), eq(modelCallContexts.sequence, input.sequence))).limit(1);
+      await this.requireActiveLease(tx, input.taskId, input.leaseVersion);
+      const [existing] = await tx.select({ id: modelCallContexts.id }).from(modelCallContexts).where(and(eq(modelCallContexts.taskId, input.taskId), eq(modelCallContexts.leaseVersion, input.leaseVersion), eq(modelCallContexts.scope, input.scope), eq(modelCallContexts.sequence, input.sequence))).limit(1);
       if (existing) return existing;
-      const [created] = await tx.insert(modelCallContexts).values({ ...input, invocationKey: `${input.scope}:${input.sequence}` }).onConflictDoNothing({ target: [modelCallContexts.taskId, modelCallContexts.scope, modelCallContexts.sequence] }).returning({ id: modelCallContexts.id });
+      const [created] = await tx.insert(modelCallContexts).values({ ...input, invocationKey: `${input.scope}:${input.sequence}` }).onConflictDoNothing({ target: [modelCallContexts.taskId, modelCallContexts.leaseVersion, modelCallContexts.scope, modelCallContexts.sequence] }).returning({ id: modelCallContexts.id });
       if (created) return created;
-      const [raced] = await tx.select({ id: modelCallContexts.id }).from(modelCallContexts).where(and(eq(modelCallContexts.taskId, input.taskId), eq(modelCallContexts.scope, input.scope), eq(modelCallContexts.sequence, input.sequence))).limit(1);
+      const [raced] = await tx.select({ id: modelCallContexts.id }).from(modelCallContexts).where(and(eq(modelCallContexts.taskId, input.taskId), eq(modelCallContexts.leaseVersion, input.leaseVersion), eq(modelCallContexts.scope, input.scope), eq(modelCallContexts.sequence, input.sequence))).limit(1);
       return raced!;
     });
   }
 
   async allocateModelCall(input: { taskId: string; runId: string; scope: string; invocationKey: string; leaseVersion: number }): Promise<{ id: string }> {
     return this.db.transaction(async (tx) => {
+      await this.requireActiveLease(tx, input.taskId, input.leaseVersion);
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${input.taskId}))`);
-      const [existing] = await tx.select({ id: modelCallContexts.id }).from(modelCallContexts).where(and(eq(modelCallContexts.taskId, input.taskId), eq(modelCallContexts.invocationKey, input.invocationKey))).limit(1);
+      const [existing] = await tx.select({ id: modelCallContexts.id }).from(modelCallContexts).where(and(eq(modelCallContexts.taskId, input.taskId), eq(modelCallContexts.leaseVersion, input.leaseVersion), eq(modelCallContexts.invocationKey, input.invocationKey))).limit(1);
       if (existing) return existing;
       const [next] = await tx.select({ value: sql<string>`coalesce(max(${modelCallContexts.sequence}), 0) + 1` }).from(modelCallContexts).where(and(eq(modelCallContexts.taskId, input.taskId), eq(modelCallContexts.scope, input.scope)));
       const [created] = await tx.insert(modelCallContexts).values({ ...input, sequence: Number(next?.value ?? 1) }).returning({ id: modelCallContexts.id });
@@ -74,9 +76,10 @@ export class DatabaseQuotaLedger {
 
   async reserve(input: ReserveQuotaInput): Promise<{ id: string; balance: number }> {
     return this.db.transaction(async (tx) => {
+      await this.requireActiveLease(tx, input.taskId, input.leaseVersion);
       await this.lock(tx, input.userId);
       const existing = await this.byKey(tx, key(input.runId, input.modelCallId, "reserve"));
-      if (existing) { await tx.update(quotaReservations).set({ taskId: input.taskId, leaseVersion: input.leaseVersion, heartbeatAt: new Date(), updatedAt: new Date() }).where(and(eq(quotaReservations.id, existing.id), eq(quotaReservations.status, "reserved"))); return { id: existing.id, balance: money(existing.balance) }; }
+      if (existing) return { id: existing.id, balance: money(existing.balance) };
       const [user] = await tx.select({ budgetUsd: users.budgetUsd }).from(users).where(eq(users.id, input.userId)).limit(1).for("update");
       if (!user) throw new Error("user not found");
       const balance = await this.balance(input.userId, tx);
@@ -92,6 +95,7 @@ export class DatabaseQuotaLedger {
   async settle(input: SettleQuotaInput): Promise<{ id: string; balance: number }> {
     if (!Number.isFinite(input.actualCostUsd) || input.actualCostUsd < 0) throw new Error("actualCostUsd must be non-negative");
     return this.db.transaction(async (tx) => {
+      await this.requireActiveLease(tx, input.taskId, input.leaseVersion);
       await this.lock(tx, input.userId);
       const idempotencyKey = key(input.runId, input.modelCallId, "settle");
       const existing = await this.byKey(tx, idempotencyKey);
@@ -108,6 +112,7 @@ export class DatabaseQuotaLedger {
 
   async release(input: ReleaseQuotaInput): Promise<{ id: string; balance: number }> {
     return this.db.transaction(async (tx) => {
+      await this.requireActiveLease(tx, input.taskId, input.leaseVersion);
       await this.lock(tx, input.userId);
       const idempotencyKey = key(input.runId, input.modelCallId, "release");
       const existing = await this.byKey(tx, idempotencyKey);
@@ -123,12 +128,14 @@ export class DatabaseQuotaLedger {
   }
 
   async heartbeat(reservationId: string, taskId: string, leaseVersion: number): Promise<boolean> {
-    const [updated] = await this.db.update(quotaReservations).set({ heartbeatAt: new Date(), updatedAt: new Date() }).where(and(eq(quotaReservations.id, reservationId), eq(quotaReservations.taskId, taskId), eq(quotaReservations.leaseVersion, leaseVersion), inArray(quotaReservations.status, ["reserved", "provider_started"]))).returning({ id: quotaReservations.id });
+    const now = new Date();
+    const [updated] = await this.db.update(quotaReservations).set({ heartbeatAt: now, updatedAt: now }).where(and(eq(quotaReservations.id, reservationId), eq(quotaReservations.taskId, taskId), eq(quotaReservations.leaseVersion, leaseVersion), inArray(quotaReservations.status, ["reserved", "provider_started"]), sql`exists (select 1 from ${tasks} where ${tasks.id} = ${taskId} and ${tasks.leaseVersion} = ${leaseVersion} and ${tasks.status} in ('leased', 'running') and ${tasks.leaseExpiresAt} > ${now})`)).returning({ id: quotaReservations.id });
     return Boolean(updated);
   }
 
   async markProviderStarted(reservationId: string, taskId: string, leaseVersion: number): Promise<void> {
-    const [updated] = await this.db.update(quotaReservations).set({ status: "provider_started", heartbeatAt: new Date(), updatedAt: new Date() }).where(and(eq(quotaReservations.id, reservationId), eq(quotaReservations.taskId, taskId), eq(quotaReservations.leaseVersion, leaseVersion), eq(quotaReservations.status, "reserved"))).returning({ id: quotaReservations.id });
+    const now = new Date();
+    const [updated] = await this.db.update(quotaReservations).set({ status: "provider_started", heartbeatAt: now, updatedAt: now }).where(and(eq(quotaReservations.id, reservationId), eq(quotaReservations.taskId, taskId), eq(quotaReservations.leaseVersion, leaseVersion), eq(quotaReservations.status, "reserved"), sql`exists (select 1 from ${tasks} where ${tasks.id} = ${taskId} and ${tasks.leaseVersion} = ${leaseVersion} and ${tasks.status} in ('leased', 'running') and ${tasks.leaseExpiresAt} > ${now})`)).returning({ id: quotaReservations.id });
     if (!updated) throw new Error("reservation could not persist provider_started");
   }
 
@@ -136,7 +143,12 @@ export class DatabaseQuotaLedger {
   async releaseDurably(input: Parameters<DatabaseQuotaLedger["release"]>[0]): Promise<void> { await this.enqueueOutbox(input.reservationId, "release", input); await this.processPendingOutbox(); }
 
   async settleInterrupted(input: ReleaseQuotaInput & { error: string }): Promise<void> {
+    await this.settleInterruptedInternal(input, true);
+  }
+
+  private async settleInterruptedInternal(input: ReleaseQuotaInput & { error: string }, fenced: boolean): Promise<void> {
     await this.db.transaction(async (tx) => {
+      if (fenced) await this.requireActiveLease(tx, input.taskId, input.leaseVersion);
       const [reservation] = await tx.select({ row: quotaReservations, ledger: quotaLedger }).from(quotaReservations).innerJoin(quotaLedger, eq(quotaLedger.id, quotaReservations.id)).where(eq(quotaReservations.id, input.reservationId)).limit(1).for("update");
       if (!reservation || reservation.row.status === "settled" || reservation.row.status === "released" || reservation.row.status === "needs_reconciliation") return;
       const estimatedCostUsd = -money(reservation.ledger.amount);
@@ -172,10 +184,10 @@ export class DatabaseQuotaLedger {
       const terminalInput = { reservationId: reservation.id, userId: reservation.userId, projectId: reservation.projectId, runId: reservation.runId, modelCallId: reservation.modelCallId, taskId: reservation.taskId, leaseVersion: reservation.leaseVersion };
       if (reservation.status === "provider_completed") {
         const [intent] = await this.db.select({ id: quotaSettlementOutbox.id }).from(quotaSettlementOutbox).where(and(eq(quotaSettlementOutbox.reservationId, reservation.id), eq(quotaSettlementOutbox.action, "settle"))).limit(1);
-        if (intent) continue;
-        await this.settleInterrupted({ ...terminalInput, error: "actual usage intent missing after provider completion" });
-      } else if (reservation.status === "provider_started") await this.settleInterrupted({ ...terminalInput, error: "provider call interrupted after lease loss" });
-      else await this.releaseDurably(terminalInput);
+        if (intent) await this.db.update(quotaSettlementOutbox).set({ status: "processed", processedAt: now, lastError: "fenced by lease reclaim" }).where(eq(quotaSettlementOutbox.id, intent.id));
+        await this.settleInterruptedInternal({ ...terminalInput, error: "actual usage intent missing after provider completion" }, false);
+      } else if (reservation.status === "provider_started") await this.settleInterruptedInternal({ ...terminalInput, error: "provider call interrupted after lease loss" }, false);
+      else await this.releaseReconciled(terminalInput);
       released++;
     }
     return released;
@@ -202,16 +214,39 @@ export class DatabaseQuotaLedger {
   private async byKey(tx: Executor, idempotencyKey: string) { const [row] = await tx.select().from(quotaLedger).where(eq(quotaLedger.idempotencyKey, idempotencyKey)).limit(1); return row; }
   private async reservation(tx: Executor, reservationId: string, userId: string) { const [row] = await tx.select().from(quotaLedger).where(and(eq(quotaLedger.id, reservationId), eq(quotaLedger.userId, userId), eq(quotaLedger.operation, "reserve"))).limit(1); return row; }
   private async settledSpend(tx: Executor, userId: string) { const [row] = await tx.select({ value: sql<string>`coalesce(sum(case when ${quotaLedger.operation} = 'settle' then coalesce((${quotaLedger.metadata}->>'actualCostUsd')::numeric, 0) when ${quotaLedger.operation} = 'estimate_settle' and not exists (select 1 from quota_ledger settled where settled.reservation_id = ${quotaLedger.reservationId} and settled.operation = 'settle') then coalesce((${quotaLedger.metadata}->>'estimatedCostUsd')::numeric, 0) else 0 end), 0)` }).from(quotaLedger).where(and(eq(quotaLedger.userId, userId), inArray(quotaLedger.operation, ["settle", "estimate_settle"]))); return money(row?.value); }
-  private async enqueueOutbox(reservationId: string, action: "settle" | "release", payload: unknown) { await this.db.insert(quotaSettlementOutbox).values({ reservationId, action, payload }).onConflictDoNothing({ target: [quotaSettlementOutbox.reservationId, quotaSettlementOutbox.action] }); }
-  private async enqueueSettlementIntent(input: SettleQuotaInput) { await this.db.transaction(async (tx) => { await tx.insert(quotaSettlementOutbox).values({ reservationId: input.reservationId, action: "settle", payload: input }).onConflictDoNothing({ target: [quotaSettlementOutbox.reservationId, quotaSettlementOutbox.action] }); await tx.update(quotaReservations).set({ status: "provider_completed", providerCompletedAt: new Date(), heartbeatAt: new Date(), updatedAt: new Date() }).where(and(eq(quotaReservations.id, input.reservationId), eq(quotaReservations.status, "provider_started"))); }); }
+  private async enqueueOutbox(reservationId: string, action: "settle" | "release", payload: unknown) { const input = payload as ReleaseQuotaInput; await this.db.transaction(async (tx) => { await this.requireActiveLease(tx, input.taskId, input.leaseVersion); await tx.insert(quotaSettlementOutbox).values({ reservationId, action, payload }).onConflictDoNothing({ target: [quotaSettlementOutbox.reservationId, quotaSettlementOutbox.action] }); }); }
+  private async enqueueSettlementIntent(input: SettleQuotaInput) { await this.db.transaction(async (tx) => { await this.requireActiveLease(tx, input.taskId, input.leaseVersion); await tx.insert(quotaSettlementOutbox).values({ reservationId: input.reservationId, action: "settle", payload: input }).onConflictDoNothing({ target: [quotaSettlementOutbox.reservationId, quotaSettlementOutbox.action] }); const [updated] = await tx.update(quotaReservations).set({ status: "provider_completed", providerCompletedAt: new Date(), heartbeatAt: new Date(), updatedAt: new Date() }).where(and(eq(quotaReservations.id, input.reservationId), eq(quotaReservations.taskId, input.taskId), eq(quotaReservations.leaseVersion, input.leaseVersion), eq(quotaReservations.status, "provider_started"))).returning({ id: quotaReservations.id }); if (!updated) throw new Error("reservation settlement intent was fenced"); }); }
+
+  private async releaseReconciled(input: ReleaseQuotaInput): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      await this.lock(tx, input.userId);
+      const reservation = await this.reservation(tx, input.reservationId, input.userId);
+      if (!reservation) return;
+      const terminal = await tx.select().from(quotaLedger).where(and(eq(quotaLedger.reservationId, reservation.id), inArray(quotaLedger.operation, ["settle", "release"]))).limit(1);
+      if (terminal[0]) return;
+      await this.append(input.userId, -money(reservation.amount), { ...input, operation: "release", idempotencyKey: key(input.runId, input.modelCallId, "release"), source: "reconcile", metadata: { reason: "lease_reclaimed" } }, tx);
+      await tx.update(quotaReservations).set({ status: "released", updatedAt: new Date() }).where(eq(quotaReservations.id, reservation.id));
+    });
+  }
+
+  private async requireActiveLease(executor: Executor, taskId: string, leaseVersion: number): Promise<void> {
+    const now = new Date();
+    const [lease] = await executor.select({ id: tasks.id }).from(tasks).where(and(eq(tasks.id, taskId), eq(tasks.leaseVersion, leaseVersion), inArray(tasks.status, ["leased", "running"]), sql`${tasks.leaseExpiresAt} > ${now}`)).limit(1);
+    if (!lease) throw new Error("task lease is no longer active");
+  }
 }
 
 export const reserveQuota = (ledger: DatabaseQuotaLedger, input: ReserveQuotaInput) => ledger.reserve(input);
 export const settleQuota = (ledger: DatabaseQuotaLedger, input: SettleQuotaInput) => ledger.settle(input);
 export const releaseQuota = (ledger: DatabaseQuotaLedger, input: Parameters<DatabaseQuotaLedger["release"]>[0]) => ledger.release(input);
 
-export function startQuotaMaintenance(ledger: Pick<DatabaseQuotaLedger, "reconcile">, options: { intervalMs: number; staleAfterMs: number }): () => void {
-  const timer = setInterval(() => { void ledger.reconcile({ olderThan: new Date(Date.now() - options.staleAfterMs) }); }, options.intervalMs);
+export function startQuotaMaintenance(ledger: Pick<DatabaseQuotaLedger, "reconcile">, options: { intervalMs: number; staleAfterMs: number; logger?: { error(fields: Record<string, unknown>, message: string): void } }): () => void {
+  let running = false;
+  const timer = setInterval(() => {
+    if (running) return;
+    running = true;
+    void ledger.reconcile({ olderThan: new Date(Date.now() - options.staleAfterMs) }).catch((error) => options.logger?.error({ error: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500) }, "quota maintenance failed")).finally(() => { running = false; });
+  }, options.intervalMs);
   timer.unref?.();
   return () => clearInterval(timer);
 }

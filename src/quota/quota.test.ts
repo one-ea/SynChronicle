@@ -63,6 +63,19 @@ describe("quota guarded platform model", () => {
     expect(provider).not.toHaveBeenCalled();
   });
 
+  it("aborts the provider and controlled-settles when quota heartbeat loses the lease", async () => {
+    const ledger = { reserve: vi.fn(async () => ({ id: "reservation", balance: 9 })), markProviderStarted: vi.fn(), settleDurably: vi.fn(), settleInterrupted: vi.fn(), releaseDurably: vi.fn(), heartbeat: vi.fn(async () => false) };
+    const dispatch = vi.fn((options: unknown) => new Promise((_resolve, reject) => {
+      const signal = (options as { abortSignal: AbortSignal }).abortSignal;
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    }));
+    const model = quotaGuardedModel({ provider: "openai", modelName: "gpt", userId: randomUUID(), projectId: randomUUID(), runId: randomUUID(), taskId: randomUUID(), leaseVersion: 1, agent: "writer", inputPrice: 1, outputPrice: 1, heartbeatMs: 1, ledger: ledger as never, model: { provider: "openai", modelId: "gpt", doGenerate: dispatch } as never });
+
+    await expect((model as any).doGenerate(callOptions(randomUUID(), {}))).rejects.toThrow("task lease lost");
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(ledger.settleInterrupted).toHaveBeenCalledWith(expect.objectContaining({ reservationId: "reservation" }));
+  });
+
   it("disposes prepared credentials when provider_started persistence fails before dispatch", async () => {
     const dispose = vi.fn();
     const dispatch = vi.fn();
@@ -265,7 +278,7 @@ postgres("PostgreSQL quota ledger", () => {
     expect(await ledger.reservationState(runId, modelCallId)).toBe("reserved");
   });
 
-  it("atomically allocates unique calls across wrappers and reuses crash retries", async () => {
+  it("atomically allocates unique calls and scopes crash retries to the lease attempt", async () => {
     const [first, second] = await Promise.all([
       ledger.allocateModelCall({ taskId, runId, scope: "writer:generate", invocationKey: `first-${randomUUID()}`, leaseVersion: 1 }),
       ledger.allocateModelCall({ taskId, runId, scope: "writer:generate", invocationKey: `second-${randomUUID()}`, leaseVersion: 1 }),
@@ -273,8 +286,10 @@ postgres("PostgreSQL quota ledger", () => {
     expect(first.id).not.toBe(second.id);
     const retryKey = `retry-${randomUUID()}`;
     const original = await ledger.allocateModelCall({ taskId, runId, scope: "writer:generate", invocationKey: retryKey, leaseVersion: 1 });
+    await db.update(tasks).set({ leaseVersion: 2, leaseExpiresAt: new Date(Date.now() + 60_000), status: "running" }).where(eq(tasks.id, taskId));
     const recovered = await ledger.allocateModelCall({ taskId, runId, scope: "writer:generate", invocationKey: retryKey, leaseVersion: 2 });
-    expect(recovered.id).toBe(original.id);
+    expect(recovered.id).not.toBe(original.id);
+    await expect(ledger.reserve({ userId, projectId, runId, taskId, leaseVersion: 1, modelCallId: original.id, estimatedCostUsd: 1 })).rejects.toThrow("task lease is no longer active");
   });
 
   it("estimate-settles a provider-started call after lease loss", async () => {

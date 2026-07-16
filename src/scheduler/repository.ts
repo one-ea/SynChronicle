@@ -129,6 +129,15 @@ export class SchedulerRepository {
     return row ? { ...row, retryable: row.retryable === 1 } : null;
   }
 
+  async durableCommitActive(runId: string, marker: unknown): Promise<boolean> {
+    if (!marker || typeof marker !== "object") return false;
+    const value = marker as Record<string, unknown>;
+    if (typeof value.taskId !== "string" || typeof value.leaseVersion !== "number") return false;
+    const now = new Date();
+    const [task] = await this.db.select({ id: tasks.id }).from(tasks).where(and(eq(tasks.id, value.taskId), eq(tasks.runId, runId), eq(tasks.leaseVersion, value.leaseVersion), inArray(tasks.status, activeTaskStatuses), sql`${tasks.leaseExpiresAt} > ${now}`)).limit(1);
+    return Boolean(task);
+  }
+
   async validateModelSelection(auth: RequestAuth, selection: { provider: string; model: string; credentialId?: string }): Promise<boolean> {
     if (selection.credentialId) {
       const [credential] = await this.db.select({ id: providerCredentials.id }).from(providerCredentials).where(and(eq(providerCredentials.id, selection.credentialId), eq(providerCredentials.userId, auth.userId), eq(providerCredentials.provider, selection.provider), eq(providerCredentials.status, "active"))).limit(1);
@@ -192,6 +201,8 @@ export class SchedulerRepository {
     return this.db.transaction(async (transaction) => {
       await transaction.execute(sql`select pg_advisory_xact_lock(${schedulerAdvisoryLock})`);
       const now = new Date();
+      const expired = await transaction.select({ id: tasks.id, runId: tasks.runId, leaseVersion: tasks.leaseVersion }).from(tasks).where(and(inArray(tasks.status, activeTaskStatuses), lte(tasks.leaseExpiresAt, now))).for("update");
+      for (const task of expired) await this.clearDurableCommit(transaction, task.runId, task.id, task.leaseVersion, now);
 
       await transaction.update(tasks).set({
         status: "failed",
@@ -338,6 +349,7 @@ export class SchedulerRepository {
         completedAt: status === "completed" || status === "failed" || status === "cancelled" ? now : null,
         updatedAt: now,
       }).where(eq(runs.id, task.runId));
+      await this.clearDurableCommit(transaction, task.runId, taskId, leaseVersion, now);
       return true;
     });
   }
@@ -381,9 +393,25 @@ export class SchedulerRepository {
       if (!task) return false;
       const [run] = await transaction.select({ resumeData: runs.resumeData }).from(runs).where(eq(runs.id, task.runId)).limit(1).for("update");
       if (!run) return false;
-      await transaction.update(runs).set({ resumeData: { ...normalizeRunResumeData(run.resumeData), durableCommit: active }, updatedAt: now }).where(eq(runs.id, task.runId));
+      const resumeData = normalizeRunResumeData(run.resumeData);
+      const marker = resumeData.durableCommit;
+      if (!active && (!marker || typeof marker !== "object" || (marker as Record<string, unknown>).taskId !== taskId || (marker as Record<string, unknown>).leaseVersion !== leaseVersion)) return false;
+      const durableCommit = active ? { taskId, leaseVersion } : undefined;
+      await transaction.update(runs).set({ resumeData: { ...resumeData, durableCommit }, updatedAt: now }).where(eq(runs.id, task.runId));
       return true;
     });
+  }
+
+  private async clearDurableCommit(transaction: SchedulerExecutor, runId: string, taskId: string, leaseVersion: number | undefined, now: Date): Promise<void> {
+    if (leaseVersion === undefined) return;
+    const [run] = await transaction.select({ resumeData: runs.resumeData }).from(runs).where(eq(runs.id, runId)).limit(1).for("update");
+    if (!run) return;
+    const resumeData = normalizeRunResumeData(run.resumeData);
+    const marker = resumeData.durableCommit;
+    if (!marker || typeof marker !== "object") return;
+    const value = marker as Record<string, unknown>;
+    if (value.taskId !== taskId || value.leaseVersion !== leaseVersion) return;
+    await transaction.update(runs).set({ resumeData: { ...resumeData, durableCommit: undefined }, updatedAt: now }).where(eq(runs.id, runId));
   }
 
   async releaseLease(taskId: string, workerId: string, outcome: ReleaseLeaseOutcome): Promise<boolean> {

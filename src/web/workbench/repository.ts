@@ -37,7 +37,7 @@ export class WorkbenchRepository implements WorkbenchRepositoryLike {
     return {
       ...project,
       chapters: chapterRows,
-      latestRun: { id: run.id, status: run.status, version: checkpoint?.version ?? 0, task: task ? { id: task.id, status: task.status, leaseVersion: task.leaseVersion } : null, checkpointVersion: checkpoint?.version ?? null, waiting_for_durable_commit: Boolean(run.resumeData && typeof run.resumeData === "object" && (run.resumeData as Record<string, unknown>).durableCommit) },
+      latestRun: { id: run.id, status: run.status, version: checkpoint?.version ?? 0, task: task ? { id: task.id, status: task.status, leaseVersion: task.leaseVersion } : null, checkpointVersion: checkpoint?.version ?? null, waiting_for_durable_commit: durableCommitActive(run.resumeData, task) },
       agents: projectAgents(eventRows, task, checkpoint?.state),
       usage,
       pendingQuestion: pendingQuestion(eventRows, new Set(answerRows.map(({ commandId }) => commandId.slice("answer:".length)))),
@@ -53,6 +53,12 @@ export class WorkbenchRepository implements WorkbenchRepositoryLike {
       .groupBy(runs.id, runs.status, checkpoints.version).limit(1);
     return row ? { summary: `run ${row.status}`, cursor: Number(row.cursor), checkpointVersion: row.checkpointVersion ?? null } : null;
   }
+}
+
+function durableCommitActive(resumeData: unknown, task: { id: string; status: string; leaseVersion: number } | undefined): boolean {
+  if (!task || !["leased", "running"].includes(task.status) || !resumeData || typeof resumeData !== "object") return false;
+  const marker = (resumeData as Record<string, unknown>).durableCommit;
+  return Boolean(marker && typeof marker === "object" && (marker as Record<string, unknown>).taskId === task.id && (marker as Record<string, unknown>).leaseVersion === task.leaseVersion);
 }
 
 export function projectUsage(rows: Array<{ snapshotId: string; agent: string; credentialSource: string; provider: string; model: string; inputTokens: string | number | null; outputTokens: string | number | null; cost: string | null; createdAt: Date; state?: unknown }>): WorkbenchProjection["usage"] {

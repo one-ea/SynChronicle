@@ -145,6 +145,23 @@ describe("WorkbenchPage", () => {
     expect(screen.getByText("她在退潮后的码头读完了第一封信。")).toBeVisible();
   });
 
+  it("deferred-refreshes the snapshot after lifecycle events", async () => {
+    vi.useFakeTimers();
+    try {
+      let push!: (event: RunEventMessage) => void;
+      const refreshed = { ...project, chapters: [...project.chapters!, { id: "chapter-3", title: "新章节", sequence: 3, status: "complete", body: "已提交正文" }], latestRun: { ...project.latestRun!, status: "completed", checkpointVersion: 8 } };
+      const request = vi.fn().mockResolvedValue({ workbench: refreshed });
+      render(<WorkbenchPage api={{ request: request as ApiClient["request"] }} project={project} initialEvents={[]} subscribe={(listener) => { push = listener; return () => undefined; }} />);
+
+      act(() => push({ sequence: 1, type: "run.completed", payload: {} }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(150); await Promise.resolve(); });
+
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole("button", { name: "查看章节《新章节》" })).toBeVisible();
+      expect(screen.getByText("completed")).toBeVisible();
+    } finally { vi.useRealTimers(); }
+  });
+
   it("renders and answers an AskUser question received from the live Worker stream", async () => {
     let push!: (event: RunEventMessage) => void;
     const client = api();

@@ -40,7 +40,12 @@ Task 13: complete (commits 5f386c9..42e705f, review approved)
 Final gate: execute `src/migration/migration.postgres.test.ts` with isolated `TEST_DATABASE_URL`.
 Task 14: complete (commits 42e705f..743d75d, implementation approved)
 Final gate: Docker-capable CI must pass image build and full Compose smoke workflow.
+Task 15: implementation complete (commits 743d75d..c0fce04, review approved)
+Final gate: Web CI must run PostgreSQL conditions with zero skips, full Playwright, Docker build/config/smoke before Task 15 acceptance boxes are checked.
+Long-term risk: maintain Provider IPv6 special-purpose address registry alongside IANA updates.
 Task 15: implementation complete candidate (production security plugin, strict trusted proxies, real PostgreSQL/Web/Worker E2E harness with test-only deterministic Provider, zero-skip CI gate, release documentation).
 Task 15 local gate: typecheck, 637 Vitest tests, tsup/Vite build, Playwright discovery, npm pack dry-run, and diff check passed; 62 PostgreSQL-conditional tests, browser E2E, Docker build, Compose config, and Compose smoke await Docker/PostgreSQL-capable CI.
 Task 15 minors closed: removed unused `clearHandledSteer`, consolidated stale Task 9 verification reporting, and cleared the Provider transport overall timer after synchronous requester failure.
 Task 15 follow-up candidate: real Worker/Provider observability, UI-only control flow, controlled Worker crash/restart, live AskUser projection, responsive plus full-stack Playwright projects, expanded direct security tests, server cleanup, CLI dispatch coverage, and Schema readability are implemented. PostgreSQL/browser/container evidence remains pending CI.
+Final integration gap wave: lease-version-fenced quota attempts/outbox, fenced durable commit markers, run-scoped realtime reset, deferred Workbench snapshot refresh, auth audit coverage, Provider heartbeat abort, and Worker logging/backoff are implemented locally.
+Final integration local gate: target regressions, typecheck, tsup/Vite build, Playwright discovery, npm pack dry-run, Drizzle check, and diff check passed. PostgreSQL conditional tests, full browser execution, Docker, Compose, and smoke remain pending CI and stay unchecked.

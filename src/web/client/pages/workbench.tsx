@@ -55,7 +55,8 @@ function liveQuestion(event: RunEventMessage | undefined): WorkbenchProject["pen
   return questions.length ? { id, questions } : null;
 }
 
-export function WorkbenchPage({ api, project, initialEvents, subscribe, connectionOverride }: WorkbenchPageProps) {
+export function WorkbenchPage({ api, project: initialProject, initialEvents, subscribe, connectionOverride }: WorkbenchPageProps) {
+  const [project, setProject] = useState(initialProject);
   const url = new URL(window.location.href);
   const initialRunId = url.searchParams.get("run") ?? project.latestRun?.id ?? undefined;
   const [runId, setRunId] = useState(initialRunId);
@@ -73,7 +74,22 @@ export function WorkbenchPage({ api, project, initialEvents, subscribe, connecti
   const [pendingCommandId, setPendingCommandId] = useState<string | null>(() => initialRunId ? safeSessionGet(commandStorageKey(project.id, initialRunId)) : null);
   const [lastModelSwitch, setLastModelSwitch] = useState<{ role: string; provider: string; model: string; credentialId?: string; parameters?: Record<string, unknown> } | null>(null);
   const scrollPositions = useRef<Record<WorkbenchPanel, number>>({ project: 0, writing: 0, status: 0 });
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const previousConnection = useRef<ConnectionState | undefined>(undefined);
   const { state, connection } = useRunEvents({ runId, initialEvents, subscribe });
+  const refreshSnapshot = () => {
+    if (refreshTimer.current) return;
+    refreshTimer.current = setTimeout(() => {
+      refreshTimer.current = undefined;
+      void api.request<{ workbench?: WorkbenchProject }>(`/api/projects/${project.id}/workbench`).then(({ workbench }) => { if (workbench) setProject(workbench); }).catch(() => undefined);
+    }, 100);
+  };
+  useEffect(() => () => { if (refreshTimer.current) clearTimeout(refreshTimer.current); }, []);
+  useEffect(() => {
+    const effective = connectionOverride ?? connection;
+    if (effective === "connected" && previousConnection.current && previousConnection.current !== "connected") refreshSnapshot();
+    previousConnection.current = effective;
+  }, [connection, connectionOverride]);
   useEffect(() => {
     const latest = state.events.at(-1);
     const payload = latest?.payload && typeof latest.payload === "object" ? latest.payload as Record<string, unknown> : {};
@@ -81,7 +97,12 @@ export function WorkbenchPage({ api, project, initialEvents, subscribe, connecti
     if (/完成|cancel|abort|终止/i.test(message)) setAbortWaiting(false);
     const question = liveQuestion(latest);
     if (question) setPendingQuestion(question);
+    if (latest && /^(run\.|task\.|checkpoint\.|chapter\.|lifecycle\.)/.test(latest.type)) refreshSnapshot();
   }, [state.events]);
+  useEffect(() => {
+    if (!selectedChapter) return;
+    setSelectedChapter(project.chapters?.find(({ id }) => id === selectedChapter.id));
+  }, [project.chapters]);
   useEffect(() => {
     if (!pendingCommandId) return;
     const command = state.commands[pendingCommandId];
@@ -168,6 +189,7 @@ export function WorkbenchPage({ api, project, initialEvents, subscribe, connecti
     nextUrl.searchParams.set("run", result.run.id);
     window.history.replaceState({}, "", nextUrl);
     setCommandFeedback(`运行已创建，配置快照 ${modelSet.name} v${modelSet.version}。`);
+    refreshSnapshot();
   }
 
   async function command(name: "pause" | "resume" | "abort") {
@@ -176,6 +198,7 @@ export function WorkbenchPage({ api, project, initialEvents, subscribe, connecti
     const result = await api.request<{ waiting_for_durable_commit?: boolean }>(`/api/projects/${project.id}/runs/${runId}/${name}`, { method: "POST" });
     if (name === "abort") setAbortWaiting(Boolean(result.waiting_for_durable_commit));
     setCommandFeedback(name === "pause" ? "暂停请求已排队，将在安全边界生效。" : name === "resume" ? "继续请求已提交。" : "终止请求已提交。")
+    refreshSnapshot();
   }
 
   async function answer(questionId: string, answers: Record<string, string>) {
