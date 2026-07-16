@@ -22,6 +22,11 @@ describe("parseCLIOptions", () => {
     expect(parseCLIOptions(["worker"]).command).toBe("worker");
   });
 
+  it("requires explicit database URL, username and directory for migration", () => {
+    expect(parseCLIOptions(["migrate-project", "--database-url", "postgres://db", "--username", "alice", "--dir", "/books/legacy"])).toEqual({ command: "migrate-project", databaseUrl: "postgres://db", username: "alice", projectDir: "/books/legacy" });
+    expect(() => parseCLIOptions(["migrate-project", "--username", "alice", "--dir", "/books/legacy"])).toThrow(/database-url/);
+  });
+
   it.each([
     [["--prompt", "x", "--prompt-file", "p"], /不能同时使用/],
     [["--prompt", "x"], /仅能在 --headless/],

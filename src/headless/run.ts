@@ -4,6 +4,10 @@ import { RuntimeEventSchema, type Bundle, type RuntimeEvent, type RuntimeQueueIt
 import { Host } from "../runtime/host.js";
 import type { RuntimeStreamChunk } from "../runtime/stream.js";
 import { terminalAskUser } from "./ask_user.js";
+import { eq } from "drizzle-orm";
+import { createDatabase } from "../db/client.js";
+import { users } from "../db/schema/index.js";
+import { importFileProject } from "../migration/fileProjectImporter.js";
 
 interface HeadlessHost { store: { dir: string }; startPrepared(prompt: string): Promise<void>; resume(): Promise<{ label: string | null; error?: Error }>; replayQueue(maxItems?: number): Promise<RuntimeQueueItem[]>; events(): AsyncIterable<RuntimeEvent>; stream(): AsyncIterable<string | RuntimeStreamChunk>; close(): Promise<void> }
 export interface Options { prompt?: string; stdin?: NodeJS.ReadableStream; stdout?: Writable; stderr?: Writable; hostFactory?: (cfg: Config, bundle: Bundle) => Promise<HeadlessHost> }
@@ -21,4 +25,17 @@ function formatEvent(event: RuntimeEvent): string | undefined {
   if (payload.phase === "review_completed") return `${agent}第 ${payload.round} 轮评审 · ${payload.score} 分 · ${payload.passed ? "通过" : "待修订"}`;
   if (payload.phase === "completed") return `${agent}反思完成 · ${payload.rounds} 轮 · ${payload.score} 分 · ${payload.passed ? "通过" : "未通过"}`;
   return event.message?.trim() || undefined;
+}
+
+export async function migrateFileProject(options: { databaseUrl: string; username: string; projectDir: string }): Promise<void> {
+  if (!options.databaseUrl || !options.username || !options.projectDir) throw new Error("迁移需要显式 database URL、用户名和项目目录");
+  const database = createDatabase(options.databaseUrl);
+  try {
+    const [user] = await database.select({ id: users.id }).from(users).where(eq(users.username, options.username)).limit(1);
+    if (!user) throw new Error(`目标用户不存在: ${options.username}`);
+    const imported = await importFileProject(database, user.id, options.projectDir);
+    process.stderr.write(`迁移完成: ${imported.projectId}\n`);
+  } finally {
+    await database.$client.end();
+  }
 }

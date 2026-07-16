@@ -32,6 +32,8 @@ import { createLoginRateLimiter } from "./auth/plugin.js";
 import { redactSecrets } from "../credentials/redactor.js";
 import { adminRoutes, DatabaseAdminRepository } from "./admin/routes.js";
 import { usageRoutes } from "./usage/routes.js";
+import { importProjectArchive, exportDatabaseProject } from "../migration/fileProjectImporter.js";
+import { importExportRoutes } from "./projects/importExportRoutes.js";
 
 type WebServerCommonOptions = Partial<Pick<WebConfig, "publicUrl" | "trustProxy" | "credentialMasterKeys" | "credentialMasterKeyVersion" | "providerAllowedHosts">> & { staticRoot?: string | null; credentialRegistry?: MasterKeyRegistry };
 
@@ -89,6 +91,11 @@ export async function buildWebServer(options: WebServerOptions): Promise<Fastify
     repository: new ProjectRepository(database),
     audit,
     mutations,
+  });
+  await app.register(importExportRoutes, {
+    prefix: "/api/projects",
+    importer: (userId, source, requestId) => importProjectArchive(database, userId, source, requestId),
+    exporter: (userId, projectId, requestId) => exportDatabaseProject(database, userId, projectId, requestId),
   });
   await app.register(runRoutes, {
     prefix: "/api/projects/:projectId/runs",

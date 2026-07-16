@@ -43,6 +43,12 @@ input { background: transparent; border: 0; border-bottom: 1px solid var(--ink-m
 .page-heading { align-items: end; display: flex; gap: 2rem; justify-content: space-between; margin-bottom: var(--space-6); }
 .page-heading h1 { font-size: clamp(3.5rem, 8vw, 6.5rem); }
 .page-heading p:last-child { color: var(--ink-muted); }
+.page-actions { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.button-secondary { background: transparent; border-color: var(--purple-dark); color: var(--purple-dark); }
+.import-button { align-items: center; cursor: pointer; display: inline-flex; justify-content: center; overflow: hidden; position: relative; }
+.import-button input { cursor: pointer; height: 100%; inset: 0; opacity: 0; position: absolute; width: 100%; }
+.import-progress { align-items: center; display: flex; gap: var(--space-1); margin-bottom: var(--space-3); }
+.import-progress progress { accent-color: var(--purple-dark); max-width: 18rem; width: 100%; }
 .error-row { align-items: center; display: flex; justify-content: space-between; margin-bottom: var(--space-3); }
 .project-list { border-top: 2px solid var(--ink); }
 .project-row { align-items: center; border-bottom: 1px solid var(--rule); display: grid; gap: var(--space-2); grid-template-columns: 3rem 1fr auto; min-height: 128px; padding: var(--space-2) 0; }
@@ -52,6 +58,7 @@ input { background: transparent; border: 0; border-bottom: 1px solid var(--ink-m
 .project-copy h2 a:hover { color: var(--purple-dark); text-decoration: underline; }
 .project-copy p { color: var(--ink-muted); font-size: 0.8rem; margin: 0.4rem 0 0; }
 .project-actions { display: flex; gap: var(--space-1); }
+.export-button { padding-inline: 0.7rem; width: auto; }
 .empty-state, .loading-state { border-bottom: 1px solid var(--rule); border-top: 2px solid var(--ink); padding: var(--space-8) 0; text-align: center; }
 .empty-state p { color: var(--ink-muted); }
 .loading-state, .boot-state { align-items: center; display: flex; gap: 1rem; justify-content: center; min-height: 50dvh; }
@@ -66,7 +73,8 @@ input { background: transparent; border: 0; border-bottom: 1px solid var(--ink-m
 @media (min-width: 1440px) { .site-header { padding-inline: var(--space-6); } }
 @media (max-width: 767px) {
   .page-heading { align-items: stretch; flex-direction: column; }
-  .page-heading .button { width: 100%; }
+  .page-heading .button, .page-actions { width: 100%; }
+  .page-actions { display: grid; grid-template-columns: 1fr 1fr; }
   .project-row { grid-template-columns: 2rem 1fr; }
   .project-actions { grid-column: 2; }
   .site-header { align-items: start; flex-direction: column; padding-block: 0.75rem; }
