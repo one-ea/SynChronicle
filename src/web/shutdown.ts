@@ -2,6 +2,14 @@ import type { EventEmitter } from "node:events";
 
 export type ReadinessGate = { check: () => Promise<void>; beginDrain: () => void; isDraining: () => boolean };
 
+export function parseShutdownDrainMs(value: string | undefined): number {
+  if (value === undefined) return 5_000;
+  if (!/^\d+$/.test(value)) throw new Error("SHUTDOWN_DRAIN_MS must be an integer between 0 and 30000");
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed > 30_000) throw new Error("SHUTDOWN_DRAIN_MS must be an integer between 0 and 30000");
+  return parsed;
+}
+
 export function createReadinessGate(checkDependency: () => Promise<void>): ReadinessGate {
   let draining = false;
   return {

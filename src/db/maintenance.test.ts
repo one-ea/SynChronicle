@@ -2,7 +2,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { assertMigrationsApplied, loadExpectedMigrations, parseMaintenanceArgs, withMigrationLock } from "./maintenance.js";
+import { assertMigrationsApplied, databaseUrlForName, loadExpectedMigrations, parseMaintenanceArgs, withMigrationLock } from "./maintenance.js";
 
 describe("withMigrationLock", () => {
   it("holds the advisory lock until migrations complete", async () => {
@@ -33,6 +33,13 @@ describe("maintenance command parsing", () => {
     expect(parseMaintenanceArgs(["credential-reencrypt", "--dry-run", "--batch-size=25"])).toEqual({ command: "credential-reencrypt", dryRun: true, batchSize: 25 });
     expect(() => parseMaintenanceArgs(["credential-reencrypt", "--batch-size=0"])).toThrow("batch size");
     expect(() => parseMaintenanceArgs(["credential-reencrypt", "--secret=value"])).toThrow("unsupported option");
+  });
+});
+
+describe("databaseUrlForName", () => {
+  it("overrides only the validated database path", () => {
+    expect(databaseUrlForName("postgres://user:secret@postgres:5432/current?sslmode=disable", "restored_20260716")).toBe("postgres://user:secret@postgres:5432/restored_20260716?sslmode=disable");
+    expect(() => databaseUrlForName("postgres://user:secret@postgres/current", "prod;drop database prod")).toThrow("database name");
   });
 });
 

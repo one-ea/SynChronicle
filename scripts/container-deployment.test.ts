@@ -1,6 +1,8 @@
-import { access, readFile } from "node:fs/promises";
+import { access, chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const load = (path: string) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
@@ -76,9 +78,63 @@ describe("container deployment contract", () => {
     }
     expect(spawnSync("sh", ["scripts/backup-postgres.sh", "--help"], { cwd: new URL("..", import.meta.url) }).status).toBe(0);
     expect(spawnSync("sh", ["scripts/restore-postgres.sh", "--help"], { cwd: new URL("..", import.meta.url) }).status).toBe(0);
+    expect(spawnSync("sh", ["scripts/restore-postgres.sh", "backup.dump"], { cwd: new URL("..", import.meta.url) }).status).not.toBe(0);
     expect(await load("scripts/backup-postgres.sh")).toContain("export ENV_FILE");
     expect(await load("scripts/restore-postgres.sh")).toContain("export ENV_FILE");
     expect(spawnSync("sh", ["scripts/container-entrypoint.sh", "quota-reconcile", "--help"], { cwd: new URL("..", import.meta.url) }).status).toBe(0);
     expect(spawnSync("sh", ["scripts/container-entrypoint.sh", "credential-reencrypt", "--help"], { cwd: new URL("..", import.meta.url) }).status).toBe(0);
+  });
+
+  it("requires restore confirmation and performs a retained database switch", async () => {
+    const restore = await load("scripts/restore-postgres.sh");
+
+    expect(restore).toContain("--confirm-restore");
+    expect(restore).toContain("--environment");
+    expect(restore).toContain("PGDMP");
+    expect(restore).toContain("stop web worker");
+    expect(restore).toContain("DATABASE_NAME_OVERRIDE");
+    expect(restore).toContain("RENAME TO");
+    expect(restore).not.toContain("pg_restore --clean");
+    expect(restore).toContain("restore failed; web and worker remain stopped");
+    expect(restore).toContain("exec -T postgres sh -c");
+    expect(restore).not.toMatch(/exec -T postgres (createdb|pg_restore|psql)/);
+    expect(restore).toContain("trap restore_failure EXIT");
+    expect(restore).toContain("trap 'exit 130' INT TERM");
+  });
+
+  it("checks worker readiness against the recorded worker process", async () => {
+    const compose = await load("compose.yaml");
+    expect(compose).toContain("synchronicle-worker-ready.json");
+    expect(compose).toContain("/proc/");
+    expect(compose).toContain("startedAt");
+    expect(compose).not.toContain("kill -0 1");
+  });
+
+  it("mock executes restore as stop, candidate restore, retained rename, and restart", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "synchronicle-restore-"));
+    const dump = join(directory, "backup.dump");
+    const log = join(directory, "docker.log");
+    const docker = join(directory, "docker");
+    const curl = join(directory, "curl");
+    await writeFile(dump, "PGDMPfixture");
+    await writeFile(docker, `#!/bin/sh\nprintf '%s\\n' "$*" >> "$MOCK_LOG"\ncase "$*" in\n  *DEPLOYMENT_ENV*) printf production ;;\n  *POSTGRES_DB*) printf synchronicle ;;\nesac\n`);
+    await writeFile(curl, "#!/bin/sh\nexit 0\n");
+    await chmod(docker, 0o755);
+    await chmod(curl, 0o755);
+
+    const result = spawnSync("sh", ["scripts/restore-postgres.sh", "--confirm-restore", "--environment", "production", dump], {
+      cwd: new URL("..", import.meta.url),
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, MOCK_LOG: log, ENV_FILE: ".env.web.example" },
+    });
+    const commands = await readFile(log, "utf8");
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(commands.indexOf("stop web worker")).toBeLessThan(commands.indexOf("createdb"));
+    expect(commands).toContain("pg_restore --no-owner --exit-on-error");
+    expect(commands).toContain("DATABASE_NAME_OVERRIDE=");
+    expect(commands).toContain("RENAME TO");
+    expect(commands).toContain("up -d web worker");
+    expect(commands).not.toContain("dropdb");
   });
 });

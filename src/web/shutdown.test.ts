@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
-import { createReadinessGate, drainAndClose, installGracefulShutdown } from "./shutdown.js";
+import { createReadinessGate, drainAndClose, installGracefulShutdown, parseShutdownDrainMs } from "./shutdown.js";
 
 describe("installGracefulShutdown", () => {
   it("closes the server once on termination signals", async () => {
@@ -15,6 +15,17 @@ describe("installGracefulShutdown", () => {
     remove();
     expect(signals.listenerCount("SIGTERM")).toBe(0);
     expect(signals.listenerCount("SIGINT")).toBe(0);
+  });
+});
+
+describe("parseShutdownDrainMs", () => {
+  it("accepts finite non-negative integers up to 30 seconds", () => {
+    expect(parseShutdownDrainMs(undefined)).toBe(5_000);
+    expect(parseShutdownDrainMs("0")).toBe(0);
+    expect(parseShutdownDrainMs("30000")).toBe(30_000);
+    for (const value of ["-1", "30001", "1.5", "Infinity", "NaN", ""] ) {
+      expect(() => parseShutdownDrainMs(value)).toThrow("SHUTDOWN_DRAIN_MS");
+    }
   });
 });
 

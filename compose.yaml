@@ -72,7 +72,7 @@ services:
         condition: service_completed_successfully
     stop_grace_period: 45s
     healthcheck:
-      test: ["CMD-SHELL", "test -s /tmp/synchronicle-worker-ready && kill -0 1"]
+      test: ["CMD", "node", "-e", "const fs=require('node:fs');const p='/tmp/synchronicle-worker-ready.json';const h=JSON.parse(fs.readFileSync(p,'utf8'));if(!Number.isSafeInteger(h.pid)||h.pid<1||typeof h.nonce!=='string'||h.nonce.length<16||!Number.isSafeInteger(h.startedAt)||h.startedAt>Date.now())process.exit(1);process.kill(h.pid,0);const c=fs.readFileSync('/proc/'+h.pid+'/cmdline','utf8');if(!c.includes('dist/worker/main.js'))process.exit(1)"]
       interval: 10s
       timeout: 5s
       retries: 6

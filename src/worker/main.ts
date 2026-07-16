@@ -20,11 +20,13 @@ import { DatabaseQuotaLedger, startQuotaMaintenance } from "../quota/ledger.js";
 import { quotaGuardedModel } from "../quota/model.js";
 import { platformCredentialModel, platformCredentialSource } from "../quota/platformCredential.js";
 import { hasKnownPlatformPrice } from "../quota/pricing.js";
-import { writeFile, unlink } from "node:fs/promises";
+import { clearWorkerHealth, prepareWorkerHealth } from "./health.js";
 
 export async function startWorker(): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL?.trim();
   if (!databaseUrl) throw new Error("DATABASE_URL is required");
+  const healthFile = process.env.WORKER_HEALTH_FILE ?? "/tmp/synchronicle-worker-ready.json";
+  await clearWorkerHealth(healthFile);
   const workerId = process.env.WORKER_ID?.trim() || randomUUID();
   const leaseMs = positiveInteger(process.env.WORKER_LEASE_MS, 30_000, "WORKER_LEASE_MS");
   const idleMs = positiveInteger(process.env.WORKER_IDLE_MS, 1_000, "WORKER_IDLE_MS");
@@ -83,8 +85,7 @@ export async function startWorker(): Promise<void> {
     },
   });
   const controller = new AbortController();
-  const healthFile = process.env.WORKER_HEALTH_FILE ?? "/tmp/synchronicle-worker-ready";
-  await writeFile(healthFile, workerId, { mode: 0o600 });
+  const health = await prepareWorkerHealth(healthFile);
   const shutdown = () => controller.abort(new Error("worker shutdown"));
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
@@ -93,7 +94,7 @@ export async function startWorker(): Promise<void> {
   } catch (error) {
     if (!controller.signal.aborted) throw error;
   } finally {
-    await unlink(healthFile).catch(() => undefined);
+    await health.cleanup();
     stopQuotaMaintenance();
     process.removeListener("SIGINT", shutdown);
     process.removeListener("SIGTERM", shutdown);

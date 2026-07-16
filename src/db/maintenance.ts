@@ -100,6 +100,13 @@ export async function checkAppliedMigrations(database: Database): Promise<void> 
 
 export type MaintenanceArgs = { command: string; dryRun: boolean; batchSize: number };
 
+export function databaseUrlForName(value: string, databaseName: string): string {
+  if (!/^[A-Za-z][A-Za-z0-9_]{0,62}$/.test(databaseName)) throw new Error("database name must contain only letters, digits, and underscores");
+  const url = new URL(value);
+  url.pathname = `/${databaseName}`;
+  return url.toString();
+}
+
 export function parseMaintenanceArgs(args: string[]): MaintenanceArgs {
   const command = args[0] ?? "help";
   const options = args.slice(1);

@@ -25,14 +25,13 @@ Store the dump and the credential master-key versions in separate protected syst
 
 ## Restore
 
-Restore into an empty, access-restricted PostgreSQL database, run migrations, then start Web and Worker:
+Restore requires an explicit environment match and confirmation. The script stops Web and Worker, restores into a new timestamped database, runs migrations and readiness against that candidate, renames the previous database to a timestamped backup, switches the candidate into place, and only then starts services:
 
 ```bash
-ENV_FILE=.env.web scripts/restore-postgres.sh synchronicle-backup.dump
-ENV_FILE=.env.web docker compose up -d web worker
+ENV_FILE=.env.web scripts/restore-postgres.sh --confirm-restore --environment production synchronicle-backup.dump
 ```
 
-Validate `/api/health/ready` and inspect Worker logs before reopening traffic.
+The dump must be a non-empty PostgreSQL custom-format archive. `--environment` must exactly match `DEPLOYMENT_ENV` inside the PostgreSQL container. Any failure leaves Web and Worker stopped and prints the retained database names plus rollback guidance. The script never drops the previous database.
 
 ## Key rotation
 
@@ -81,6 +80,7 @@ The command releases or settles stale reservations whose task lease is absent, e
 - readiness returns 503 after a partial migration: compare every image `drizzle/meta/_journal.json` entry with `drizzle.__drizzle_migrations`; both SHA-256 hash and `created_at` must match.
 - liveness fails: inspect `docker compose logs web`; restart policy will recover process-level failures.
 - Worker receives no tasks: inspect `docker compose logs worker`, Worker lease settings, user concurrency, and platform concurrency.
+- Worker is unhealthy: inspect `/tmp/synchronicle-worker-ready.json`; its PID must exist and `/proc/<pid>/cmdline` must identify `dist/worker/main.js`. A stale record is removed before initialization and the matching nonce record is removed during shutdown.
 - WebSocket disconnects: verify clients use the same `PUBLIC_URL` origin and the Web port directly.
 - credential decryption fails: confirm the configured master-key map contains the stored credential key version.
 - credential re-encryption stops: retain every old key, inspect metadata-only `credential.reencrypt` audit events, fix the failing envelope, and rerun the same command.
