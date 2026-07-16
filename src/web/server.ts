@@ -35,7 +35,8 @@ import { usageRoutes } from "./usage/routes.js";
 import { importProjectArchive, exportDatabaseProject, validateDatabaseProjectExport } from "../migration/fileProjectImporter.js";
 import { importExportRoutes } from "./projects/importExportRoutes.js";
 import { healthRoutes } from "./health/routes.js";
-import { sql } from "drizzle-orm";
+import { checkAppliedMigrations } from "../db/maintenance.js";
+import { createReadinessGate, type ReadinessGate } from "./shutdown.js";
 
 type WebServerCommonOptions = Partial<Pick<WebConfig, "publicUrl" | "trustProxy" | "credentialMasterKeys" | "credentialMasterKeyVersion" | "providerAllowedHosts">> & { staticRoot?: string | null; credentialRegistry?: MasterKeyRegistry; checkReadiness?: () => Promise<void> };
 
@@ -46,7 +47,9 @@ export type WebServerOptions = WebServerCommonOptions & (
   | { database: Database; databaseOwnership: "owned" | "borrowed"; databaseUrl?: never }
 );
 
-export async function buildWebServer(options: WebServerOptions): Promise<FastifyInstance> {
+export type WebServerInstance = FastifyInstance & { readinessGate: ReadinessGate };
+
+export async function buildWebServer(options: WebServerOptions): Promise<WebServerInstance> {
   const app = Fastify({
     logger: true,
     trustProxy: options.trustProxy ?? false,
@@ -64,6 +67,13 @@ export async function buildWebServer(options: WebServerOptions): Promise<Fastify
     void reply.code(statusCode < 500 ? statusCode : 500).send({ error: statusCode < 500 ? "Invalid request" : "Internal Server Error", requestId: request.id });
   });
   const database = options.database ?? createDatabase(options.databaseUrl);
+  const readinessGate = createReadinessGate(options.checkReadiness ?? (() => checkAppliedMigrations(database)));
+  app.decorate("readinessGate", readinessGate);
+  app.addHook("onRequest", async (request, reply) => {
+    if (readinessGate.isDraining() && !request.url.startsWith("/api/health/")) {
+      return reply.code(503).send({ error: "Service Unavailable", requestId: request.id });
+    }
+  });
   const ownsDatabase = options.database ? options.databaseOwnership === "owned" : true;
   if (ownsDatabase) {
     app.addHook("onClose", async () => {
@@ -119,10 +129,7 @@ export async function buildWebServer(options: WebServerOptions): Promise<Fastify
   app.get("/api/health", async () => ({ status: "ok" as const }));
   await app.register(healthRoutes, {
     prefix: "/api/health",
-    checkReadiness: options.checkReadiness ?? (async () => {
-      const rows = await database.execute(sql`select 1 where to_regclass('drizzle.__drizzle_migrations') is not null`);
-      if (rows.length === 0) throw new Error("database migrations are incomplete");
-    }),
+    checkReadiness: readinessGate.check,
   });
   const clientRoot = options.staticRoot === undefined
     ? resolve(dirname(fileURLToPath(import.meta.url)), "client")
@@ -136,5 +143,5 @@ export async function buildWebServer(options: WebServerOptions): Promise<Fastify
       return reply.type("text/html").sendFile("index.html");
     });
   }
-  return app;
+  return app as unknown as WebServerInstance;
 }

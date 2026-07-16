@@ -3,6 +3,19 @@ set -eu
 
 command="${1:-web}"
 
+if [ "${2:-}" = "--help" ]; then
+  case "$command" in
+    quota-reconcile)
+      echo "usage: container-entrypoint.sh quota-reconcile"
+      exit 0
+      ;;
+    credential-reencrypt)
+      echo "usage: container-entrypoint.sh credential-reencrypt [--dry-run] [--batch-size=N]"
+      exit 0
+      ;;
+  esac
+fi
+
 wait_for_database() {
   node dist/db/maintenance-main.js wait
 }
@@ -24,6 +37,11 @@ case "$command" in
   quota-reconcile)
     wait_for_database
     exec node dist/db/maintenance-main.js quota-reconcile
+    ;;
+  credential-reencrypt)
+    wait_for_database
+    shift
+    exec node dist/db/maintenance-main.js credential-reencrypt "$@"
     ;;
   *)
     exec "$@"

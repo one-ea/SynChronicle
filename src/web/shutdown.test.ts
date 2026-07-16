@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
-import { installGracefulShutdown } from "./shutdown.js";
+import { createReadinessGate, drainAndClose, installGracefulShutdown } from "./shutdown.js";
 
 describe("installGracefulShutdown", () => {
   it("closes the server once on termination signals", async () => {
@@ -15,5 +15,25 @@ describe("installGracefulShutdown", () => {
     remove();
     expect(signals.listenerCount("SIGTERM")).toBe(0);
     expect(signals.listenerCount("SIGINT")).toBe(0);
+  });
+});
+
+describe("drainAndClose", () => {
+  it("marks readiness unavailable before closing websockets and the listener", async () => {
+    const events: string[] = [];
+    const gate = createReadinessGate(async () => undefined);
+    const closeSockets = vi.fn(() => { events.push("websockets"); });
+    const closeServer = vi.fn(async () => { events.push("server"); });
+
+    await drainAndClose({
+      gate,
+      closeSockets,
+      closeServer,
+      drainMs: 1,
+      sleep: async () => { events.push(gate.isDraining() ? "not-ready" : "ready"); },
+    });
+
+    expect(events).toEqual(["websockets", "not-ready", "server"]);
+    await expect(gate.check()).rejects.toThrow("draining");
   });
 });

@@ -11,10 +11,11 @@ permissions:
 jobs:
   container:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Validate Compose
-        run: docker compose config
-      - name: Build production image
-        run: docker build --tag synchronicle-web:test .
+      - name: Validate deployment contracts
+        run: corepack enable && pnpm install --frozen-lockfile && pnpm vitest run scripts/container-deployment.test.ts
+      - name: Run Compose smoke test
+        run: timeout 12m .github/scripts/container-smoke.sh

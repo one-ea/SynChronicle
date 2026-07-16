@@ -47,4 +47,23 @@ describe("health routes", () => {
     expect(unavailable.json()).toEqual({ status: "unavailable" });
     await app.close();
   });
+
+  it("rejects new application requests after drain begins while keeping liveness observable", async () => {
+    const app = await buildWebServer({
+      database: testDatabase(),
+      databaseOwnership: "borrowed",
+      staticRoot: null,
+      checkReadiness: async () => undefined,
+    } as Parameters<typeof buildWebServer>[0]);
+    app.readinessGate.beginDrain();
+
+    const application = await app.inject({ method: "GET", url: "/api/projects" });
+    const live = await app.inject({ method: "GET", url: "/api/health/live" });
+    const ready = await app.inject({ method: "GET", url: "/api/health/ready" });
+
+    expect(application.statusCode).toBe(503);
+    expect(live.statusCode).toBe(200);
+    expect(ready.statusCode).toBe(503);
+    await app.close();
+  });
 });

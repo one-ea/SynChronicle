@@ -60,6 +60,7 @@ services:
         limits:
           cpus: "1.0"
           memory: 768M
+    stop_grace_period: 45s
 
   worker:
     <<: *app
@@ -70,6 +71,12 @@ services:
       migrate:
         condition: service_completed_successfully
     stop_grace_period: 45s
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /tmp/synchronicle-worker-ready && kill -0 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
     deploy:
       resources:
         limits:

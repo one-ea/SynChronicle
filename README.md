@@ -133,7 +133,7 @@ ENV_FILE=.env.web docker compose config
 ENV_FILE=.env.web docker compose up -d --build
 ```
 
-存活检查为 `/api/health/live`，数据库与迁移就绪检查为 `/api/health/ready`。迁移服务成功退出后 Web 和 Worker 才会启动。备份、恢复、凭证主密钥轮换、Worker 扩容、额度对账与故障排查见 `docs/operations/container-deployment.md`。
+存活检查为 `/api/health/live`，数据库与镜像内全部 Drizzle migration hash/created_at 一致性检查为 `/api/health/ready`。迁移服务成功退出后 Web 和 Worker 才会启动。终止时 Web 先进入 not-ready 排空状态、关闭 WebSocket，再停止监听。备份、恢复、可恢复凭证重加密、Worker 扩容、额度对账与故障排查见 `docs/operations/container-deployment.md`。
 
 在计划存放作品的目录中启动交互式 TUI：
 
