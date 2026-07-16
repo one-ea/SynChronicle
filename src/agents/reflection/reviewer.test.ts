@@ -104,6 +104,26 @@ describe("Reviewer", () => {
     expect(onUsage).toHaveBeenNthCalledWith(2, "reviewer", { totalTokens: 7, latencyMs: 15 }, { provider: "openai", model: "gpt-5-mini" });
   });
 
+  it("assigns a distinct durable logical key to each provider retry", async () => {
+    const logicalKeys: string[] = [];
+    const generate = vi.fn()
+      .mockResolvedValueOnce({ text: "invalid", usage: {} })
+      .mockResolvedValueOnce({ text: JSON.stringify(validReview()), usage: {} });
+    const reviewer = new Reviewer({
+      model,
+      generate,
+      retryLimit: 1,
+      nextInvocationId: async ({ logicalKey }) => {
+        logicalKeys.push(logicalKey);
+        return `review-${logicalKeys.length}`;
+      },
+    });
+
+    await reviewer.review(request);
+
+    expect(logicalKeys).toEqual(["reviewer:generate:1", "reviewer:generate:2"]);
+  });
+
   it("checks the budget policy before each reviewer retry", async () => {
     const generate = vi.fn().mockResolvedValue({ text: "invalid", usage: {} });
     const canContinue = vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(false);
@@ -156,7 +176,8 @@ describe("Reviewer", () => {
 
   it("keeps consecutive reviews independent", async () => {
     const generate = vi.fn().mockResolvedValue({ text: JSON.stringify(validReview()), usage: {} });
-    const reviewer = new Reviewer({ model, generate });
+    const logicalKeys: string[] = [];
+    const reviewer = new Reviewer({ model, generate, nextInvocationId: async ({ logicalKey }) => { logicalKeys.push(logicalKey); return `review-${logicalKeys.length}`; } });
 
     await reviewer.review({ ...request, candidate: "first candidate" });
     await reviewer.review({ ...request, candidate: "second candidate" });
@@ -166,5 +187,6 @@ describe("Reviewer", () => {
     expect(generate.mock.calls[0]?.[0].prompt).not.toContain("second candidate");
     expect(generate.mock.calls[1]?.[0].prompt).toContain("second candidate");
     expect(generate.mock.calls[1]?.[0].prompt).not.toContain("first candidate");
+    expect(logicalKeys).toEqual(["reviewer:generate:1", "reviewer:generate:2"]);
   });
 });

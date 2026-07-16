@@ -91,6 +91,7 @@ export function buildCoordinator(
   askUser?: AskUserHandler,
   onReflectionEvent?: (event: IntegratedReflectionEvent) => unknown,
   hasBudget?: () => boolean,
+  nextInvocationId?: (input: { agent: string; kind: "generate" | "stream"; logicalKey: string }) => Promise<string>,
 ): BuiltCoordinator {
   const reflection = cfg.reflection === undefined
     ? { enabled: true, max_rounds: 3, pass_threshold: 85, review_retry_limit: 2 }
@@ -102,7 +103,7 @@ export function buildCoordinator(
     return new ContextManager({ window: resolveContextWindow(cfg, selection.model).window });
   };
   const usage = recordUsage ? { onUsage: recordUsage } : {};
-  const generation = (role: string) => ({ generationOptions: () => models.currentParameters(role) });
+  const generation = (role: string) => ({ generationOptions: () => models.currentParameters(role), ...(nextInvocationId ? { nextInvocationId } : {}) });
   const makeExecutor = (name: string, role: AgentRole): AgentExecutor | undefined => {
     if (!reflection.enabled) return undefined;
     return {
@@ -128,6 +129,7 @@ export function buildCoordinator(
           reviewer: new Reviewer({
             model: models.forReviewerWithHotSwap(),
             generationOptions: () => models.currentParameters("reviewer"),
+            ...(nextInvocationId ? { nextInvocationId } : {}),
             retryLimit: reflection.review_retry_limit,
             canContinue: () => !(cfg.budget?.hard_stop ?? false) || (hasBudget?.() ?? true),
             ...usage,

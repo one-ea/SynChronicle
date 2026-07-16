@@ -3,13 +3,9 @@ import type { DatabaseQuotaLedger } from "./ledger.js";
 
 type Model = Exclude<LanguageModel, string>;
 
-export function quotaGuardedModel(input: { provider: string; modelName: string; userId: string; projectId: string; runId: string; taskId: string; leaseVersion: number; agent: string; credentialSource?: string; inputPrice?: number | null; outputPrice?: number | null; resolvePricing?: () => Promise<{ inputPrice: number; outputPrice: number; priceSource?: string; credentialSource?: string } | null>; ledger: DatabaseQuotaLedger; model: Model; heartbeatMs?: number }): Model {
-  let sequence = 0;
-  const scope = `${input.agent}:${input.provider}/${input.modelName}`;
-  const cursor = "modelCallCursor" in input.ledger ? input.ledger.modelCallCursor(input.runId, scope) : Promise.resolve(0);
+export function quotaGuardedModel(input: { provider: string; modelName: string; userId: string; projectId: string; runId: string; taskId: string; leaseVersion: number; agent: string; credentialSource?: string; inputPrice?: number | null; outputPrice?: number | null; resolvePricing?: () => Promise<{ inputPrice: number; outputPrice: number; priceSource?: string; credentialSource?: string } | null>; ledger: DatabaseQuotaLedger; model: Model; heartbeatMs?: number; settlementRetry?: { attempts: number; baseDelayMs: number } }): Model {
   const invoke = async (method: "doGenerate" | "doStream", options: unknown) => {
-    sequence += 1;
-    const { id: modelCallId } = await input.ledger.acquireModelCall({ taskId: input.taskId, runId: input.runId, scope, sequence: await cursor + sequence, leaseVersion: input.leaseVersion });
+    const modelCallId = invocationId(options);
     const pricing = input.resolvePricing ? await input.resolvePricing() : input.inputPrice === undefined || input.outputPrice === undefined ? null : { inputPrice: input.inputPrice, outputPrice: input.outputPrice };
     const estimatedCostUsd = estimateCost(options, pricing?.inputPrice ?? null, pricing?.outputPrice ?? null);
     const reservation = await input.ledger.reserve({ userId: input.userId, projectId: input.projectId, runId: input.runId, taskId: input.taskId, leaseVersion: input.leaseVersion, modelCallId, estimatedCostUsd, model: `${input.provider}/${input.modelName}` });
@@ -21,8 +17,8 @@ export function quotaGuardedModel(input: { provider: string; modelName: string; 
       if (!operation) throw new Error(`provider model does not implement ${method}`);
       const result = await operation.call(input.model, options) as Record<string, unknown>;
       providerCompleted = true;
-      if (method === "doStream") { stopHeartbeat(); return wrapStreamResult(result, async (usage) => input.ledger.settleDurably(settleInput(input, pricing, reservation.id, modelCallId, usage, Date.now() - startedAt)), async () => input.ledger.releaseDurably(releaseInput(input, reservation.id, modelCallId)), () => input.ledger.heartbeat(reservation.id, input.taskId, input.leaseVersion)); }
-      await input.ledger.settleDurably(settleInput(input, pricing, reservation.id, modelCallId, usageFrom(result), Date.now() - startedAt));
+      if (method === "doStream") { stopHeartbeat(); return wrapStreamResult(result, async (usage) => persistSettlement(input, settleInput(input, pricing, reservation.id, modelCallId, usage, Date.now() - startedAt)), async () => input.ledger.releaseDurably(releaseInput(input, reservation.id, modelCallId)), () => input.ledger.heartbeat(reservation.id, input.taskId, input.leaseVersion)); }
+      await persistSettlement(input, settleInput(input, pricing, reservation.id, modelCallId, usageFrom(result), Date.now() - startedAt));
       stopHeartbeat();
       return result;
     } catch (error) {
@@ -32,6 +28,24 @@ export function quotaGuardedModel(input: { provider: string; modelName: string; 
     }
   };
   return { ...(input.model as unknown as Record<string, unknown>), doGenerate: (options: unknown) => invoke("doGenerate", options), doStream: (options: unknown) => invoke("doStream", options) } as unknown as Model;
+}
+
+function invocationId(options: unknown): string {
+  const providerOptions = options && typeof options === "object" && "providerOptions" in options ? options.providerOptions : undefined;
+  const synchronicle = providerOptions && typeof providerOptions === "object" && "synchronicle" in providerOptions ? providerOptions.synchronicle : undefined;
+  const value = synchronicle && typeof synchronicle === "object" && "invocationId" in synchronicle ? synchronicle.invocationId : undefined;
+  if (typeof value !== "string" || !value.trim()) throw new Error("durable invocation ID is required for platform model calls");
+  return value;
+}
+
+async function persistSettlement(input: Parameters<typeof quotaGuardedModel>[0], settlement: ReturnType<typeof settleInput>): Promise<void> {
+  const retry = input.settlementRetry ?? { attempts: 3, baseDelayMs: 50 };
+  let lastError: unknown;
+  for (let attempt = 0; attempt < retry.attempts; attempt++) {
+    try { await input.ledger.settleDurably(settlement); return; } catch (error) { lastError = error; if (attempt + 1 < retry.attempts && retry.baseDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, retry.baseDelayMs * 2 ** attempt)); }
+  }
+  await input.ledger.persistEstimateFallback({ ...settlement, needsReconciliation: true, error: lastError instanceof Error ? lastError.message : String(lastError) });
+  throw lastError;
 }
 
 function estimateCost(options: unknown, inputPrice: number | null, outputPrice: number | null): number | null {

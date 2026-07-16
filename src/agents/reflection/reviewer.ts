@@ -24,6 +24,7 @@ export interface ReviewerOptions {
   now?: () => number;
   canContinue?: () => boolean;
   generationOptions?: () => { temperature?: number; maxTokens?: number };
+  nextInvocationId?: (input: { agent: string; kind: "generate"; logicalKey: string }) => Promise<string>;
 }
 
 export class ReviewerError extends Error {
@@ -42,8 +43,10 @@ export class Reviewer {
   private readonly now: () => number;
   private readonly canContinue: () => boolean;
   private readonly generationOptions?: ReviewerOptions["generationOptions"];
+  private readonly nextInvocationId?: ReviewerOptions["nextInvocationId"];
+  private invocationSequence = 0;
 
-  constructor({ model, generate = generateText, retryLimit = 2, onUsage, onUsageError, now = () => performance.now(), canContinue = () => true, generationOptions }: ReviewerOptions) {
+  constructor({ model, generate = generateText, retryLimit = 2, onUsage, onUsageError, now = () => performance.now(), canContinue = () => true, generationOptions, nextInvocationId }: ReviewerOptions) {
     if (!Number.isInteger(retryLimit) || retryLimit < 0 || retryLimit > 3) {
       throw new RangeError("retryLimit must be an integer between 0 and 3");
     }
@@ -55,6 +58,7 @@ export class Reviewer {
     this.now = now;
     this.canContinue = canContinue;
     this.generationOptions = generationOptions;
+    this.nextInvocationId = nextInvocationId;
   }
 
   async review(request: ReviewRequest, signal?: AbortSignal): Promise<ReviewResult> {
@@ -67,9 +71,11 @@ export class Reviewer {
       const startedAt = this.now();
       try {
         const options = this.generationOptions?.() ?? {};
+        const invocationId = this.nextInvocationId ? await this.nextInvocationId({ agent: "reviewer", kind: "generate", logicalKey: `reviewer:generate:${++this.invocationSequence}` }) : undefined;
         raw = await this.generate({
           model: this.model,
           prompt: buildReviewPrompt(request),
+          ...(invocationId ? { providerOptions: { synchronicle: { invocationId } } } : {}),
           ...(options.temperature === undefined ? {} : { temperature: options.temperature }),
           ...(options.maxTokens === undefined ? {} : { maxOutputTokens: options.maxTokens }),
           ...(signal ? { abortSignal: signal } : {}),

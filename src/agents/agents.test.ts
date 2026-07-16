@@ -183,6 +183,24 @@ describe("Agent", () => {
     expect(maximum).toBe(1);
     expect(agent.messages()).toHaveLength(4);
   });
+
+  it("assigns distinct durable logical keys to independent calls", async () => {
+    const logicalKeys: string[] = [];
+    const agent = createAgent({
+      name: "writer",
+      model: mockModel({}),
+      system: "system",
+      nextInvocationId: async ({ logicalKey }) => {
+        logicalKeys.push(logicalKey);
+        return `invocation-${logicalKeys.length}`;
+      },
+    });
+
+    await agent.generate("same prompt");
+    await agent.generate("same prompt");
+
+    expect(logicalKeys).toEqual(["writer:generate:1", "writer:generate:2"]);
+  });
 });
 
 describe("ContextManager", () => {

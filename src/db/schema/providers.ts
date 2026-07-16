@@ -6,8 +6,8 @@ import { runs, tasks } from "./runtime.js";
 
 export const credentialStatus = pgEnum("credential_status", ["active", "disabled", "revoked", "invalid"]);
 export const modelStatus = pgEnum("model_status", ["active", "disabled"]);
-export const quotaOperation = pgEnum("quota_operation", ["credit", "reserve", "settle", "release"]);
-export const quotaReservationStatus = pgEnum("quota_reservation_status", ["reserved", "settled", "released"]);
+export const quotaOperation = pgEnum("quota_operation", ["credit", "reserve", "settle", "estimate_settle", "release"]);
+export const quotaReservationStatus = pgEnum("quota_reservation_status", ["reserved", "provider_completed", "needs_reconciliation", "settled", "released"]);
 export const quotaOutboxAction = pgEnum("quota_outbox_action", ["settle", "release"]);
 export const quotaOutboxStatus = pgEnum("quota_outbox_status", ["pending", "processed"]);
 
@@ -114,10 +114,11 @@ export const modelCallContexts = pgTable("model_call_contexts", {
   taskId: uuid("task_id").notNull().references(() => tasks.id, { onDelete: "cascade" }),
   runId: uuid("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
   scope: text("scope").notNull(),
+  invocationKey: text("invocation_key").notNull(),
   sequence: integer("sequence").notNull(),
   leaseVersion: integer("lease_version").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-}, (table) => [uniqueIndex("model_call_contexts_task_scope_sequence_uq").on(table.taskId, table.scope, table.sequence)]);
+}, (table) => [uniqueIndex("model_call_contexts_task_scope_sequence_uq").on(table.taskId, table.scope, table.sequence), uniqueIndex("model_call_contexts_task_invocation_uq").on(table.taskId, table.invocationKey)]);
 
 export const quotaReservations = pgTable("quota_reservations", {
   id: uuid("id").primaryKey().references(() => quotaLedger.id, { onDelete: "cascade" }),
@@ -129,6 +130,7 @@ export const quotaReservations = pgTable("quota_reservations", {
   leaseVersion: integer("lease_version").notNull(),
   status: quotaReservationStatus("status").notNull().default("reserved"),
   heartbeatAt: timestamp("heartbeat_at", { withTimezone: true }).notNull().defaultNow(),
+  providerCompletedAt: timestamp("provider_completed_at", { withTimezone: true }),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [index("quota_reservations_reconcile_idx").on(table.status, table.heartbeatAt)]);
 
@@ -140,6 +142,7 @@ export const quotaSettlementOutbox = pgTable("quota_settlement_outbox", {
   payload: jsonb("payload").notNull(),
   attempts: integer("attempts").notNull().default(0),
   lastError: text("last_error"),
+  nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   processedAt: timestamp("processed_at", { withTimezone: true }),
 }, (table) => [uniqueIndex("quota_settlement_outbox_reservation_action_uq").on(table.reservationId, table.action), index("quota_settlement_outbox_pending_idx").on(table.status, table.createdAt)]);

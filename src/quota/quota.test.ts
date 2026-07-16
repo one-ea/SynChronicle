@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDatabase, type Database } from "../db/client.js";
 import { eq } from "drizzle-orm";
 import { migrateDatabase } from "../db/migrate.js";
-import { projects, runs, tasks, users } from "../db/schema/index.js";
+import { projects, quotaReservations, runs, tasks, users } from "../db/schema/index.js";
 import { QuotaError, quotaPolicy } from "./policy.js";
 import { DatabaseQuotaLedger, startQuotaMaintenance } from "./ledger.js";
 import { quotaGuardedModel } from "./model.js";
@@ -35,7 +35,7 @@ describe("quota guarded platform model", () => {
     const calls: string[] = [];
     const ledger = { acquireModelCall: vi.fn(async () => ({ id: "call" })), reserve: vi.fn(async () => { calls.push("reserve"); return { id: "reservation", balance: 9 }; }), settleDurably: vi.fn(async () => { calls.push("settle"); }), releaseDurably: vi.fn(), heartbeat: vi.fn() };
     const model = quotaGuardedModel({ provider: "openai", modelName: "gpt", userId: randomUUID(), projectId: randomUUID(), runId: randomUUID(), taskId: randomUUID(), leaseVersion: 1, agent: "writer", inputPrice: 1, outputPrice: 2, ledger: ledger as never, model: { provider: "openai", modelId: "gpt", doGenerate: async () => { calls.push("call"); return { usage: { inputTokens: 1_000_000, outputTokens: 500_000 } }; } } as never });
-    await (model as never as { doGenerate(input: unknown): Promise<unknown> }).doGenerate({ prompt: "hello", maxOutputTokens: 500_000 });
+    await (model as never as { doGenerate(input: unknown): Promise<unknown> }).doGenerate(callOptions("call", { prompt: "hello", maxOutputTokens: 500_000 }));
     expect(calls).toEqual(["reserve", "call", "settle"]);
     expect(ledger.settleDurably).toHaveBeenCalledWith(expect.objectContaining({ actualCostUsd: 2 }));
   });
@@ -43,54 +43,72 @@ describe("quota guarded platform model", () => {
   it("releases the reservation when the provider fails", async () => {
     const ledger = { acquireModelCall: vi.fn(async () => ({ id: "call" })), reserve: vi.fn(async () => ({ id: "reservation", balance: 9 })), settleDurably: vi.fn(), releaseDurably: vi.fn(async () => undefined), heartbeat: vi.fn() };
     const model = quotaGuardedModel({ provider: "openai", modelName: "gpt", userId: randomUUID(), projectId: randomUUID(), runId: randomUUID(), taskId: randomUUID(), leaseVersion: 1, agent: "writer", inputPrice: 1, outputPrice: 2, ledger: ledger as never, model: { provider: "openai", modelId: "gpt", doGenerate: async () => { throw new Error("provider failed"); } } as never });
-    await expect((model as never as { doGenerate(input: unknown): Promise<unknown> }).doGenerate({ prompt: "hello" })).rejects.toThrow("provider failed");
+    await expect((model as never as { doGenerate(input: unknown): Promise<unknown> }).doGenerate(callOptions("call", { prompt: "hello" }))).rejects.toThrow("provider failed");
     expect(ledger.releaseDurably).toHaveBeenCalledOnce();
   });
 
-  it("keeps the reservation when durable settlement enqueue fails after provider success", async () => {
-    const ledger = { acquireModelCall: vi.fn(async () => ({ id: "call" })), reserve: vi.fn(async () => ({ id: "reservation", balance: 9 })), settleDurably: vi.fn(async () => { throw new Error("database unavailable"); }), releaseDurably: vi.fn(), heartbeat: vi.fn() };
+  it("persists estimate fallback when durable settlement enqueue fails after provider success", async () => {
+    const ledger = { reserve: vi.fn(async () => ({ id: "reservation", balance: 9 })), settleDurably: vi.fn(async () => { throw new Error("database unavailable"); }), persistEstimateFallback: vi.fn(async () => undefined), releaseDurably: vi.fn(), heartbeat: vi.fn() };
     const model = quotaGuardedModel({ provider: "openai", modelName: "gpt", userId: randomUUID(), projectId: randomUUID(), runId: randomUUID(), taskId: randomUUID(), leaseVersion: 1, agent: "writer", inputPrice: 1, outputPrice: 2, ledger: ledger as never, model: { provider: "openai", modelId: "gpt", doGenerate: async () => ({ usage: { inputTokens: 1 } }) } as never });
-    await expect((model as never as { doGenerate(input: unknown): Promise<unknown> }).doGenerate({ prompt: "hello" })).rejects.toThrow("database unavailable");
+    await expect((model as never as { doGenerate(input: unknown): Promise<unknown> }).doGenerate(callOptions("call", { prompt: "hello" }))).rejects.toThrow("database unavailable");
     expect(ledger.releaseDurably).not.toHaveBeenCalled();
+    expect(ledger.persistEstimateFallback).toHaveBeenCalledOnce();
   });
 
-  it("assigns different durable call IDs to identical independent calls", async () => {
+  it("uses durable invocation IDs across concurrent model wrappers", async () => {
     const reserved: string[] = [];
-    const ledger = { acquireModelCall: vi.fn(async ({ sequence }) => ({ id: `call-${sequence}` })), reserve: vi.fn(async ({ modelCallId }) => { reserved.push(modelCallId); return { id: `r-${modelCallId}`, balance: 9 }; }), settleDurably: vi.fn(), releaseDurably: vi.fn(), heartbeat: vi.fn() };
-    const model = quotaGuardedModel({ provider: "openai", modelName: "gpt", userId: randomUUID(), projectId: randomUUID(), runId: randomUUID(), taskId: randomUUID(), leaseVersion: 4, agent: "writer", inputPrice: 1, outputPrice: 1, ledger: ledger as never, model: { provider: "openai", modelId: "gpt", doGenerate: async () => ({ usage: {} }) } as never });
-    const invocation = model as never as { doGenerate(input: unknown): Promise<unknown> };
-    await invocation.doGenerate({ prompt: "same" });
-    await invocation.doGenerate({ prompt: "same" });
-    expect(reserved).toEqual(["call-1", "call-2"]);
+    const ledger = { allocateModelCall: vi.fn(), reserve: vi.fn(async ({ modelCallId }) => { reserved.push(modelCallId); return { id: `r-${modelCallId}`, balance: 9 }; }), settleDurably: vi.fn(), releaseDurably: vi.fn(), heartbeat: vi.fn() };
+    const base = { provider: "openai", modelName: "gpt", userId: randomUUID(), projectId: randomUUID(), runId: randomUUID(), taskId: randomUUID(), leaseVersion: 4, agent: "writer", inputPrice: 1, outputPrice: 1, ledger: ledger as never, model: { provider: "openai", modelId: "gpt", doGenerate: async () => ({ usage: {} }) } as never };
+    const first = quotaGuardedModel(base) as never as { doGenerate(input: unknown): Promise<unknown> };
+    const second = quotaGuardedModel(base) as never as { doGenerate(input: unknown): Promise<unknown> };
+    await Promise.all([first.doGenerate(callOptions("11111111-1111-4111-8111-111111111111", { prompt: "same" })), second.doGenerate(callOptions("22222222-2222-4222-8222-222222222222", { prompt: "same" }))]);
+    expect(reserved.sort()).toEqual(["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"]);
+    expect(ledger.allocateModelCall).not.toHaveBeenCalled();
   });
 
   it("reuses the persisted call ID when the same task invocation sequence retries", async () => {
-    const persisted = new Map<number, string>();
-    const ledger = { acquireModelCall: vi.fn(async ({ sequence }) => ({ id: persisted.get(sequence) ?? (persisted.set(sequence, randomUUID()), persisted.get(sequence)!) })), reserve: vi.fn(async ({ modelCallId }) => ({ id: `r-${modelCallId}`, balance: 9 })), settleDurably: vi.fn(), releaseDurably: vi.fn(), heartbeat: vi.fn() };
+    const ledger = { reserve: vi.fn(async ({ modelCallId }) => ({ id: `r-${modelCallId}`, balance: 9 })), settleDurably: vi.fn(), releaseDurably: vi.fn(), heartbeat: vi.fn() };
     const base = { provider: "openai", modelName: "gpt", userId: randomUUID(), projectId: randomUUID(), runId: randomUUID(), taskId: randomUUID(), leaseVersion: 4, agent: "writer", inputPrice: 1, outputPrice: 1, ledger: ledger as never, model: { provider: "openai", modelId: "gpt", doGenerate: async () => ({ usage: {} }) } as never };
-    await (quotaGuardedModel(base) as never as { doGenerate(input: unknown): Promise<unknown> }).doGenerate({ prompt: "same" });
-    await (quotaGuardedModel(base) as never as { doGenerate(input: unknown): Promise<unknown> }).doGenerate({ prompt: "same" });
+    const callId = "33333333-3333-4333-8333-333333333333";
+    await (quotaGuardedModel(base) as never as { doGenerate(input: unknown): Promise<unknown> }).doGenerate(callOptions(callId, { prompt: "same" }));
+    await (quotaGuardedModel(base) as never as { doGenerate(input: unknown): Promise<unknown> }).doGenerate(callOptions(callId, { prompt: "same" }));
     expect(ledger.reserve.mock.calls[0]![0].modelCallId).toBe(ledger.reserve.mock.calls[1]![0].modelCallId);
   });
 
-  it("continues after the latest checkpoint cursor while reusing post-checkpoint retries", async () => {
-    const ledger = { modelCallCursor: vi.fn(async () => 2), acquireModelCall: vi.fn(async ({ sequence }) => ({ id: `call-${sequence}` })), reserve: vi.fn(async ({ modelCallId }) => ({ id: `r-${modelCallId}`, balance: 9 })), settleDurably: vi.fn(), releaseDurably: vi.fn(), heartbeat: vi.fn() };
+  it("rejects calls without a durable invocation context", async () => {
+    const ledger = { reserve: vi.fn(), settleDurably: vi.fn(), releaseDurably: vi.fn(), heartbeat: vi.fn() };
     const model = quotaGuardedModel({ provider: "openai", modelName: "gpt", userId: randomUUID(), projectId: randomUUID(), runId: randomUUID(), taskId: randomUUID(), leaseVersion: 4, agent: "writer", inputPrice: 1, outputPrice: 1, ledger: ledger as never, model: { provider: "openai", modelId: "gpt", doGenerate: async () => ({ usage: {} }) } as never });
-    await (model as never as { doGenerate(input: unknown): Promise<unknown> }).doGenerate({ prompt: "next" });
-    expect(ledger.acquireModelCall).toHaveBeenCalledWith(expect.objectContaining({ sequence: 3 }));
+    await expect((model as never as { doGenerate(input: unknown): Promise<unknown> }).doGenerate({ prompt: "missing" })).rejects.toThrow("durable invocation ID");
   });
 
   it("durably releases a stream reservation when the consumer cancels", async () => {
     const ledger = { acquireModelCall: vi.fn(async () => ({ id: "call" })), reserve: vi.fn(async () => ({ id: "reservation", balance: 9 })), settleDurably: vi.fn(), releaseDurably: vi.fn(), heartbeat: vi.fn() };
     const source = new ReadableStream({ start(controller) { controller.enqueue({ type: "text-delta", delta: "x" }); } });
     const model = quotaGuardedModel({ provider: "openai", modelName: "gpt", userId: randomUUID(), projectId: randomUUID(), runId: randomUUID(), taskId: randomUUID(), leaseVersion: 1, agent: "writer", inputPrice: 1, outputPrice: 1, ledger: ledger as never, model: { provider: "openai", modelId: "gpt", doStream: async () => ({ stream: source }) } as never });
-    const result = await (model as never as { doStream(input: unknown): Promise<{ stream: ReadableStream }> }).doStream({ prompt: "x" });
+    const result = await (model as never as { doStream(input: unknown): Promise<{ stream: ReadableStream }> }).doStream(callOptions("call", { prompt: "x" }));
     const reader = result.stream.getReader();
     await reader.read();
     await reader.cancel();
     expect(ledger.releaseDurably).toHaveBeenCalledOnce();
   });
+
+  it("retries settlement intent persistence before returning generate completion", async () => {
+    const calls: string[] = [];
+    const ledger = { reserve: vi.fn(async () => ({ id: "reservation", balance: 9 })), settleDurably: vi.fn(async () => { calls.push("intent"); if (calls.length < 3) throw new Error("transient"); }), persistEstimateFallback: vi.fn(), releaseDurably: vi.fn(), heartbeat: vi.fn() };
+    const model = quotaGuardedModel({ provider: "openai", modelName: "gpt", userId: randomUUID(), projectId: randomUUID(), runId: randomUUID(), taskId: randomUUID(), leaseVersion: 1, agent: "writer", inputPrice: 1, outputPrice: 1, ledger: ledger as never, settlementRetry: { attempts: 3, baseDelayMs: 0 }, model: { provider: "openai", modelId: "gpt", doGenerate: async () => ({ usage: { inputTokens: 1 } }) } as never });
+    await expect((model as never as { doGenerate(input: unknown): Promise<unknown> }).doGenerate(callOptions("call", {}))).resolves.toBeTruthy();
+    expect(calls).toEqual(["intent", "intent", "intent"]);
+  });
+
+  it("persists estimate fallback when settlement intent cannot be written", async () => {
+    const ledger = { reserve: vi.fn(async () => ({ id: "reservation", balance: 9 })), settleDurably: vi.fn(async () => { throw new Error("db down"); }), persistEstimateFallback: vi.fn(async () => undefined), releaseDurably: vi.fn(), heartbeat: vi.fn() };
+    const model = quotaGuardedModel({ provider: "openai", modelName: "gpt", userId: randomUUID(), projectId: randomUUID(), runId: randomUUID(), taskId: randomUUID(), leaseVersion: 1, agent: "writer", inputPrice: 1, outputPrice: 1, ledger: ledger as never, settlementRetry: { attempts: 2, baseDelayMs: 0 }, model: { provider: "openai", modelId: "gpt", doGenerate: async () => ({ usage: { inputTokens: 1 } }) } as never });
+    await expect((model as never as { doGenerate(input: unknown): Promise<unknown> }).doGenerate(callOptions("call", {}))).rejects.toThrow("db down");
+    expect(ledger.persistEstimateFallback).toHaveBeenCalledWith(expect.objectContaining({ reservationId: "reservation", actualCostUsd: 0.000001, usage: expect.objectContaining({ inputTokens: 1 }), needsReconciliation: true }));
+  });
 });
+
+function callOptions(invocationId: string, value: Record<string, unknown>) { return { ...value, providerOptions: { synchronicle: { invocationId } } }; }
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const postgres = databaseUrl ? describe : describe.skip;
@@ -152,5 +170,36 @@ postgres("PostgreSQL quota ledger", () => {
     await ledger.reserve({ userId, projectId, runId, taskId, leaseVersion: 1, modelCallId, estimatedCostUsd: 1 });
     expect(await ledger.reconcile({ olderThan: new Date(Date.now() + 1_000) })).toBe(0);
     expect(await ledger.reservationState(runId, modelCallId)).toBe("reserved");
+  });
+
+  it("atomically allocates unique calls across wrappers and reuses crash retries", async () => {
+    const [first, second] = await Promise.all([
+      ledger.allocateModelCall({ taskId, runId, scope: "writer:generate", invocationKey: `first-${randomUUID()}`, leaseVersion: 1 }),
+      ledger.allocateModelCall({ taskId, runId, scope: "writer:generate", invocationKey: `second-${randomUUID()}`, leaseVersion: 1 }),
+    ]);
+    expect(first.id).not.toBe(second.id);
+    const retryKey = `retry-${randomUUID()}`;
+    const original = await ledger.allocateModelCall({ taskId, runId, scope: "writer:generate", invocationKey: retryKey, leaseVersion: 1 });
+    const recovered = await ledger.allocateModelCall({ taskId, runId, scope: "writer:generate", invocationKey: retryKey, leaseVersion: 2 });
+    expect(recovered.id).toBe(original.id);
+  });
+
+  it("reconciles an estimate fallback with its retained actual usage", async () => {
+    const call = await ledger.allocateModelCall({ taskId, runId, scope: "writer:generate", invocationKey: `missing-${randomUUID()}`, leaseVersion: 1 });
+    const reservation = await ledger.reserve({ userId, projectId, runId, taskId, leaseVersion: 1, modelCallId: call.id, estimatedCostUsd: 1 });
+    await ledger.persistEstimateFallback({ reservationId: reservation.id, userId, projectId, runId, taskId, leaseVersion: 1, modelCallId: call.id, actualCostUsd: 0.25, usageId: call.id, usage: { inputTokens: 250_000 }, needsReconciliation: true, error: "intent insert failed" });
+    await ledger.reconcile({ olderThan: new Date() });
+    expect(await ledger.reservationState(runId, call.id)).toBe("settled");
+  });
+
+  it("charges the estimate when provider completion has no actual intent", async () => {
+    const call = await ledger.allocateModelCall({ taskId, runId, scope: "writer:generate", invocationKey: `estimate-${randomUUID()}`, leaseVersion: 1 });
+    const reservation = await ledger.reserve({ userId, projectId, runId, taskId, leaseVersion: 1, modelCallId: call.id, estimatedCostUsd: 0.5 });
+    await db.update(quotaReservations).set({ status: "provider_completed", heartbeatAt: new Date(Date.now() - 60_000) }).where(eq(quotaReservations.id, reservation.id));
+    await db.update(tasks).set({ status: "failed", leaseExpiresAt: new Date(Date.now() - 1) }).where(eq(tasks.id, taskId));
+
+    await ledger.reconcile({ olderThan: new Date() });
+
+    expect(await ledger.reservationState(runId, call.id)).toBe("settled");
   });
 });

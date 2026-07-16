@@ -49,6 +49,7 @@ export async function startWorker(): Promise<void> {
     createHost: async (task) => {
       const runConfig = applyRunConfiguration(config, task.payload);
       return Host.new(runConfig, bundle, {
+        nextModelInvocation: async ({ agent, kind, logicalKey }) => (await quotaLedger.allocateModelCall({ taskId: task.id, runId: task.runId, scope: `${agent}:${kind}`, invocationKey: logicalKey, leaseVersion: task.leaseVersion })).id,
         modelFactory: (provider, model, selection) => {
           if (selection?.credentialId) return credentialScopedModel(provider, model, selection.credentialId, runConfig.providers?.[provider] ?? {}, async (credentialId, expectedProvider) => {
             const secret = await credentialService.resolve(task.userId, credentialId, { runId: task.runId });

@@ -41,14 +41,13 @@ Implemented platform model quotas, append-only accounting, administrator control
 
 ## Verification
 
-- Target quota/admin/usage/runtime/Scheduler suite: 22 passed, 19 PostgreSQL-conditional skipped.
-- Client and target regression suite: 60 passed, 19 PostgreSQL-conditional skipped.
-- Full Vitest suite: 534 passed, 51 PostgreSQL-conditional skipped.
-- Playwright responsive suite: 8 passed.
-- TypeScript typecheck: passed.
-- Production build: passed.
-- Drizzle check: passed.
-- Git diff check: passed.
+- `pnpm vitest run src/quota src/web/admin src/web/usage src/runtime/usage.test.ts src/scheduler`: exit 0; PostgreSQL-conditional cases report skips when `TEST_DATABASE_URL` is absent.
+- `pnpm test`: exit 0 on the final independent run.
+- `pnpm test:browser`: exit 0 on the final independent run.
+- `pnpm typecheck`: exit 0.
+- `pnpm build`: exit 0.
+- `pnpm exec drizzle-kit check`: exit 0.
+- `git diff --check`: exit 0.
 
 ## Concerns
 
@@ -71,16 +70,36 @@ Implemented platform model quotas, append-only accounting, administrator control
 
 ## Follow-Up Verification
 
-- Target quota/admin/usage/runtime/Scheduler suite: 32 passed, 23 PostgreSQL-conditional skipped.
-- Full Vitest suite, run independently: 544 passed, 55 PostgreSQL-conditional skipped.
-- Playwright responsive suite, run independently: 8 passed.
-- TypeScript typecheck: passed.
-- Production build: passed.
-- Drizzle migration check: passed.
-- Git diff check: passed.
+- `pnpm vitest run src/quota src/web/admin src/web/usage src/runtime/usage.test.ts src/scheduler src/web/client/pages`: exit 0; conditional PostgreSQL suites state their skip status explicitly.
+- `pnpm test`: exit 0 on the final independent run.
+- `pnpm test:browser`: exit 0 on the final independent run.
+- `pnpm typecheck`, `pnpm build`, `pnpm exec drizzle-kit check`, and `git diff --check`: exit 0.
 - Running full Vitest and Playwright concurrently caused one unrelated existing Agent test timeout and one first-page Playwright timeout from resource contention. Independent reruns passed completely and are the final evidence above.
 
 ## Follow-Up Concerns
 
 - PostgreSQL-conditional tests require `TEST_DATABASE_URL`; this environment skipped the four quota and three administrator repository cases.
 - JavaScript cannot deterministically detect a consumer that abandons a `ReadableStream` without cancelling or returning its iterator. Stream heartbeat stops after Provider stream creation, active leases protect long calls, and lease expiry plus periodic reconciliation closes that crash/abandon path.
+
+## Stable Accounting Follow-Up
+
+- Host, Agent, and Reviewer now create durable logical invocation keys before entering the AI SDK. Worker allocation uses a task-scoped PostgreSQL advisory lock and a unique task/invocation key, so separate wrappers allocate distinct call IDs while crash retries reuse the original ID. The quota wrapper no longer owns or derives a sequence and rejects missing invocation context.
+- Generate completion waits until the actual-usage settlement intent is durably inserted. Stream finish chunks wait for the same durable intent before delivery. Transient intent failures use bounded exponential retry; exhausted retries append an estimate-charge fallback and mark the reservation `needs_reconciliation`.
+- Reservation state distinguishes `provider_completed` and `needs_reconciliation`. Reconciliation preserves provider-completed calls with an actual-usage outbox intent, estimate-settles only provider-completed calls whose actual intent is missing, and releases only calls that never completed at the Provider.
+- Outbox processing records a bounded exponential `nextAttemptAt`, allowing process restart and periodic Worker maintenance to resume actual settlement without exposing a premature terminal result.
+- Usage API platform warnings come from current active `platform_models` metadata and pricing policy. Settings displays unavailable unknown-price models even when no historical settlement exists.
+- Dedicated usage projection and Settings warning tests cover numeric conversion and current platform-model availability.
+
+## Stable Accounting Verification
+
+- `pnpm vitest run src/quota/quota.test.ts src/agents/agents.test.ts src/agents/reflection/reviewer.test.ts src/web/usage/usage.test.ts src/web/client/pages/settings.test.tsx`: exit 0.
+- Full-gate command evidence is appended from the final run below; no fixed test totals are used because conditional PostgreSQL execution depends on `TEST_DATABASE_URL`.
+
+## Final Stabilization
+
+- The quota wrapper now consumes the model-call ID allocated before the AI SDK boundary directly, preserving one durable ID across Provider wrappers.
+- Agent and Reviewer calls use deterministic instance-local invocation sequences, so independent calls and Reviewer retries remain distinct while crash replay starts from the same logical sequence.
+- Settlement enqueue retries retain the full actual-usage payload in the estimate fallback. Reconciliation recreates the actual settlement intent and processes it; Provider completions with no recoverable actual payload close at the reserved estimate.
+- Migration `0014_worthless_beyonder.sql` is required for the new enum states, invocation key, Provider completion timestamp, outbox retry timestamp, and task/invocation uniqueness constraint. Its journal and snapshot match the TypeScript schema.
+- Final `pnpm test`: 551 passed, 58 skipped; PostgreSQL-conditional suites were skipped because `TEST_DATABASE_URL` is absent.
+- Final `pnpm test:browser`: 8 passed.
