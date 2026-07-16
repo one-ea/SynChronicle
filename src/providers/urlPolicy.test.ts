@@ -139,4 +139,22 @@ describe("provider base URL policy", () => {
 
     await expect(secureFetch("https://api.openai.com/v1")).rejects.toMatchObject({ code });
   });
+
+  it("clears the overall timer when transport creation throws synchronously", async () => {
+    vi.useFakeTimers();
+    try {
+      const secureFetch = createSecureProviderFetch(
+        "openai",
+        new Map(),
+        async () => [{ address: "93.184.216.34", family: 4 }],
+        { overallTimeoutMs: 60_000 },
+        (() => { throw new Error("transport creation failed"); }) as never,
+      );
+
+      await expect(secureFetch("https://api.openai.com/v1")).rejects.toThrow("transport creation failed");
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

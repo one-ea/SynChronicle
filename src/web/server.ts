@@ -29,7 +29,6 @@ import { CredentialService } from "../credentials/service.js";
 import { DatabaseCredentialRepository } from "../credentials/database.js";
 import { masterKeyRegistryFromEnvironment, type MasterKeyRegistry } from "../credentials/envelope.js";
 import { createLoginRateLimiter } from "./auth/plugin.js";
-import { redactSecrets } from "../credentials/redactor.js";
 import { adminRoutes, DatabaseAdminRepository } from "./admin/routes.js";
 import { usageRoutes } from "./usage/routes.js";
 import { importProjectArchive, exportDatabaseProject, validateDatabaseProjectExport } from "../migration/fileProjectImporter.js";
@@ -37,6 +36,7 @@ import { importExportRoutes } from "./projects/importExportRoutes.js";
 import { healthRoutes } from "./health/routes.js";
 import { checkAppliedMigrations } from "../db/maintenance.js";
 import { createReadinessGate, type ReadinessGate } from "./shutdown.js";
+import { productionSecurityPlugin } from "./security/plugin.js";
 
 type WebServerCommonOptions = Partial<Pick<WebConfig, "publicUrl" | "trustProxy" | "credentialMasterKeys" | "credentialMasterKeyVersion" | "providerAllowedHosts">> & { staticRoot?: string | null; credentialRegistry?: MasterKeyRegistry; checkReadiness?: () => Promise<void> };
 
@@ -61,11 +61,6 @@ export async function buildWebServer(options: WebServerOptions): Promise<WebServ
   app.addHook("onSend", async (request, reply) => {
     reply.header("x-request-id", request.id);
   });
-  app.setErrorHandler((error, request, reply) => {
-    request.log.error(redactSecrets(error), "request failed");
-    const statusCode = error && typeof error === "object" && "statusCode" in error && typeof error.statusCode === "number" ? error.statusCode : 500;
-    void reply.code(statusCode < 500 ? statusCode : 500).send({ error: statusCode < 500 ? "Invalid request" : "Internal Server Error", requestId: request.id });
-  });
   const database = options.database ?? createDatabase(options.databaseUrl);
   const readinessGate = createReadinessGate(options.checkReadiness ?? (() => checkAppliedMigrations(database)));
   app.decorate("readinessGate", readinessGate);
@@ -80,9 +75,26 @@ export async function buildWebServer(options: WebServerOptions): Promise<WebServ
       await database.$client.end();
     });
   }
+  const publicUrl = options.publicUrl ?? "http://localhost:3000";
+  await app.register(productionSecurityPlugin, {
+    publicUrl,
+    bodyLimits: {
+      default: 1024 * 1024,
+      routes: { "POST:/api/projects/import": 50 * 1024 * 1024 },
+    },
+    rateLimits: {
+      default: { max: 300, windowMs: 60_000 },
+      routes: {
+        "POST:/api/auth/login": { max: 10, windowMs: 60_000 },
+        "POST:/api/projects": { max: 30, windowMs: 60_000 },
+        "POST:/api/projects/import": { max: 5, windowMs: 60_000 },
+        "POST:/api/providers/credentials": { max: 20, windowMs: 60_000 },
+      },
+    },
+  });
   await app.register(authPlugin, {
     db: database,
-    publicUrl: options.publicUrl ?? "http://localhost:3000",
+    publicUrl,
   });
   await app.register(websocket);
   const eventBroker = new PostgresEventBroker(database);

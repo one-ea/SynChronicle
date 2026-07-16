@@ -44,7 +44,7 @@ describe("buildWebServer", () => {
     await app.close();
   });
 
-  it("disables trusted proxy handling by default", async () => {
+  it("requires an explicit trusted proxy allowlist", async () => {
     const config = WebConfigSchema.parse({
       databaseUrl: "postgres://test:test@localhost/test",
       publicUrl: "https://app.example.test",
@@ -53,7 +53,8 @@ describe("buildWebServer", () => {
       credentialMasterKeyVersion: "v1",
     });
     expect(config.trustProxy).toBe(false);
-    expect(WebConfigSchema.parse({ ...config, trustProxy: "true" }).trustProxy).toBe(true);
+    expect(WebConfigSchema.parse({ ...config, trustProxy: "127.0.0.1,10.0.0.0/8" }).trustProxy).toEqual(["127.0.0.1", "10.0.0.0/8"]);
+    expect(() => WebConfigSchema.parse({ ...config, trustProxy: "true" })).toThrow("TRUST_PROXY");
   });
 
   it("strictly parses project provider host policy configuration", () => {

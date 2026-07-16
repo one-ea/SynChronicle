@@ -53,7 +53,6 @@ export interface StorePort {
   init(): Promise<void>;
   checkConsistency(): Promise<string[]>;
   foundationMissing(): Promise<string[]>;
-  clearHandledSteer(): Promise<void>;
   applySteerCommand(commandId: string, instruction: string, fallback: RunMeta): Promise<boolean>;
   pendingSteerCommands(): Promise<DurableSteerCommand[]>;
   completeSteerDelivery(commandIds: string[]): Promise<void>;

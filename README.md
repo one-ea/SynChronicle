@@ -135,6 +135,8 @@ ENV_FILE=.env.web docker compose up -d --build
 
 存活检查为 `/api/health/live`，数据库与镜像内全部 Drizzle migration hash/created_at 一致性检查为 `/api/health/ready`。Worker 健康检查绑定实际 Node PID、启动 nonce/timestamp 和 `/proc` 命令行。迁移服务成功退出后 Web 和 Worker 才会启动。终止时 Web 先进入 not-ready 排空状态、关闭 WebSocket，再停止监听。恢复流程使用新数据库验证并保留时间戳旧库。备份、恢复、可恢复凭证重加密、Worker 扩容、额度对账与故障排查见 `docs/operations/container-deployment.md`。
 
+生产 Web 统一启用每响应 CSP nonce、HSTS、`nosniff`、frame deny/`frame-ancestors 'none'`、严格 referrer/permissions policy、请求体上限、来源校验、按路由与客户端身份限流、安全错误响应和管理接口 RBAC。`TRUST_PROXY` 默认关闭；部署在代理后方时填写明确的 IP/CIDR 逗号列表，例如 `TRUST_PROXY=127.0.0.1,10.0.0.0/8`。布尔 `true` 会在启动配置校验中被拒绝。
+
 在计划存放作品的目录中启动交互式 TUI：
 
 ```bash
@@ -232,6 +234,15 @@ pnpm test
 pnpm build
 npm pack --dry-run
 sh -n scripts/install.sh
+```
+
+完整 Web 发布门禁由 `.github/workflows/web-ci.yml` 执行。该任务启动隔离 PostgreSQL，运行迁移和零 skip 的全量 Vitest，然后执行生产构建、真实 PostgreSQL/Web/Worker 的桌面与移动 Playwright 场景、打包检查、Docker build、Compose 配置及容器 smoke。确定性 Provider 仅在 `NODE_ENV=test` 与 `SYNCHRONICLE_E2E_FAKE_PROVIDER=1` 同时设置时可注入，测试过程不会访问外部模型网络。
+
+本地具备 PostgreSQL 时可运行同一数据库测试门禁：
+
+```bash
+TEST_DATABASE_URL=postgres://user:password@127.0.0.1:5432/synchronicle_test pnpm test:ci
+TEST_DATABASE_URL=postgres://user:password@127.0.0.1:5432/synchronicle_test pnpm playwright test
 ```
 
 版本标签触发 GitHub Actions，在 Node.js 24 环境中完成验证并发布 npm 包。包内容包含运行产物、Markdown 资产、`README.md`、`LICENSE` 和 `NOTICE`。

@@ -24,6 +24,7 @@
     "web": "node dist/web/main.js",
     "worker": "node dist/worker/main.js",
     "test": "vitest run",
+    "test:ci": "vitest run --reporter=json --outputFile=vitest-report.json && vite-node scripts/assert-no-skipped-tests.ts vitest-report.json",
     "test:browser": "playwright test",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"

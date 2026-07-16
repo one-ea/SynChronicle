@@ -186,26 +186,33 @@ export function createSecureProviderFetch(provider: string, allowedHosts: Provid
       let settled = false;
       let connect: ReturnType<typeof setTimeout> | undefined;
       let responseHeader: ReturnType<typeof setTimeout> | undefined;
+      let outgoing: ReturnType<typeof requester> | undefined;
       const fail = (error: Error) => {
         if (settled) return;
         settled = true;
         if (connect) clearTimeout(connect);
         if (responseHeader) clearTimeout(responseHeader);
         clearTimeout(overall);
-        outgoing.destroy(error);
+        outgoing?.destroy(error);
         reject(error);
       };
       const overall = setTimeout(() => fail(new ProviderTransportError("PROVIDER_RESPONSE_TIMEOUT", "provider request exceeded overall timeout")), configured.overallTimeoutMs);
-      const outgoing = requester(validated.url, {
-        method: request.method,
-        headers: Object.fromEntries(request.headers),
-        signal: request.signal,
-        lookup: (_hostname, _options, callback) => callback(null, validated.address, validated.family),
-      }, (incoming) => {
-        if (connect) clearTimeout(connect);
-        if (responseHeader) clearTimeout(responseHeader);
-        void readBoundedResponse(incoming, configured).then((body) => { if (settled) return; settled = true; clearTimeout(overall); resolveResponse(new Response(new Uint8Array(body), { status: incoming.statusCode ?? 502, statusText: incoming.statusMessage, headers: incoming.headers as Record<string, string> })); }, (error) => { if (settled) return; settled = true; clearTimeout(overall); reject(error); });
-      });
+      try {
+        outgoing = requester(validated.url, {
+          method: request.method,
+          headers: Object.fromEntries(request.headers),
+          signal: request.signal,
+          lookup: (_hostname, _options, callback) => callback(null, validated.address, validated.family),
+        }, (incoming) => {
+          if (connect) clearTimeout(connect);
+          if (responseHeader) clearTimeout(responseHeader);
+          void readBoundedResponse(incoming, configured).then((body) => { if (settled) return; settled = true; clearTimeout(overall); resolveResponse(new Response(new Uint8Array(body), { status: incoming.statusCode ?? 502, statusText: incoming.statusMessage, headers: incoming.headers as Record<string, string> })); }, (error) => { if (settled) return; settled = true; clearTimeout(overall); reject(error); });
+        });
+      } catch (error) {
+        clearTimeout(overall);
+        reject(error);
+        return;
+      }
       connect = setTimeout(() => fail(new ProviderTransportError("PROVIDER_CONNECT_TIMEOUT", "provider connection timed out")), configured.connectTimeoutMs);
       outgoing.on("socket", (socket) => {
         const connected = () => {

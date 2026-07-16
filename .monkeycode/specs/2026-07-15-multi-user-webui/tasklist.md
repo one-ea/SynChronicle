@@ -982,7 +982,7 @@ git commit -m "feat(deploy): add containerized web platform"
 **Interfaces:**
 - Produces production security headers, request limits, origin checks, audit coverage, E2E verification, and release gate。
 
-- [ ] **Step 1: Write security regression tests**
+- [x] **Step 1: Write security regression tests**
 
 ```ts
 it("rejects cross-origin mutations and oversized imports", async () => {
@@ -993,17 +993,17 @@ it("rejects cross-origin mutations and oversized imports", async () => {
 });
 ```
 
-- [ ] **Step 2: Run security tests and verify failure**
+- [x] **Step 2: Run security tests and verify failure**
 
 Run: `pnpm vitest run src/web/security/security.test.ts`
 
 Expected: FAIL because security plugin is missing.
 
-- [ ] **Step 3: Implement production security controls**
+- [x] **Step 3: Implement production security controls**
 
 Set CSP, HSTS in HTTPS deployments, `X-Content-Type-Options`, restrictive frame policy, request body limits, per-route rate limits, trusted proxy configuration, same-origin mutation checks, recursive secret redaction, and role checks for every `/api/admin/*` route.
 
-- [ ] **Step 4: Implement full E2E scenario**
+- [x] **Step 4: Implement full E2E scenario**
 
 ```ts
 test("user creates and controls a realtime writing run", async ({ page }) => {
@@ -1021,7 +1021,7 @@ test("user creates and controls a realtime writing run", async ({ page }) => {
 });
 ```
 
-- [ ] **Step 5: Add CI release gate**
+- [x] **Step 5: Add CI release gate**
 
 CI starts PostgreSQL, runs migrations, typecheck, all Vitest tests, Vite and tsup builds, Playwright E2E, `npm pack --dry-run`, Docker build, and `docker compose config`.
 
@@ -1031,7 +1031,7 @@ Run: `pnpm typecheck && pnpm test && pnpm build && pnpm playwright test && npm p
 
 Expected: all commands pass; existing CLI, TUI, Headless, 277 baseline tests, new Web tests, and E2E tests are green.
 
-- [ ] **Step 7: Mark task list complete and commit**
+- [x] **Step 7: Mark task list complete and commit**
 
 Update every completed checkbox only after its verification output succeeds.
 

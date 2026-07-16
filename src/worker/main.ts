@@ -32,6 +32,9 @@ export async function startWorker(): Promise<void> {
   const idleMs = positiveInteger(process.env.WORKER_IDLE_MS, 1_000, "WORKER_IDLE_MS");
   const database = createDatabase(databaseUrl);
   const providerAllowedHosts = parseProviderAllowedHosts(process.env.PROJECT_PROVIDER_ALLOWED_HOSTS);
+  const deterministicTestModel = process.env.NODE_ENV === "test" && process.env.SYNCHRONICLE_E2E_FAKE_PROVIDER === "1"
+    ? (await import("../testing/fakeProvider.js")).createDeterministicTestModel
+    : undefined;
   const credentialService = new CredentialService(new DatabaseCredentialRepository(database), masterKeyRegistryFromEnvironment(process.env.PROJECT_CREDENTIAL_MASTER_KEYS, process.env.PROJECT_CREDENTIAL_MASTER_KEY_VERSION), undefined, providerAllowedHosts);
   const events = new DatabaseEventRepository(database);
   const eventBroker = new PostgresEventBroker(database);
@@ -55,6 +58,7 @@ export async function startWorker(): Promise<void> {
       return Host.new(runConfig, bundle, {
         nextModelInvocation: async ({ agent, kind, logicalKey }) => (await quotaLedger.allocateModelCall({ taskId: task.id, runId: task.runId, scope: `${agent}:${kind}`, invocationKey: logicalKey, leaseVersion: task.leaseVersion })).id,
         modelFactory: (provider, model, selection) => {
+          if (deterministicTestModel) return quotaGuardedModel({ provider, modelName: model, userId: task.userId, projectId: task.projectId, runId: task.runId, taskId: task.id, leaseVersion: task.leaseVersion, agent: task.type, resolvePricing: async () => ({ inputPrice: 0, outputPrice: 0, priceSource: "platform", credentialSource: "environment" }), ledger: quotaLedger, model: deterministicTestModel(provider, model) as never });
           if (selection?.credentialId) return credentialScopedModel(provider, model, selection.credentialId, runConfig.providers?.[provider] ?? {}, async (credentialId, expectedProvider) => {
             const secret = await credentialService.resolve(task.userId, credentialId, { runId: task.runId });
             if (!secret || secret.provider !== expectedProvider) throw new Error("credential is unavailable for this provider");

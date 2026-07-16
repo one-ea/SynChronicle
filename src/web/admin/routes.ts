@@ -30,8 +30,6 @@ function publicModel(value: unknown) {
 }
 
 export const adminRoutes: FastifyPluginAsync<{ repository: AdminRoutesRepository }> = async (app, options) => {
-  app.addHook("preHandler", app.authenticateRequest);
-  app.addHook("preHandler", async (request, reply) => { if (request.auth.role !== "admin") await reply.code(403).send({ error: "Forbidden" }); });
   app.get("/models", async () => ({ models: (await options.repository.listModels()).map(publicModel) }));
   app.post("/models", async (request, reply) => { const parsed = ModelInput.safeParse(request.body); return parsed.success ? reply.code(201).send({ model: publicModel(await options.repository.createModel(request.auth, parsed.data, request.id)) }) : reply.code(400).send({ error: "Invalid model" }); });
   app.patch("/models/:modelId", async (request, reply) => { const params = ModelParams.safeParse(request.params), parsed = ModelUpdate.safeParse(request.body); if (!params.success || !parsed.success) return reply.code(400).send({ error: "Invalid model" }); const model = await options.repository.updateModel(request.auth, params.data.modelId, parsed.data, request.id); return model ? { model: publicModel(model) } : reply.code(404).send({ error: "Model not found" }); });

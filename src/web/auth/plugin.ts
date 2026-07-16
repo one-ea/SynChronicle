@@ -36,8 +36,6 @@ export interface AuthPluginOptions {
   loginRateLimit?: { max: number; windowMs: number; capacity?: number };
 }
 
-const mutationMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
-
 export interface LoginRateLimiter {
   consume(key: string): boolean;
   readonly size: number;
@@ -87,6 +85,7 @@ export const authPlugin = fp<AuthPluginOptions>(async (app, options) => {
   app.decorateRequest("auth");
   app.decorate("authPublicUrl", publicUrl);
   app.decorate("authenticateRequest", async function authenticateRequest(request, reply) {
+    if (request.auth) return;
     const token = request.cookies[SESSION_COOKIE];
     const session = token
       ? await repository.findActiveSessionByDigest(digestSessionToken(token), new Date())
@@ -97,14 +96,6 @@ export const authPlugin = fp<AuthPluginOptions>(async (app, options) => {
       return;
     }
     request.auth = { userId: user.id, role: user.role, sessionId: session.id };
-  });
-
-  app.addHook("onRequest", async (request, reply) => {
-    if (!mutationMethods.has(request.method)) return;
-    const origin = request.headers.origin;
-    if (origin !== publicUrl.origin) {
-      await reply.code(403).send({ error: "Forbidden" });
-    }
   });
 
   function consumeLoginAttempt(ip: string): boolean {

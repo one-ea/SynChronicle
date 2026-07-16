@@ -33,7 +33,16 @@ Final gate: execute 46 PostgreSQL conditional tests and full browser-to-Worker f
 Task 11: complete (commits cbca149..8eddad8, review pass with Low findings)
 Low: maintain IPv6 special-purpose range list and clear overall timer if transport creation synchronously throws.
 Final gate: execute credential and model-set PostgreSQL conditions with isolated `TEST_DATABASE_URL`.
+Task 12: complete (commits 8eddad8..5f386c9, code review approved)
+Final gate: execute all quota/admin/concurrency PostgreSQL tests with zero skips; monitor settlement AbortSignal test stability.
+Task 13: complete (commits 5f386c9..42e705f, review approved)
+Final gate: execute `src/migration/migration.postgres.test.ts` with isolated `TEST_DATABASE_URL`.
+Task 14: complete (commits 42e705f..743d75d, implementation approved)
+Final gate: Docker-capable CI must pass image build and full Compose smoke workflow.
 Task 12: complete (append-only quota ledger, admin controls, usage/settings UI, dynamic Scheduler caps)
 Final gate: execute quota concurrency, duplicate settlement, crash reconciliation, RBAC, and dynamic Scheduler PostgreSQL conditions with isolated `TEST_DATABASE_URL`.
 Task 12 durability follow-up: complete candidate (persisted call contexts, lease-aware reservation heartbeats, durable terminal outbox, platform credential execution, transactional admin audit, serialized caps, independent usage summaries, full model lifecycle UI/API).
 Final gate remains PostgreSQL execution with isolated `TEST_DATABASE_URL`; local sequential full Vitest and Playwright gates pass.
+Task 15: implementation complete candidate (production security plugin, strict trusted proxies, real PostgreSQL/Web/Worker E2E harness with test-only deterministic Provider, zero-skip CI gate, release documentation).
+Task 15 local gate: typecheck, 637 Vitest tests, tsup/Vite build, Playwright discovery, npm pack dry-run, and diff check passed; 62 PostgreSQL-conditional tests, browser E2E, Docker build, Compose config, and Compose smoke await Docker/PostgreSQL-capable CI.
+Task 15 minors closed: removed unused `clearHandledSteer`, consolidated stale Task 9 verification reporting, and cleared the Provider transport overall timer after synchronous requester failure.

@@ -1,0 +1,49 @@
+name: Web CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  release-gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_USER: synchronicle
+          POSTGRES_PASSWORD: synchronicle
+          POSTGRES_DB: synchronicle_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U synchronicle -d synchronicle_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      TEST_DATABASE_URL: postgres://synchronicle:synchronicle@127.0.0.1:5432/synchronicle_test
+      DATABASE_URL: postgres://synchronicle:synchronicle@127.0.0.1:5432/synchronicle_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10.34.5 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm typecheck
+      - run: pnpm exec vite-node scripts/migrate-test.ts
+        name: Run migrations
+      - run: pnpm vitest run --reporter=json --outputFile=vitest-report.json
+      - run: pnpm exec vite-node scripts/assert-no-skipped-tests.ts vitest-report.json
+      - run: pnpm build
+      - run: pnpm playwright test
+      - run: npm pack --dry-run
+      - run: docker build -t synchronicle-web:ci .
+      - run: docker compose config
+      - run: timeout 12m .github/scripts/container-smoke.sh

@@ -11,6 +11,7 @@ import {
   type AuthUser,
   type StoredSession,
 } from "./session.js";
+import { productionSecurityPlugin } from "../security/plugin.js";
 
 class MemoryAuthRepository implements AuthRepository {
   readonly users = new Map<string, AuthUser>();
@@ -117,6 +118,7 @@ beforeAll(async () => {
 async function authenticatedTestApp() {
   const repository = new MemoryAuthRepository();
   const app = Fastify();
+  await app.register(productionSecurityPlugin, { publicUrl: "https://app.example.test", rateLimits: { default: { max: 100, windowMs: 60_000 } } });
   await app.register(authPlugin, {
     repository,
     publicUrl: "https://app.example.test",

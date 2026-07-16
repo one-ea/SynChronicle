@@ -2,11 +2,13 @@ import Fastify from "fastify";
 import { describe, expect, it, vi } from "vitest";
 import { adminRoutes } from "./routes.js";
 import { platformCredentialSource, platformCredentialModel, resolvePlatformCredential } from "../../quota/platformCredential.js";
+import { productionSecurityPlugin } from "../security/plugin.js";
 
 async function server(role: "user" | "admin") {
   const app = Fastify();
   app.decorateRequest("auth");
   app.decorate("authenticateRequest", async (request) => { request.auth = { userId: "11111111-1111-4111-8111-111111111111", role, sessionId: "s" }; });
+  await app.register(productionSecurityPlugin, { publicUrl: "https://app.example.test" });
   const repository = { listModels: vi.fn(async () => []), createModel: vi.fn(async () => ({ id: "m" })), updateModel: vi.fn(async () => ({ id: "m" })), deleteModel: vi.fn(async () => "deleted" as const), setBalance: vi.fn(async () => ({ balanceUsd: 10 })), setPlatformConcurrency: vi.fn(async () => ({ platformConcurrency: 4 })) };
   await app.register(adminRoutes, { prefix: "/api/admin", repository });
   return { app, repository };

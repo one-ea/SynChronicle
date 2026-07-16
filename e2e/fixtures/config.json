@@ -1,0 +1,16 @@
+{
+  "provider": "e2e",
+  "model": "deterministic",
+  "providers": {
+    "e2e": {
+      "api_key": "test-only",
+      "models": ["deterministic", "deterministic-v2"]
+    }
+  },
+  "roles": {
+    "architect": { "provider": "e2e", "model": "deterministic" },
+    "writer": { "provider": "e2e", "model": "deterministic" },
+    "editor": { "provider": "e2e", "model": "deterministic" }
+  },
+  "reflection": { "enabled": false }
+}

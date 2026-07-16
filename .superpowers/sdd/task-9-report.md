@@ -40,21 +40,14 @@ Implemented the React/Vite application shell, cookie-session authentication flow
 
 ## Verification
 
-- Component and a11y: 8 passed.
-- Target frontend/auth/projects: 32 passed, 6 PostgreSQL-conditional skipped.
-- Full suite: 400 passed, 43 PostgreSQL-conditional skipped.
-- TypeScript: passed.
-- Production build: passed; Vite emitted HTML, CSS, and JS under `dist/web/client`.
-- Drizzle migration check: passed.
-- Git diff check: passed.
-- Vite preview started successfully on port 5173 and the platform preview connection returned the application HTML.
+Task 9 的历史计数已由 Task 15 全量发布门禁取代。当前准确结果记录在 `task-15-report.md`，避免在阶段报告中维护重复且易漂移的测试总数。
 
 ## Concerns
 
 - PostgreSQL-conditional tests remain skipped without `TEST_DATABASE_URL`, consistent with prior task reports.
 - Session restoration infers authentication through `/api/projects/`; a future dedicated session endpoint can restore display identity without coupling shell startup to project availability.
 - Google Fonts require network access; Georgia fallbacks preserve the literary layout when font delivery is unavailable.
-- Fastify static serving resolves from the process working directory, so production launch must continue from the repository/application root as the package scripts do.
+- Fastify production静态目录相对已打包 Web 入口解析；测试通过显式 `staticRoot` 使用隔离 fixture。
 
 ## Hardening Follow-up
 
@@ -89,8 +82,4 @@ Implemented the React/Vite application shell, cookie-session authentication flow
 
 ### Final Hardening Gate
 
-- Vitest: 412 passed, 43 PostgreSQL-conditional skipped.
-- Playwright Chromium: 4 passed across 375, 768, 1024, and 1440 pixel viewports.
-- TypeScript, production build, Drizzle migration check, and Git diff check: passed.
-- Development smoke: Vite and Fastify started together and `/api/health` passed through the configured proxy.
-- Self-review found no remaining Critical or Important findings in the Task 9 scope.
+Task 9 范围的组件、无障碍和响应式验证保持通过；跨任务总门禁统一以 `task-15-report.md` 为准。
