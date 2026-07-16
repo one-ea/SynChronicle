@@ -155,7 +155,24 @@ describe("password authentication", () => {
     expect(audit.write).toHaveBeenNthCalledWith(2, expect.objectContaining({ actorId: null, action: "auth.login", result: "invalid", metadata: expect.objectContaining({ usernameHash: expect.stringMatching(/^[a-f0-9]{64}$/) }) }));
     expect(JSON.stringify(audit.write.mock.calls)).not.toContain("unknown-user");
     await app.close();
-  });
+  }, 30_000);
+  it("audits login throttling and session creation races", async () => {
+    const audit = { write: vi.fn(async () => undefined) };
+    const { app, repository } = await authenticatedTestApp(audit);
+    await addUser(repository);
+    repository.rejectNextSession = true;
+    const headers = { origin: "https://app.example.test" };
+    const payload = { username: "alice", password: "correct horse battery staple" };
+
+    expect((await app.inject({ method: "POST", url: "/api/auth/login", headers, payload })).statusCode).toBe(401);
+    expect((await app.inject({ method: "POST", url: "/api/auth/login", headers, payload: { ...payload, password: "wrong" } })).statusCode).toBe(401);
+    expect((await app.inject({ method: "POST", url: "/api/auth/login", headers, payload })).statusCode).toBe(429);
+
+    expect(audit.write).toHaveBeenCalledWith(expect.objectContaining({ action: "auth.login", result: "conflict", metadata: expect.objectContaining({ reason: "session_race" }) }));
+    expect(audit.write).toHaveBeenCalledWith(expect.objectContaining({ action: "auth.login", result: "invalid", metadata: expect.objectContaining({ reason: "rate_limited" }) }));
+    expect(JSON.stringify(audit.write.mock.calls)).not.toContain("correct horse battery staple");
+    await app.close();
+  }, 30_000);
   it("queries sessions by digest while excluding revoked and expired rows", () => {
     const now = new Date("2026-07-15T00:00:00.000Z");
     const query = buildActiveSessionQuery(

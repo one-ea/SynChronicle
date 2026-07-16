@@ -63,7 +63,7 @@ export class DrizzleDatabaseBackend implements DatabaseBackend {
   }
 
   async loadRuntime(scope: DatabaseStoreScope) {
-    const rows = await this.database.select({ payload: runEvents.payload }).from(runEvents).where(runScope(runEvents, scope)).orderBy(asc(runEvents.sequence));
+    const rows = await this.database.select({ payload: runEvents.payload }).from(runEvents).where(and(runScope(runEvents, scope), sql`${runEvents.payload} ? 'kind'`)).orderBy(asc(runEvents.sequence));
     return rows.map((row) => row.payload as RuntimeQueueItem);
   }
 
@@ -94,6 +94,7 @@ export class DrizzleDatabaseBackend implements DatabaseBackend {
   async appendCheckpoint(scope: DatabaseStoreScope, checkpoint: Checkpoint) {
     if (!this.transactionBound) return this.transaction(scope, (backend) => backend.appendCheckpoint(scope, checkpoint));
     await this.database.insert(checkpoints).values(checkpointRow(scope, checkpoint));
+    await appendRunEventInTransaction(this.database, ownership(scope), { stableId: `checkpoint:${scope.runId}:${checkpoint.seq}`, type: "checkpoint.committed", payload: { version: checkpoint.seq, summary: checkpoint.step } });
   }
 
   async replaceCheckpoints(scope: DatabaseStoreScope, values: Checkpoint[]) {
@@ -139,17 +140,18 @@ export class MemoryDatabaseBackend implements DatabaseBackend {
   async read(scope: DatabaseStoreScope, path: string) { const value = this.values.get(key(scope, path)); return value ? Buffer.from(value) : null; }
   async write(scope: DatabaseStoreScope, path: string, content: Uint8Array) { assertMemoryLease(this.leases, scope); if (path === "invalid/constraint.json" || chapterSequence(path) === 0) throw new Error("constraint failure"); this.values.set(key(scope, path), Buffer.from(content)); }
   async remove(scope: DatabaseStoreScope, path: string) { assertMemoryLease(this.leases, scope); this.values.delete(key(scope, path)); }
-  async loadRuntime(scope: DatabaseStoreScope) { return this.rows<RuntimeQueueItem>("run_events", scope).map((row) => row.value); }
-  async appendRuntime(scope: DatabaseStoreScope, item: RuntimeQueueItem): Promise<RuntimeQueueItem> { assertMemoryLease(this.leases, scope); const rows = this.rows<RuntimeQueueItem>("run_events", scope); const value = { ...item, seq: (rows.at(-1)?.value.seq ?? 0) + 1, time: item.time || new Date().toISOString() }; const stableId = eventStableId(value); if (!stableId || !rows.some((row) => eventStableId(row.value) === stableId)) this.tables.run_events.push({ ...scope, value }); return value; }
+  async loadRuntime(scope: DatabaseStoreScope) { return this.runtimeRows(scope).map((row) => row.value); }
+  async appendRuntime(scope: DatabaseStoreScope, item: RuntimeQueueItem): Promise<RuntimeQueueItem> { assertMemoryLease(this.leases, scope); const rows = this.runtimeRows(scope); const value = { ...item, seq: (rows.at(-1)?.value.seq ?? 0) + 1, time: item.time || new Date().toISOString() }; const stableId = eventStableId(value); if (!stableId || !rows.some((row) => eventStableId(row.value) === stableId)) this.tables.run_events.push({ ...scope, value }); return value; }
   async clearRuntime(scope: DatabaseStoreScope) { assertMemoryLease(this.leases, scope); this.tables.run_events = this.tables.run_events.filter((row) => !matches(row, scope)); }
   async loadCheckpoints(scope: DatabaseStoreScope) { return this.rows<Checkpoint>("checkpoints", scope).map((row) => row.value); }
   async latestCheckpoint(scope: DatabaseStoreScope) { const row = this.rows<Checkpoint>("checkpoints", scope).at(-1); return row ? { taskFingerprint: row.taskFingerprint ?? row.value.digest ?? "", projectVersion: row.projectVersion ?? 1 } : null; }
-  async appendCheckpoint(scope: DatabaseStoreScope, value: Checkpoint) { assertMemoryLease(this.leases, scope); this.tables.checkpoints.push({ ...scope, value: structuredClone(value) }); }
+  async appendCheckpoint(scope: DatabaseStoreScope, value: Checkpoint) { assertMemoryLease(this.leases, scope); this.tables.checkpoints.push({ ...scope, value: structuredClone(value) }); const stableId = `checkpoint:${scope.runId}:${value.seq}`; if (!this.tables.run_events.some((row) => (row as { stableId?: string }).stableId === stableId)) this.tables.run_events.push({ ...scope, stableId, type: "checkpoint.committed", payload: { version: value.seq, summary: value.step } }); }
   async replaceCheckpoints(scope: DatabaseStoreScope, values: Checkpoint[]) { assertMemoryLease(this.leases, scope); this.tables.checkpoints = this.tables.checkpoints.filter((row) => !matches(row, scope)); for (const value of values) await this.appendCheckpoint(scope, value); }
   async loadUsage(scope: DatabaseStoreScope) { return this.rows<UsageState>("usage_records", scope).at(-1)?.value ?? null; }
   async saveUsage(scope: DatabaseStoreScope, value: UsageState) { assertMemoryLease(this.leases, scope); const snapshotId = usageSnapshotId(value); const existing = this.tables.usage_records.find((row) => matches(row, scope) && (row as { snapshotId?: string }).snapshotId === snapshotId) as { value: UsageState } | undefined; if (existing) existing.value = structuredClone(value); else this.tables.usage_records.push({ ...scope, snapshotId, value: structuredClone(value) }); }
   async transaction<T>(scope: DatabaseStoreScope, operation: (backend: DatabaseBackend) => Promise<T>): Promise<T> { assertMemoryLease(this.leases, scope); const staged = new MemoryDatabaseBackend(cloneValues(this.values), structuredClone(this.tables), new Map(this.leases)); const result = await operation(staged); this.values = staged.values; this.tables = staged.tables; return result; }
   private rows<T>(table: DomainTableName, scope: DatabaseStoreScope) { return this.tables[table].filter((row) => matches(row, scope)) as Array<DatabaseStoreScope & { value: T }>; }
+  private runtimeRows(scope: DatabaseStoreScope) { return this.tables.run_events.filter((row) => matches(row, scope) && "value" in (row as object)) as Array<DatabaseStoreScope & { value: RuntimeQueueItem }>; }
 }
 
 export function scopedArtifactFilter(scope: DatabaseStoreScope) { return artifactScope(scope); }

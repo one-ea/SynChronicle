@@ -146,6 +146,36 @@ postgres("PostgreSQL leased scheduler", () => {
     await settleTasks([auth.userId]);
   });
 
+  it("publishes stable public lifecycle events in the run state transactions", async () => {
+    const run = await repository.enqueueRun(auth, projectId, { idempotencyKey: randomUUID(), type: "review" });
+    const claimed = await repository.claimNextTask("lifecycle-worker", 30_000);
+    expect(claimed?.runId).toBe(run!.id);
+    expect(await repository.startTask(claimed!.id, "lifecycle-worker", claimed!.leaseVersion)).toBe(true);
+    expect(await repository.finishTask(claimed!.id, "lifecycle-worker", "paused", claimed!.leaseVersion)).toBe(true);
+    await repository.command(auth, projectId, run!.id, "resume");
+    const resumed = await repository.claimNextTask("lifecycle-worker-2", 30_000);
+    expect(resumed?.runId).toBe(run!.id);
+    expect(await repository.startTask(resumed!.id, "lifecycle-worker-2", resumed!.leaseVersion)).toBe(true);
+    expect(await repository.finishTask(resumed!.id, "lifecycle-worker-2", "completed", resumed!.leaseVersion)).toBe(true);
+
+    const events = await database.select().from(runEvents).where(eq(runEvents.runId, run!.id));
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "run.started", stableId: `run:${run!.id}:started`, userId: auth.userId, projectId }),
+      expect.objectContaining({ type: "run.paused", stableId: `run:${run!.id}:paused:${claimed!.leaseVersion}` }),
+      expect.objectContaining({ type: "run.resumed", stableId: `run:${run!.id}:resumed:${resumed!.leaseVersion}` }),
+      expect.objectContaining({ type: "run.completed", stableId: `run:${run!.id}:completed` }),
+    ]));
+
+    for (const status of ["cancelled", "failed"] as const) {
+      const terminalRun = await repository.enqueueRun(auth, projectId, { idempotencyKey: randomUUID(), type: "review" });
+      const terminalTask = await repository.claimNextTask(`lifecycle-${status}`, 30_000);
+      expect(terminalTask?.runId).toBe(terminalRun!.id);
+      await repository.startTask(terminalTask!.id, `lifecycle-${status}`, terminalTask!.leaseVersion);
+      await repository.finishTask(terminalTask!.id, `lifecycle-${status}`, status, terminalTask!.leaseVersion);
+      expect(await database.select().from(runEvents).where(eq(runEvents.runId, terminalRun!.id))).toEqual(expect.arrayContaining([expect.objectContaining({ type: `run.${status}`, stableId: `run:${terminalRun!.id}:${status}` })]));
+    }
+  });
+
   it("persists classified command failures and rejects non-retryable commands", async () => {
     await settleTasks([auth.userId]);
     const run = await repository.enqueueRun(auth, projectId, { idempotencyKey: randomUUID(), type: "write", payload: { prompt: "x" } });

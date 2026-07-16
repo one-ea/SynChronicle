@@ -34,10 +34,11 @@ describe("DatabaseStore memory contract", () => {
     const usage = { schema: 1 as const, updated_at: "now", overall: { input: 1, output: 2, cache_read: 0, cache_write: 0, cost_usd: 0, saved_usd: 0, cache_capable: false }, per_agent: {}, missing_assistant_usage: 0 };
     await store.usage.save(usage);
     await store.usage.save({ ...usage, updated_at: "later" });
-    expect(store.backend.inspect("run_events")).toHaveLength(1);
+    expect(store.backend.inspect("run_events")).toHaveLength(2);
     expect(store.backend.inspect("checkpoints")).toHaveLength(1);
     expect(store.backend.inspect("usage_records")).toHaveLength(1);
     expect(await store.latestCheckpoint()).toEqual({ taskFingerprint: "task-fingerprint", projectVersion: 1 });
+    expect(store.backend.inspect("run_events")).toEqual(expect.arrayContaining([expect.objectContaining({ type: "checkpoint.committed", stableId: expect.stringMatching(/^checkpoint:/) })]));
   });
 
   it("commits selected candidate artifacts atomically", async () => {
@@ -173,7 +174,7 @@ describe.skipIf(!databaseUrl)("DatabaseStore PostgreSQL contract", () => {
     expect(await second.outline.loadPremise()).toBe("second");
     expect(await first.drafts.loadChapterText(1)).toBe("version two");
     expect((await first.runtime.loadQueue()).map((item) => item.seq)).toEqual([1, 2]);
-    expect(await database.select().from(runEvents)).toEqual(expect.arrayContaining([expect.objectContaining({ runId: owner.runId })]));
+    expect(await database.select().from(runEvents)).toEqual(expect.arrayContaining([expect.objectContaining({ runId: owner.runId }), expect.objectContaining({ runId: owner.runId, type: "checkpoint.committed", stableId: expect.stringMatching(/^checkpoint:/) })]));
     expect(await database.select().from(checkpoints)).toEqual(expect.arrayContaining([expect.objectContaining({ runId: owner.runId })]));
     expect(await database.select().from(usageRecords)).toEqual(expect.arrayContaining([expect.objectContaining({ runId: owner.runId })]));
   });

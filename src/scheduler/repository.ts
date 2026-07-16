@@ -276,7 +276,11 @@ export class SchedulerRepository {
 
   async startTask(taskId: string, workerId: string, leaseVersion?: number): Promise<boolean> {
     const now = new Date();
-    return this.db.transaction(async (transaction) => {
+    const result = await this.db.transaction(async (transaction) => {
+      const [owned] = await transaction.select().from(tasks).where(and(eq(tasks.id, taskId), eq(tasks.leaseOwner, workerId), leaseVersion === undefined ? undefined : eq(tasks.leaseVersion, leaseVersion), eq(tasks.status, "leased"), sql`${tasks.leaseExpiresAt} > ${now}`)).limit(1).for("update");
+      if (!owned) return null;
+      const [run] = await transaction.select({ startedAt: runs.startedAt }).from(runs).where(eq(runs.id, owned.runId)).limit(1).for("update");
+      if (!run) return null;
       const [started] = await transaction.update(tasks).set({ status: "running", updatedAt: now }).where(and(
         eq(tasks.id, taskId),
         eq(tasks.leaseOwner, workerId),
@@ -284,11 +288,16 @@ export class SchedulerRepository {
         eq(tasks.status, "leased"),
         sql`${tasks.leaseExpiresAt} > ${now}`,
       )).returning({ runId: tasks.runId });
-      if (!started) return false;
+      if (!started) return null;
       await transaction.update(runs).set({ status: "running", startedAt: sql`coalesce(${runs.startedAt}, ${now})`, updatedAt: now })
         .where(eq(runs.id, started.runId));
-      return true;
+      const type = run.startedAt ? "run.resumed" : "run.started";
+      const stableId = run.startedAt ? `run:${owned.runId}:resumed:${leaseVersion ?? owned.leaseVersion}` : `run:${owned.runId}:started`;
+      return appendRunEventInTransaction(transaction as unknown as Database, owned, { stableId, type, payload: { taskId, leaseVersion: leaseVersion ?? owned.leaseVersion, status: "running" } });
     });
+    if (!result) return false;
+    await this.eventBroker?.publish({ runId: result.runId, sequence: result.sequence });
+    return true;
   }
 
   async readRunControl(runId: string): Promise<RunResumeData> {
@@ -331,18 +340,18 @@ export class SchedulerRepository {
 
   async finishTask(taskId: string, workerId: string, status: ReleaseLeaseOutcome["status"], leaseVersion?: number): Promise<boolean> {
     const now = new Date();
-    return this.db.transaction(async (transaction) => {
+    const result = await this.db.transaction(async (transaction) => {
       await transaction.execute(sql`select pg_advisory_xact_lock(${schedulerAdvisoryLock})`);
-      const [task] = await transaction.select({ runId: tasks.runId }).from(tasks).where(and(
+      const [task] = await transaction.select().from(tasks).where(and(
         eq(tasks.id, taskId),
         eq(tasks.leaseOwner, workerId),
         leaseVersion === undefined ? undefined : eq(tasks.leaseVersion, leaseVersion),
         inArray(tasks.status, activeTaskStatuses),
         sql`${tasks.leaseExpiresAt} > ${now}`,
       )).limit(1).for("update");
-      if (!task) return false;
+      if (!task) return null;
       const [released] = await buildReleaseLeaseQuery(transaction, taskId, workerId, { status }, now);
-      if (!released) return false;
+      if (!released) return null;
       const runStatus = status === "queued" ? "queued" : status;
       await transaction.update(runs).set({
         status: runStatus,
@@ -350,8 +359,15 @@ export class SchedulerRepository {
         updatedAt: now,
       }).where(eq(runs.id, task.runId));
       await this.clearDurableCommit(transaction, task.runId, taskId, leaseVersion, now);
-      return true;
+      const eventType = status === "paused" ? "run.paused" : status === "completed" ? "run.completed" : status === "cancelled" ? "run.cancelled" : status === "failed" ? "run.failed" : null;
+      if (!eventType) return { runId: task.runId, sequence: 0 };
+      const eventLeaseVersion = leaseVersion ?? task.leaseVersion;
+      const stableId = eventType === "run.paused" ? `run:${task.runId}:paused:${eventLeaseVersion}` : `run:${task.runId}:${eventType.slice(4)}`;
+      return appendRunEventInTransaction(transaction as unknown as Database, task, { stableId, type: eventType, payload: { taskId, leaseVersion: eventLeaseVersion, status: runStatus } });
     });
+    if (!result) return false;
+    if (result.sequence) await this.eventBroker?.publish({ runId: result.runId, sequence: result.sequence });
+    return true;
   }
 
   async recordTaskError(taskId: string, workerId: string, error: { message: string; stack?: string; retryable: boolean; category?: string }, leaseVersion?: number): Promise<boolean> {

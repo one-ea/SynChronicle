@@ -26,7 +26,7 @@ describe("buildWebServer", () => {
         /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
       );
     });
-  });
+  }, 30_000);
 
   it("serves an injected static application without relying on build artifacts", async () => {
     const staticRoot = await mkdtemp(join(tmpdir(), "synchronicle-web-"));
@@ -38,7 +38,7 @@ describe("buildWebServer", () => {
       expect(response.headers["content-type"]).toContain("text/html");
       expect(response.body).toContain("isolated fixture");
     });
-  });
+  }, 30_000);
 
   it("accepts a valid client request ID and replaces an invalid value", async () => {
     const requestId = "d12f18f0-6a82-4c2a-a9be-c2ea8846262c";

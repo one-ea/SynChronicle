@@ -63,6 +63,42 @@ describe("quota guarded platform model", () => {
     expect(provider).not.toHaveBeenCalled();
   });
 
+  it("releases a pre-aborted reservation without preparing or dispatching the provider", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("request cancelled"));
+    const prepare = vi.fn();
+    const ledger = { reserve: vi.fn(async () => ({ id: "reservation", balance: 9 })), markProviderStarted: vi.fn(), settleDurably: vi.fn(), settleInterrupted: vi.fn(), releaseDurably: vi.fn(), heartbeat: vi.fn() };
+    const model = quotaGuardedModel({ provider: "openai", modelName: "gpt", userId: randomUUID(), projectId: randomUUID(), runId: randomUUID(), taskId: randomUUID(), leaseVersion: 1, agent: "writer", inputPrice: 1, outputPrice: 1, ledger: ledger as never, model: { provider: "openai", modelId: "gpt", prepare } as never });
+
+    await expect((model as any).doGenerate(callOptions("pre-aborted", { abortSignal: controller.signal }))).rejects.toThrow("request cancelled");
+    expect(prepare).not.toHaveBeenCalled();
+    expect(ledger.markProviderStarted).not.toHaveBeenCalled();
+    expect(ledger.releaseDurably).toHaveBeenCalledWith(expect.objectContaining({ reservationId: "reservation", reason: "provider_preflight_aborted", errorCategory: "cancelled" }));
+  });
+
+  it("removes the source abort listener after each completed call", async () => {
+    const addEventListener = vi.fn();
+    const removeEventListener = vi.fn();
+    const sourceSignal = { aborted: false, reason: undefined, addEventListener, removeEventListener } as unknown as AbortSignal;
+    const ledger = { reserve: vi.fn(async () => ({ id: "reservation", balance: 9 })), markProviderStarted: vi.fn(), settleDurably: vi.fn(), settleInterrupted: vi.fn(), releaseDurably: vi.fn(), heartbeat: vi.fn() };
+    const model = quotaGuardedModel({ provider: "openai", modelName: "gpt", userId: randomUUID(), projectId: randomUUID(), runId: randomUUID(), taskId: randomUUID(), leaseVersion: 1, agent: "writer", inputPrice: 1, outputPrice: 1, ledger: ledger as never, model: { provider: "openai", modelId: "gpt", doGenerate: async () => ({ usage: { inputTokens: 1 } }) } as never });
+
+    await (model as any).doGenerate(callOptions("listener-cleanup", { abortSignal: sourceSignal }));
+    expect(addEventListener).toHaveBeenCalledWith("abort", expect.any(Function), { once: true });
+    expect(removeEventListener).toHaveBeenCalledWith("abort", addEventListener.mock.calls[0]![1]);
+  });
+
+  it("removes the source abort listener when Provider preparation fails", async () => {
+    const addEventListener = vi.fn();
+    const removeEventListener = vi.fn();
+    const sourceSignal = { aborted: false, reason: undefined, addEventListener, removeEventListener } as unknown as AbortSignal;
+    const ledger = { reserve: vi.fn(async () => ({ id: "reservation", balance: 9 })), markProviderStarted: vi.fn(), settleDurably: vi.fn(), settleInterrupted: vi.fn(), releaseDurably: vi.fn(), heartbeat: vi.fn() };
+    const model = quotaGuardedModel({ provider: "openai", modelName: "gpt", userId: randomUUID(), projectId: randomUUID(), runId: randomUUID(), taskId: randomUUID(), leaseVersion: 1, agent: "writer", inputPrice: 1, outputPrice: 1, ledger: ledger as never, model: { provider: "openai", modelId: "gpt", prepare: async () => { throw new Error("prepare failed"); } } as never });
+
+    await expect((model as any).doGenerate(callOptions("listener-preflight", { abortSignal: sourceSignal }))).rejects.toThrow("prepare failed");
+    expect(removeEventListener).toHaveBeenCalledWith("abort", addEventListener.mock.calls[0]![1]);
+  });
+
   it("aborts the provider and controlled-settles when quota heartbeat loses the lease", async () => {
     const ledger = { reserve: vi.fn(async () => ({ id: "reservation", balance: 9 })), markProviderStarted: vi.fn(), settleDurably: vi.fn(), settleInterrupted: vi.fn(), releaseDurably: vi.fn(), heartbeat: vi.fn(async () => false) };
     const dispatch = vi.fn((options: unknown) => new Promise((_resolve, reject) => {

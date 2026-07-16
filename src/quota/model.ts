@@ -11,35 +11,42 @@ export function quotaGuardedModel(input: { provider: string; modelName: string; 
     const reservation = await input.ledger.reserve({ userId: input.userId, projectId: input.projectId, runId: input.runId, taskId: input.taskId, leaseVersion: input.leaseVersion, modelCallId, estimatedCostUsd, model: `${input.provider}/${input.modelName}` });
     const providerAbort = new AbortController();
     const sourceSignal = abortSignal(options);
-    if (sourceSignal) sourceSignal.addEventListener("abort", () => providerAbort.abort(sourceSignal.reason), { once: true });
-    let prepared: PreparedProviderCall;
-    try { prepared = await prepareProvider(input.model, method, withAbortSignal(options, providerAbort.signal)); }
-    catch (error) { await input.ledger.releaseDurably({ ...releaseInput(input, reservation.id, modelCallId), reason: "provider_preflight_failed", errorCategory: "local_preflight", error: errorMessage(error) }); throw error; }
+    const relayAbort = () => providerAbort.abort(sourceSignal?.reason);
+    if (sourceSignal?.aborted) {
+      await input.ledger.releaseDurably({ ...releaseInput(input, reservation.id, modelCallId), reason: "provider_preflight_aborted", errorCategory: "cancelled", error: errorMessage(sourceSignal.reason) });
+      throw sourceSignal.reason;
+    }
+    sourceSignal?.addEventListener("abort", relayAbort, { once: true });
+    let prepared: PreparedProviderCall | undefined;
     try {
-      await input.ledger.markProviderStarted(reservation.id, input.taskId, input.leaseVersion);
-      const stopHeartbeat = heartbeat(input, reservation.id, providerAbort);
-      const startedAt = Date.now();
-      let providerCompleted = false;
+      try { prepared = await prepareProvider(input.model, method, withAbortSignal(options, providerAbort.signal)); }
+      catch (error) { await input.ledger.releaseDurably({ ...releaseInput(input, reservation.id, modelCallId), reason: "provider_preflight_failed", errorCategory: "local_preflight", error: errorMessage(error) }); throw error; }
       try {
-        const result = await prepared.dispatch() as Record<string, unknown>;
-        providerCompleted = true;
-        if (method === "doStream") { stopHeartbeat(); return await wrapStreamResult(result, async (usage) => persistSettlement(input, settleInput(input, pricing, reservation.id, modelCallId, usage, Date.now() - startedAt), providerAbort.signal), async () => input.ledger.settleInterrupted({ ...releaseInput(input, reservation.id, modelCallId), reason: "provider_stream_missing_usage", errorCategory: "missing_usage", error: "provider stream ended without usage" }), () => input.ledger.heartbeat(reservation.id, input.taskId, input.leaseVersion)); }
-        const usage = usageFrom(result);
-        if (!hasBillableUsage(usage)) await input.ledger.settleInterrupted({ ...releaseInput(input, reservation.id, modelCallId), reason: "provider_result_missing_usage", errorCategory: "missing_usage", error: "provider result omitted usage" });
-        else await persistSettlement(input, settleInput(input, pricing, reservation.id, modelCallId, usage, Date.now() - startedAt), providerAbort.signal);
-        stopHeartbeat();
-        return result;
-      } catch (error) {
-        stopHeartbeat();
-        if (!providerCompleted) {
-          const outcome = classifyProviderError(error, input.ambiguousErrorPolicy ?? "estimate");
-          const terminal = { ...releaseInput(input, reservation.id, modelCallId), reason: "provider_rejected_or_failed", errorCategory: outcome.category, error: errorMessage(error) };
-          if (outcome.billing === "release") await input.ledger.releaseDurably(terminal);
-          else await input.ledger.settleInterrupted(terminal);
+        await input.ledger.markProviderStarted(reservation.id, input.taskId, input.leaseVersion);
+        const stopHeartbeat = heartbeat(input, reservation.id, providerAbort);
+        const startedAt = Date.now();
+        let providerCompleted = false;
+        try {
+          const result = await prepared.dispatch() as Record<string, unknown>;
+          providerCompleted = true;
+          if (method === "doStream") { stopHeartbeat(); return await wrapStreamResult(result, async (usage) => persistSettlement(input, settleInput(input, pricing, reservation.id, modelCallId, usage, Date.now() - startedAt), providerAbort.signal), async () => input.ledger.settleInterrupted({ ...releaseInput(input, reservation.id, modelCallId), reason: "provider_stream_missing_usage", errorCategory: "missing_usage", error: "provider stream ended without usage" }), () => input.ledger.heartbeat(reservation.id, input.taskId, input.leaseVersion)); }
+          const usage = usageFrom(result);
+          if (!hasBillableUsage(usage)) await input.ledger.settleInterrupted({ ...releaseInput(input, reservation.id, modelCallId), reason: "provider_result_missing_usage", errorCategory: "missing_usage", error: "provider result omitted usage" });
+          else await persistSettlement(input, settleInput(input, pricing, reservation.id, modelCallId, usage, Date.now() - startedAt), providerAbort.signal);
+          stopHeartbeat();
+          return result;
+        } catch (error) {
+          stopHeartbeat();
+          if (!providerCompleted) {
+            const outcome = classifyProviderError(error, input.ambiguousErrorPolicy ?? "estimate");
+            const terminal = { ...releaseInput(input, reservation.id, modelCallId), reason: "provider_rejected_or_failed", errorCategory: outcome.category, error: errorMessage(error) };
+            if (outcome.billing === "release") await input.ledger.releaseDurably(terminal);
+            else await input.ledger.settleInterrupted(terminal);
+          }
+          throw error;
         }
-        throw error;
-      }
-    } finally { prepared.dispose(); }
+      } finally { prepared?.dispose(); }
+    } finally { sourceSignal?.removeEventListener("abort", relayAbort); }
   };
   return { ...(input.model as unknown as Record<string, unknown>), doGenerate: (options: unknown) => invoke("doGenerate", options), doStream: (options: unknown) => invoke("doStream", options) } as unknown as Model;
 }

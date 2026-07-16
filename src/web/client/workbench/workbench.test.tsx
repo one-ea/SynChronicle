@@ -162,6 +162,21 @@ describe("WorkbenchPage", () => {
     } finally { vi.useRealTimers(); }
   });
 
+  it.each([
+    { type: "system", payload: { category: "RUN.COMPLETED" } },
+    { type: "ui_event", payload: { category: "WORKER.CONTROL", payload: { control: "paused" } } },
+  ])("deferred-refreshes for legacy lifecycle event $type while continuously connected", async (event) => {
+    vi.useFakeTimers();
+    try {
+      let push!: (event: RunEventMessage) => void;
+      const request = vi.fn().mockResolvedValue({ workbench: project });
+      render(<WorkbenchPage api={{ request: request as ApiClient["request"] }} project={project} initialEvents={[]} subscribe={(listener) => { push = listener; return () => undefined; }} />);
+      act(() => push({ sequence: 1, ...event }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(150); });
+      expect(request).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
+  });
+
   it("renders and answers an AskUser question received from the live Worker stream", async () => {
     let push!: (event: RunEventMessage) => void;
     const client = api();

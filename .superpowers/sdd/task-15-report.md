@@ -79,6 +79,27 @@ Retained risk: the IPv6 special-purpose range policy requires periodic maintenan
 
 PostgreSQL-backed Vitest, full Playwright execution, Docker build, Compose config, and Compose smoke remain pending CI evidence and stay unchecked.
 
+## Terminal Run Synchronization Wave
+
+- Scheduler transactions now persist stable, run-scoped `run.started`, `run.paused`, `run.resumed`, `run.completed`, `run.cancelled`, and `run.failed` events with the matching run state transition. Event broker wakeups occur after transaction commit.
+- Database checkpoint transactions persist `checkpoint.committed` with a stable run/version ID. Store runtime reads continue to project only legacy payloads carrying `kind`, keeping public events out of the Host queue.
+- Workbench refreshes snapshots from the explicit public lifecycle set and compatible legacy `system`/`ui_event` lifecycle payloads. Continuously connected component coverage proves completion refresh exposes the terminal status and committed chapter without a reconnect trigger.
+- Quota calls check an external signal before Provider preparation, release pre-aborted reservations as cancelled, relay later aborts, and remove the exact listener in `finally`.
+- Login throttling and session creation CAS races write redacted audit outcomes with observable reason codes.
+
+### Terminal Wave Local Evidence
+
+- Target regressions: passed; PostgreSQL-conditional lifecycle and checkpoint transaction cases remain pending without `TEST_DATABASE_URL`.
+- `pnpm test`: passed; 659 tests passed and 63 PostgreSQL-conditional tests skipped.
+- `pnpm typecheck`: passed.
+- `pnpm build`: passed.
+- `pnpm exec playwright test --list`: passed; 10 tests collected.
+- `npm pack --dry-run`: passed; 50 files, 864.3 kB package.
+- `pnpm drizzle-kit check`: passed.
+- `git diff --check`: passed.
+
+PostgreSQL-backed Vitest, full Playwright execution, Docker build, Compose config, and Compose smoke remain pending CI evidence and stay unchecked.
+
 ## Final Integration Gap Wave
 
 - Quota reservation, provider-started, heartbeat, settlement, release, and outbox writes now require the matching active task lease. Reclaimed attempts receive lease-scoped model call IDs; stale provider-started/provider-completed attempts are estimate-reconciled through the maintenance path.

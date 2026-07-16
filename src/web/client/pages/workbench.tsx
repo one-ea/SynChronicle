@@ -55,6 +55,16 @@ function liveQuestion(event: RunEventMessage | undefined): WorkbenchProject["pen
   return questions.length ? { id, questions } : null;
 }
 
+export function shouldRefreshWorkbenchSnapshot(event: RunEventMessage): boolean {
+  if (/^(run\.(started|paused|resumed|completed|cancelled|failed)|checkpoint\.committed)$/.test(event.type)) return true;
+  if (event.type !== "system" && event.type !== "ui_event") return false;
+  const payload = event.payload && typeof event.payload === "object" ? event.payload as Record<string, unknown> : {};
+  const nested = payload.payload && typeof payload.payload === "object" ? payload.payload as Record<string, unknown> : {};
+  const category = typeof payload.category === "string" ? payload.category : typeof nested.category === "string" ? nested.category : "";
+  const control = typeof nested.control === "string" ? nested.control : typeof payload.control === "string" ? payload.control : "";
+  return /^(RUN|LIFECYCLE)\.(STARTED|PAUSED|RESUMED|COMPLETED|CANCELLED|FAILED|CHECKPOINT_COMMITTED)$/i.test(category) || ["paused", "resumed", "cancelled", "completed", "failed"].includes(control);
+}
+
 export function WorkbenchPage({ api, project: initialProject, initialEvents, subscribe, connectionOverride }: WorkbenchPageProps) {
   const [project, setProject] = useState(initialProject);
   const url = new URL(window.location.href);
@@ -97,7 +107,7 @@ export function WorkbenchPage({ api, project: initialProject, initialEvents, sub
     if (/完成|cancel|abort|终止/i.test(message)) setAbortWaiting(false);
     const question = liveQuestion(latest);
     if (question) setPendingQuestion(question);
-    if (latest && /^(run\.|task\.|checkpoint\.|chapter\.|lifecycle\.)/.test(latest.type)) refreshSnapshot();
+    if (latest && shouldRefreshWorkbenchSnapshot(latest)) refreshSnapshot();
   }, [state.events]);
   useEffect(() => {
     if (!selectedChapter) return;

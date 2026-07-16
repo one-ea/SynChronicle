@@ -25,13 +25,14 @@ export interface AuthRoutesOptions {
 }
 
 export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (app, options) => {
-  const audit = async (request: FastifyRequest, event: { actorId: string | null; action: string; targetId: string | null; result: "success" | "invalid" | "error"; metadata?: Record<string, unknown> }) => {
+  const audit = async (request: FastifyRequest, event: { actorId: string | null; action: string; targetId: string | null; result: "success" | "invalid" | "conflict" | "error"; metadata?: Record<string, unknown> }) => {
     if (!options.audit) return;
     try { await options.audit.write({ ...event, targetType: "user", requestId: request.id, metadata: { ...event.metadata, ip: request.ip, time: new Date().toISOString() } }); }
     catch (error) { request.log.error({ err: error, action: event.action, requestId: request.id }, "auth audit write failed"); }
   };
   app.post("/login", async (request, reply) => {
     if (!options.consumeLoginAttempt(request.ip)) {
+      await audit(request, { actorId: null, action: "auth.login", targetId: null, result: "invalid", metadata: { reason: "rate_limited" } });
       return reply.code(429).send({ error: "Too Many Requests" });
     }
 
@@ -49,7 +50,7 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (app, opt
       passwordHash: user.passwordHash,
       authVersion: user.authVersion,
     });
-    if (!session) return reply.code(401).send(unauthorizedBody);
+    if (!session) { await audit(request, { actorId: user.id, action: "auth.login", targetId: user.id, result: "conflict", metadata: { reason: "session_race" } }); return reply.code(401).send(unauthorizedBody); }
     await audit(request, { actorId: user.id, action: "auth.login", targetId: user.id, result: "success" });
     reply.setCookie(SESSION_COOKIE, session.token, {
       path: "/",
