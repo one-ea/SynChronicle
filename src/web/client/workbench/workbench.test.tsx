@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ApiClient } from "../api/client.js";
@@ -146,6 +148,7 @@ describe("WorkbenchPage", () => {
     fireEvent.change(rightWidth, { target: { value: "360" } });
     expect(within(dialog).getByText("340 px")).toBeVisible();
     expect(within(dialog).getByText("360 px")).toBeVisible();
+    expect(document.querySelector(".workbench-grid")).toHaveStyle({ "--left-open-width": "340px", "--right-open-width": "360px" });
 
     await user.click(within(dialog).getByRole("button", { name: "重置布局" }));
     expect(leftWidth).toHaveValue("280");
@@ -167,14 +170,39 @@ describe("WorkbenchPage", () => {
     expect(trigger).toHaveFocus();
   });
 
-  it("dismisses layout controls on an outside pointer interaction", async () => {
+  it("dismisses layout controls when the trigger is clicked again", async () => {
     const user = userEvent.setup();
     render(<WorkbenchPage api={api()} project={project} initialEvents={[]} />);
+    const trigger = screen.getByRole("button", { name: "布局" });
 
-    await user.click(screen.getByRole("button", { name: "布局" }));
+    await user.click(trigger);
+    await user.click(trigger);
+
+    expect(screen.queryByRole("dialog", { name: "布局" })).not.toBeInTheDocument();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).toHaveFocus();
+  });
+
+  it("dismisses layout controls on an outside pointer interaction and restores trigger focus", async () => {
+    const user = userEvent.setup();
+    render(<WorkbenchPage api={api()} project={project} initialEvents={[]} />);
+    const trigger = screen.getByRole("button", { name: "布局" });
+
+    await user.click(trigger);
     fireEvent.pointerDown(screen.getByRole("link", { name: "SynChronicle" }));
 
     expect(screen.queryByRole("dialog", { name: "布局" })).not.toBeInTheDocument();
+    await vi.waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it("uses the mobile workbench layout and hides layout controls through 768px", () => {
+    const css = readFileSync(resolve(process.cwd(), "src/web/client/styles/global.css"), "utf8");
+    const responsiveWorkbench = css.match(/@media \(max-width: 768px\) \{([\s\S]*?)\n\}/)?.[1] ?? "";
+
+    expect(responsiveWorkbench).toContain(".workbench-grid { display: block;");
+    expect(responsiveWorkbench).toContain(".layout-controls { display: none;");
+    expect(responsiveWorkbench).toContain(".mobile-workbench-nav");
+    expect(responsiveWorkbench).toContain("display: grid;");
   });
 
   it("accepts incremental events without losing the current chapter", async () => {

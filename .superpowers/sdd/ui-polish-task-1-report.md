@@ -31,3 +31,12 @@ Completed the accessible `LayoutControls` popover while preserving the existing 
 ## Concerns
 
 - Responsive browser viewport assertions remain assigned to Task 3 in the existing implementation plan.
+
+## Review Follow-up
+
+- Extended the complete Workbench mobile/tablet responsive block through `768px`, keeping the hidden layout control, single active panel, and bottom navigation on one breakpoint.
+- Added regression coverage for closing from a second trigger click.
+- Added explicit outside-pointer dismissal and trigger focus restoration coverage.
+- Added assertions that range changes update `--left-open-width` and `--right-open-width` on the Workbench grid.
+- RED: 24 tests passed and the new breakpoint regression failed because the Workbench CSS had no `max-width: 768px` block.
+- GREEN: all 25 Workbench tests passed after the breakpoint alignment.

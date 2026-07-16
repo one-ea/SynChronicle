@@ -170,7 +170,7 @@ input { background: transparent; border: 0; border-bottom: 1px solid var(--ink-m
 .layout-control-row input { grid-column: 1 / -1; min-height: 44px; padding: 0; width: 100%; }
 .layout-controls-reset { background: transparent; border: 1px solid var(--rule); min-height: 44px; width: 100%; }
 
-@media (max-width: 767px) {
+@media (max-width: 768px) {
   .workbench-topbar { grid-template-columns: 1fr auto; min-height: 56px; }
   .workbench-topbar p { display: none; }
   .workbench-grid { display: block; height: calc(100dvh - 56px - 64px); }
