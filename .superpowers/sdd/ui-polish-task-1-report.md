@@ -40,3 +40,12 @@ Completed the accessible `LayoutControls` popover while preserving the existing 
 - Added assertions that range changes update `--left-open-width` and `--right-open-width` on the Workbench grid.
 - RED: 24 tests passed and the new breakpoint regression failed because the Workbench CSS had no `max-width: 768px` block.
 - GREEN: all 25 Workbench tests passed after the breakpoint alignment.
+
+## Final Minor Review
+
+- Added `aria-haspopup="dialog"` to the layout trigger.
+- Split dismissal focus behavior by intent: Escape and a second trigger click restore trigger focus; outside pointer dismissal preserves focus on the newly targeted control.
+- Updated the responsive browser test to identify `.run-sidebar` as the nearest overflow container and measure the create-run CTA against that container viewport.
+- Added a minimum `16px` CTA-to-sidebar-bottom safety assertion at 375px, 768px, 1024px, and 1440px.
+- RED: focused tests failed for the missing popup relationship and outside dismissal stealing focus; the initial responsive assertion also exposed an overly strict overflow detection predicate.
+- GREEN: focused tests passed 29/29, accessibility tests passed 7/7, and responsive tests passed 8/8.

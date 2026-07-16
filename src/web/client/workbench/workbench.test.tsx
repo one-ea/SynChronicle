@@ -132,6 +132,7 @@ describe("WorkbenchPage", () => {
     const trigger = screen.getByRole("button", { name: "布局" });
 
     expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).toHaveAttribute("aria-haspopup", "dialog");
     await user.click(trigger);
 
     const dialog = screen.getByRole("dialog", { name: "布局" });
@@ -184,16 +185,19 @@ describe("WorkbenchPage", () => {
     expect(trigger).toHaveFocus();
   });
 
-  it("dismisses layout controls on an outside pointer interaction and restores trigger focus", async () => {
+  it("dismisses layout controls on an outside pointer interaction without stealing focus", async () => {
     const user = userEvent.setup();
     render(<WorkbenchPage api={api()} project={project} initialEvents={[]} />);
     const trigger = screen.getByRole("button", { name: "布局" });
+    const outside = screen.getByRole("button", { name: "发送" });
 
     await user.click(trigger);
-    fireEvent.pointerDown(screen.getByRole("link", { name: "SynChronicle" }));
+    fireEvent.pointerDown(outside);
+    outside.focus();
+    await Promise.resolve();
 
     expect(screen.queryByRole("dialog", { name: "布局" })).not.toBeInTheDocument();
-    await vi.waitFor(() => expect(trigger).toHaveFocus());
+    expect(outside).toHaveFocus();
   });
 
   it("uses the mobile workbench layout and hides layout controls through 768px", () => {

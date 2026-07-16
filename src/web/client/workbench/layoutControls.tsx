@@ -13,9 +13,9 @@ export function LayoutControls({ leftWidth, rightWidth, setLeftWidth, setRightWi
   const triggerRef = useRef<HTMLButtonElement>(null);
   const firstRangeRef = useRef<HTMLInputElement>(null);
 
-  function close() {
+  function close(restoreFocus: boolean) {
     setOpen(false);
-    queueMicrotask(() => triggerRef.current?.focus());
+    if (restoreFocus) queueMicrotask(() => triggerRef.current?.focus());
   }
 
   useEffect(() => {
@@ -23,10 +23,10 @@ export function LayoutControls({ leftWidth, rightWidth, setLeftWidth, setRightWi
     firstRangeRef.current?.focus();
 
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") close();
+      if (event.key === "Escape") close(true);
     }
     function handlePointerDown(event: PointerEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) close();
+      if (!rootRef.current?.contains(event.target as Node)) close(false);
     }
 
     document.addEventListener("keydown", handleKeyDown);
@@ -41,8 +41,9 @@ export function LayoutControls({ leftWidth, rightWidth, setLeftWidth, setRightWi
     <button
       aria-controls="layout-controls-dialog"
       aria-expanded={open}
+      aria-haspopup="dialog"
       className="layout-controls-trigger"
-      onClick={() => setOpen((value) => !value)}
+      onClick={() => open ? close(true) : setOpen(true)}
       ref={triggerRef}
       type="button"
     >布局</button>

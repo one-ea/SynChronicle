@@ -105,6 +105,21 @@ for (const width of [375, 768, 1024, 1440]) {
     await modelSet.selectOption("set-1");
     await expect(createRun).toBeEnabled();
     await createRun.scrollIntoViewIfNeeded();
-    await expectInsideViewport(page, createRun);
+    const scrollState = await createRun.evaluate((button) => {
+      let scrollingElement = button.parentElement;
+      while (scrollingElement) {
+        const { overflowY } = getComputedStyle(scrollingElement);
+        if (overflowY === "auto" || overflowY === "scroll") break;
+        scrollingElement = scrollingElement.parentElement;
+      }
+      const buttonRect = button.getBoundingClientRect();
+      const sidebarRect = scrollingElement?.getBoundingClientRect();
+      return {
+        className: scrollingElement?.className ?? "",
+        bottomGap: sidebarRect ? sidebarRect.bottom - buttonRect.bottom : -1,
+      };
+    });
+    expect(scrollState.className).toContain("run-sidebar");
+    expect(scrollState.bottomGap).toBeGreaterThanOrEqual(16);
   });
 }
