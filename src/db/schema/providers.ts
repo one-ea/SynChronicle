@@ -2,11 +2,14 @@ import { sql } from "drizzle-orm";
 import { check, foreignKey, index, integer, jsonb, numeric, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { users } from "./auth.js";
 import { projects } from "./projects.js";
-import { runs } from "./runtime.js";
+import { runs, tasks } from "./runtime.js";
 
 export const credentialStatus = pgEnum("credential_status", ["active", "disabled", "revoked", "invalid"]);
 export const modelStatus = pgEnum("model_status", ["active", "disabled"]);
 export const quotaOperation = pgEnum("quota_operation", ["credit", "reserve", "settle", "release"]);
+export const quotaReservationStatus = pgEnum("quota_reservation_status", ["reserved", "settled", "released"]);
+export const quotaOutboxAction = pgEnum("quota_outbox_action", ["settle", "release"]);
+export const quotaOutboxStatus = pgEnum("quota_outbox_status", ["pending", "processed"]);
 
 export const userModelSets = pgTable(
   "user_model_sets",
@@ -105,6 +108,41 @@ export const quotaLedger = pgTable(
     index("quota_ledger_reservation_idx").on(table.reservationId),
   ],
 );
+
+export const modelCallContexts = pgTable("model_call_contexts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  taskId: uuid("task_id").notNull().references(() => tasks.id, { onDelete: "cascade" }),
+  runId: uuid("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+  scope: text("scope").notNull(),
+  sequence: integer("sequence").notNull(),
+  leaseVersion: integer("lease_version").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [uniqueIndex("model_call_contexts_task_scope_sequence_uq").on(table.taskId, table.scope, table.sequence)]);
+
+export const quotaReservations = pgTable("quota_reservations", {
+  id: uuid("id").primaryKey().references(() => quotaLedger.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  runId: uuid("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+  modelCallId: uuid("model_call_id").notNull().references(() => modelCallContexts.id, { onDelete: "cascade" }),
+  taskId: uuid("task_id").notNull().references(() => tasks.id, { onDelete: "cascade" }),
+  leaseVersion: integer("lease_version").notNull(),
+  status: quotaReservationStatus("status").notNull().default("reserved"),
+  heartbeatAt: timestamp("heartbeat_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [index("quota_reservations_reconcile_idx").on(table.status, table.heartbeatAt)]);
+
+export const quotaSettlementOutbox = pgTable("quota_settlement_outbox", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  reservationId: uuid("reservation_id").notNull().references(() => quotaReservations.id, { onDelete: "cascade" }),
+  action: quotaOutboxAction("action").notNull(),
+  status: quotaOutboxStatus("status").notNull().default("pending"),
+  payload: jsonb("payload").notNull(),
+  attempts: integer("attempts").notNull().default(0),
+  lastError: text("last_error"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  processedAt: timestamp("processed_at", { withTimezone: true }),
+}, (table) => [uniqueIndex("quota_settlement_outbox_reservation_action_uq").on(table.reservationId, table.action), index("quota_settlement_outbox_pending_idx").on(table.status, table.createdAt)]);
 
 export const auditEvents = pgTable(
   "audit_events",

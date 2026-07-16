@@ -35,3 +35,5 @@ Low: maintain IPv6 special-purpose range list and clear overall timer if transpo
 Final gate: execute credential and model-set PostgreSQL conditions with isolated `TEST_DATABASE_URL`.
 Task 12: complete (append-only quota ledger, admin controls, usage/settings UI, dynamic Scheduler caps)
 Final gate: execute quota concurrency, duplicate settlement, crash reconciliation, RBAC, and dynamic Scheduler PostgreSQL conditions with isolated `TEST_DATABASE_URL`.
+Task 12 durability follow-up: complete candidate (persisted call contexts, lease-aware reservation heartbeats, durable terminal outbox, platform credential execution, transactional admin audit, serialized caps, independent usage summaries, full model lifecycle UI/API).
+Final gate remains PostgreSQL execution with isolated `TEST_DATABASE_URL`; local sequential full Vitest and Playwright gates pass.

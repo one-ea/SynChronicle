@@ -16,8 +16,9 @@ import { createProvider, credentialScopedModel } from "../providers/index.js";
 import { parseProviderAllowedHosts } from "../providers/urlPolicy.js";
 import { platformModels } from "../db/schema/index.js";
 import { and, eq } from "drizzle-orm";
-import { DatabaseQuotaLedger } from "../quota/ledger.js";
+import { DatabaseQuotaLedger, startQuotaMaintenance } from "../quota/ledger.js";
 import { quotaGuardedModel } from "../quota/model.js";
+import { platformCredentialModel, platformCredentialSource } from "../quota/platformCredential.js";
 
 export async function startWorker(): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL?.trim();
@@ -33,6 +34,7 @@ export async function startWorker(): Promise<void> {
   const scheduler = new SchedulerRepository(database, { eventBroker });
   const quotaLedger = new DatabaseQuotaLedger(database);
   await quotaLedger.reconcile({ olderThan: new Date(Date.now() - leaseMs * 2) });
+  const stopQuotaMaintenance = startQuotaMaintenance(quotaLedger, { intervalMs: Math.max(5_000, leaseMs), staleAfterMs: leaseMs * 2 });
   const config = await loadConfig(process.env.CONFIG_PATH);
   const bundle = loadAssets(config.style);
   const runner = new WorkerRunner({
@@ -54,7 +56,9 @@ export async function startWorker(): Promise<void> {
             const lease = { apiKey: secret.apiKey, baseUrl: secret.baseUrl, release() { lease.apiKey = ""; lease.baseUrl = undefined; secret.apiKey = ""; secret.baseUrl = undefined; } };
             return lease;
           }, (name, providerConfig, selectedModel, factories) => createProvider(name, providerConfig, selectedModel, factories, providerAllowedHosts));
-          return quotaGuardedModel({ provider, modelName: model, userId: task.userId, projectId: task.projectId, runId: task.runId, agent: task.type, resolvePricing: async () => { const [configured] = await database.select({ inputPrice: platformModels.inputPrice, outputPrice: platformModels.outputPrice }).from(platformModels).where(and(eq(platformModels.provider, provider), eq(platformModels.model, model), eq(platformModels.status, "active"))).limit(1); return configured ? { inputPrice: Number(configured.inputPrice), outputPrice: Number(configured.outputPrice) } : null; }, ledger: quotaLedger, model: createProvider(provider, runConfig.providers?.[provider] ?? {}, model, {}, providerAllowedHosts) });
+          const loadPlatformModel = async () => { const [configured] = await database.select().from(platformModels).where(and(eq(platformModels.provider, provider), eq(platformModels.model, model), eq(platformModels.status, "active"))).limit(1); return configured; };
+          const platformModel = platformCredentialModel({ provider, model, runId: task.runId, base: runConfig.providers?.[provider] ?? {}, load: loadPlatformModel, environment: process.env, credentials: credentialService, factory: (name, providerConfig, selectedModel) => createProvider(name, providerConfig, selectedModel, {}, providerAllowedHosts) }) as never;
+          return quotaGuardedModel({ provider, modelName: model, userId: task.userId, projectId: task.projectId, runId: task.runId, taskId: task.id, leaseVersion: task.leaseVersion, agent: task.type, resolvePricing: async () => { const configured = await loadPlatformModel(); return configured ? { inputPrice: Number(configured.inputPrice), outputPrice: Number(configured.outputPrice), priceSource: "platform", credentialSource: platformCredentialSource(configured.credentialReference) } : null; }, ledger: quotaLedger, model: platformModel });
         },
         persistStreamDelta: async (chunkSequence, text) => {
           const event = await events.appendEvent({ userId: task.userId, projectId: task.projectId, runId: task.runId }, {
@@ -84,6 +88,7 @@ export async function startWorker(): Promise<void> {
   } catch (error) {
     if (!controller.signal.aborted) throw error;
   } finally {
+    stopQuotaMaintenance();
     process.removeListener("SIGINT", shutdown);
     process.removeListener("SIGTERM", shutdown);
     await eventBroker.close();

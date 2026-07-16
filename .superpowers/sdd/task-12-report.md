@@ -55,3 +55,32 @@ Implemented platform model quotas, append-only accounting, administrator control
 - PostgreSQL-conditional tests require `TEST_DATABASE_URL`; the current environment skipped them explicitly.
 - Streaming reservations settle when the AI SDK emits its finish usage event. Abrupt Worker termination relies on startup reconciliation after two lease periods.
 - Actual Provider usage can exceed the estimate and produce an explicit debt balance. Future reserves remain blocked until an administrator adjustment restores available balance.
+
+## Durable Settlement Follow-Up
+
+- Replaced prompt-derived call IDs with persisted call-instance records scoped by task, Agent, Provider, model, and logical sequence. Identical independent calls receive distinct IDs; retries restore the same post-checkpoint sequence ID. The latest durable checkpoint advances the per-scope cursor.
+- Added reservation lifecycle records containing task ID, lease version, status, and heartbeat. Reconciliation releases only stale reservations whose matching task lease is missing, expired, terminal, or fenced by a newer lease version.
+- Added a durable settlement/release outbox. Provider completion enqueues terminal work before processing; transient settlement failures retain the reservation and remain retryable. Late usage after reconciliation charges actual usage without double-refunding the estimate.
+- Stream finish events settle known usage. Provider errors, stream read errors, iterator return, and cancellation release through the durable outbox. Stream pulls refresh reservation heartbeat, while the active task lease prevents false release during long gaps.
+- Long-lived Workers run periodic outbox processing and stale-reservation reconciliation, with startup reconciliation retained.
+- Platform credentials now execute through the Provider chain. `env:NAME` resolves a named environment credential; `credential:UUID` resolves an encrypted credential owned by the recorded administrator. Responses expose only `environment` or `encrypted`.
+- Balance adjustment and audit insertion now share one transaction and both use request-level idempotency. Platform model create/update/disable/delete operations are audited; deletion requires prior disablement.
+- User concurrency changes and administrator cap reductions share one advisory transaction lock, lock the current settings/user rows, and preserve `user concurrency <= platform maximum` under races.
+- Usage APIs explicitly convert PostgreSQL numeric values and expose independent per-Agent and per-model totals for tokens, cost, latency, credential sources, price sources, and unknown-price state.
+- Admin UI tests cover pricing updates, disable confirmation, and disabled-model deletion. PostgreSQL-conditional tests cover real repository balance/audit idempotency, delete semantics, and concurrency races.
+
+## Follow-Up Verification
+
+- Target quota/admin/usage/runtime/Scheduler suite: 32 passed, 23 PostgreSQL-conditional skipped.
+- Full Vitest suite, run independently: 544 passed, 55 PostgreSQL-conditional skipped.
+- Playwright responsive suite, run independently: 8 passed.
+- TypeScript typecheck: passed.
+- Production build: passed.
+- Drizzle migration check: passed.
+- Git diff check: passed.
+- Running full Vitest and Playwright concurrently caused one unrelated existing Agent test timeout and one first-page Playwright timeout from resource contention. Independent reruns passed completely and are the final evidence above.
+
+## Follow-Up Concerns
+
+- PostgreSQL-conditional tests require `TEST_DATABASE_URL`; this environment skipped the four quota and three administrator repository cases.
+- JavaScript cannot deterministically detect a consumer that abandons a `ReadableStream` without cancelling or returning its iterator. Stream heartbeat stops after Provider stream creation, active leases protect long calls, and lease expiry plus periodic reconciliation closes that crash/abandon path.

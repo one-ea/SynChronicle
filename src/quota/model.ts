@@ -1,33 +1,37 @@
-import { createHash, randomUUID } from "node:crypto";
 import type { LanguageModel } from "ai";
 import type { DatabaseQuotaLedger } from "./ledger.js";
 
 type Model = Exclude<LanguageModel, string>;
 
-export function quotaGuardedModel(input: { provider: string; modelName: string; userId: string; projectId: string; runId: string; agent: string; inputPrice?: number | null; outputPrice?: number | null; resolvePricing?: () => Promise<{ inputPrice: number; outputPrice: number } | null>; ledger: DatabaseQuotaLedger; model: Model }): Model {
+export function quotaGuardedModel(input: { provider: string; modelName: string; userId: string; projectId: string; runId: string; taskId: string; leaseVersion: number; agent: string; credentialSource?: string; inputPrice?: number | null; outputPrice?: number | null; resolvePricing?: () => Promise<{ inputPrice: number; outputPrice: number; priceSource?: string; credentialSource?: string } | null>; ledger: DatabaseQuotaLedger; model: Model; heartbeatMs?: number }): Model {
+  let sequence = 0;
+  const scope = `${input.agent}:${input.provider}/${input.modelName}`;
+  const cursor = "modelCallCursor" in input.ledger ? input.ledger.modelCallCursor(input.runId, scope) : Promise.resolve(0);
   const invoke = async (method: "doGenerate" | "doStream", options: unknown) => {
-    const modelCallId = callId(input, options);
+    sequence += 1;
+    const { id: modelCallId } = await input.ledger.acquireModelCall({ taskId: input.taskId, runId: input.runId, scope, sequence: await cursor + sequence, leaseVersion: input.leaseVersion });
     const pricing = input.resolvePricing ? await input.resolvePricing() : input.inputPrice === undefined || input.outputPrice === undefined ? null : { inputPrice: input.inputPrice, outputPrice: input.outputPrice };
     const estimatedCostUsd = estimateCost(options, pricing?.inputPrice ?? null, pricing?.outputPrice ?? null);
-    const reservation = await input.ledger.reserve({ userId: input.userId, projectId: input.projectId, runId: input.runId, modelCallId, estimatedCostUsd, model: `${input.provider}/${input.modelName}` });
+    const reservation = await input.ledger.reserve({ userId: input.userId, projectId: input.projectId, runId: input.runId, taskId: input.taskId, leaseVersion: input.leaseVersion, modelCallId, estimatedCostUsd, model: `${input.provider}/${input.modelName}` });
+    const stopHeartbeat = heartbeat(input, reservation.id);
+    const startedAt = Date.now();
+    let providerCompleted = false;
     try {
       const operation = (input.model as unknown as Record<string, (value: unknown) => Promise<unknown>>)[method];
       if (!operation) throw new Error(`provider model does not implement ${method}`);
       const result = await operation.call(input.model, options) as Record<string, unknown>;
-      if (method === "doStream") return wrapStreamResult(result, async (usage) => input.ledger.settle(settleInput(input, pricing, reservation.id, modelCallId, usage)));
-      await input.ledger.settle(settleInput(input, pricing, reservation.id, modelCallId, usageFrom(result)));
+      providerCompleted = true;
+      if (method === "doStream") { stopHeartbeat(); return wrapStreamResult(result, async (usage) => input.ledger.settleDurably(settleInput(input, pricing, reservation.id, modelCallId, usage, Date.now() - startedAt)), async () => input.ledger.releaseDurably(releaseInput(input, reservation.id, modelCallId)), () => input.ledger.heartbeat(reservation.id, input.taskId, input.leaseVersion)); }
+      await input.ledger.settleDurably(settleInput(input, pricing, reservation.id, modelCallId, usageFrom(result), Date.now() - startedAt));
+      stopHeartbeat();
       return result;
     } catch (error) {
-      await input.ledger.release({ reservationId: reservation.id, userId: input.userId, projectId: input.projectId, runId: input.runId, modelCallId, model: `${input.provider}/${input.modelName}` });
+      stopHeartbeat();
+      if (!providerCompleted) await input.ledger.releaseDurably(releaseInput(input, reservation.id, modelCallId));
       throw error;
     }
   };
   return { ...(input.model as unknown as Record<string, unknown>), doGenerate: (options: unknown) => invoke("doGenerate", options), doStream: (options: unknown) => invoke("doStream", options) } as unknown as Model;
-}
-
-function callId(input: { provider: string; modelName: string; agent: string }, options: unknown): string {
-  if (options && typeof options === "object" && "modelCallId" in options && typeof options.modelCallId === "string") return options.modelCallId;
-  try { return createHash("sha256").update(`${input.agent}\0${input.provider}\0${input.modelName}\0${JSON.stringify(options)}`).digest("hex"); } catch { return randomUUID(); }
 }
 
 function estimateCost(options: unknown, inputPrice: number | null, outputPrice: number | null): number | null {
@@ -42,23 +46,43 @@ function usageFrom(result: Record<string, unknown>): Record<string, unknown> {
   return result.usage && typeof result.usage === "object" ? result.usage as Record<string, unknown> : {};
 }
 
-function settleInput(input: Parameters<typeof quotaGuardedModel>[0], pricing: { inputPrice: number | null; outputPrice: number | null } | null, reservationId: string, modelCallId: string, usage: Record<string, unknown>) {
+function settleInput(input: Parameters<typeof quotaGuardedModel>[0], pricing: { inputPrice: number | null; outputPrice: number | null; priceSource?: string; credentialSource?: string } | null, reservationId: string, modelCallId: string, usage: Record<string, unknown>, latencyMs: number) {
   const inputTokens = finite(usage.inputTokens), outputTokens = finite(usage.outputTokens);
   const actualCostUsd = !pricing || pricing.inputPrice === null || pricing.outputPrice === null ? 0 : (inputTokens * pricing.inputPrice + outputTokens * pricing.outputPrice) / 1_000_000;
-  return { reservationId, userId: input.userId, projectId: input.projectId, runId: input.runId, modelCallId, actualCostUsd, usageId: modelCallId, usage: { ...usage, agent: input.agent }, model: `${input.provider}/${input.modelName}` };
+  return { reservationId, userId: input.userId, projectId: input.projectId, runId: input.runId, taskId: input.taskId, leaseVersion: input.leaseVersion, modelCallId, actualCostUsd, usageId: modelCallId, usage: { ...usage, agent: input.agent }, model: `${input.provider}/${input.modelName}`, credentialSource: pricing?.credentialSource ?? input.credentialSource ?? "platform", priceSource: pricing?.priceSource ?? (pricing ? "platform" : "unknown"), latencyMs };
 }
 
 function finite(value: unknown): number { return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0; }
 
-function wrapStreamResult(result: Record<string, unknown>, settle: (usage: Record<string, unknown>) => Promise<unknown>) {
+function releaseInput(input: Parameters<typeof quotaGuardedModel>[0], reservationId: string, modelCallId: string) { return { reservationId, userId: input.userId, projectId: input.projectId, runId: input.runId, taskId: input.taskId, leaseVersion: input.leaseVersion, modelCallId, model: `${input.provider}/${input.modelName}` }; }
+
+function heartbeat(input: Parameters<typeof quotaGuardedModel>[0], reservationId: string) {
+  const timer = setInterval(() => { void input.ledger.heartbeat(reservationId, input.taskId, input.leaseVersion); }, input.heartbeatMs ?? 10_000);
+  timer.unref?.();
+  return () => clearInterval(timer);
+}
+
+function wrapStreamResult(result: Record<string, unknown>, settle: (usage: Record<string, unknown>) => Promise<unknown>, release: () => Promise<unknown>, touch: () => Promise<unknown>) {
   const stream = result.stream;
-  if (!(stream instanceof ReadableStream)) return result;
-  const transformed = stream.pipeThrough(new TransformStream({
-    async transform(chunk, controller) {
-      const value = chunk as { type?: string; usage?: Record<string, unknown> };
-      if (value?.type === "finish") await settle(value.usage ?? {});
-      controller.enqueue(chunk);
+  if (!(stream instanceof ReadableStream)) { void release(); return result; }
+  const reader = stream.getReader();
+  let terminal = false;
+  const finish = async (usage?: Record<string, unknown>) => { if (terminal) return; terminal = true; if (usage) await settle(usage); else await release(); };
+  const transformed = new ReadableStream({
+    async pull(controller) {
+      try {
+        await touch();
+        const next = await reader.read();
+        if (next.done) { await finish(); controller.close(); return; }
+        const value = next.value as { type?: string; usage?: Record<string, unknown> };
+        if (value?.type === "finish") await finish(value.usage ?? {});
+        controller.enqueue(next.value);
+      } catch (error) {
+        await finish();
+        controller.error(error);
+      }
     },
-  }));
+    async cancel(reason) { try { await reader.cancel(reason); } finally { await finish(); } },
+  });
   return { ...result, stream: transformed };
 }
