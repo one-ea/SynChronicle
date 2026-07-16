@@ -14,6 +14,10 @@ import { DatabaseCredentialRepository } from "../credentials/database.js";
 import { masterKeyRegistryFromEnvironment } from "../credentials/envelope.js";
 import { createProvider, credentialScopedModel } from "../providers/index.js";
 import { parseProviderAllowedHosts } from "../providers/urlPolicy.js";
+import { platformModels } from "../db/schema/index.js";
+import { and, eq } from "drizzle-orm";
+import { DatabaseQuotaLedger } from "../quota/ledger.js";
+import { quotaGuardedModel } from "../quota/model.js";
 
 export async function startWorker(): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL?.trim();
@@ -26,7 +30,9 @@ export async function startWorker(): Promise<void> {
   const credentialService = new CredentialService(new DatabaseCredentialRepository(database), masterKeyRegistryFromEnvironment(process.env.PROJECT_CREDENTIAL_MASTER_KEYS, process.env.PROJECT_CREDENTIAL_MASTER_KEY_VERSION), undefined, providerAllowedHosts);
   const events = new DatabaseEventRepository(database);
   const eventBroker = new PostgresEventBroker(database);
-  const scheduler = new SchedulerRepository(database, { platformConcurrency: 4, eventBroker });
+  const scheduler = new SchedulerRepository(database, { eventBroker });
+  const quotaLedger = new DatabaseQuotaLedger(database);
+  await quotaLedger.reconcile({ olderThan: new Date(Date.now() - leaseMs * 2) });
   const config = await loadConfig(process.env.CONFIG_PATH);
   const bundle = loadAssets(config.style);
   const runner = new WorkerRunner({
@@ -41,14 +47,15 @@ export async function startWorker(): Promise<void> {
     createHost: async (task) => {
       const runConfig = applyRunConfiguration(config, task.payload);
       return Host.new(runConfig, bundle, {
-        modelFactory: (provider, model, selection) => selection?.credentialId
-          ? credentialScopedModel(provider, model, selection.credentialId, runConfig.providers?.[provider] ?? {}, async (credentialId, expectedProvider) => {
+        modelFactory: (provider, model, selection) => {
+          if (selection?.credentialId) return credentialScopedModel(provider, model, selection.credentialId, runConfig.providers?.[provider] ?? {}, async (credentialId, expectedProvider) => {
             const secret = await credentialService.resolve(task.userId, credentialId, { runId: task.runId });
             if (!secret || secret.provider !== expectedProvider) throw new Error("credential is unavailable for this provider");
             const lease = { apiKey: secret.apiKey, baseUrl: secret.baseUrl, release() { lease.apiKey = ""; lease.baseUrl = undefined; secret.apiKey = ""; secret.baseUrl = undefined; } };
             return lease;
-          }, (name, providerConfig, selectedModel, factories) => createProvider(name, providerConfig, selectedModel, factories, providerAllowedHosts))
-          : createProvider(provider, runConfig.providers?.[provider] ?? {}, model, {}, providerAllowedHosts),
+          }, (name, providerConfig, selectedModel, factories) => createProvider(name, providerConfig, selectedModel, factories, providerAllowedHosts));
+          return quotaGuardedModel({ provider, modelName: model, userId: task.userId, projectId: task.projectId, runId: task.runId, agent: task.type, resolvePricing: async () => { const [configured] = await database.select({ inputPrice: platformModels.inputPrice, outputPrice: platformModels.outputPrice }).from(platformModels).where(and(eq(platformModels.provider, provider), eq(platformModels.model, model), eq(platformModels.status, "active"))).limit(1); return configured ? { inputPrice: Number(configured.inputPrice), outputPrice: Number(configured.outputPrice) } : null; }, ledger: quotaLedger, model: createProvider(provider, runConfig.providers?.[provider] ?? {}, model, {}, providerAllowedHosts) });
+        },
         persistStreamDelta: async (chunkSequence, text) => {
           const event = await events.appendEvent({ userId: task.userId, projectId: task.projectId, runId: task.runId }, {
             stableId: `stream:${task.runId}:${task.id}:${task.type}:${chunkSequence}`,

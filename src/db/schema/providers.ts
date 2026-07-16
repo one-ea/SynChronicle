@@ -6,6 +6,7 @@ import { runs } from "./runtime.js";
 
 export const credentialStatus = pgEnum("credential_status", ["active", "disabled", "revoked", "invalid"]);
 export const modelStatus = pgEnum("model_status", ["active", "disabled"]);
+export const quotaOperation = pgEnum("quota_operation", ["credit", "reserve", "settle", "release"]);
 
 export const userModelSets = pgTable(
   "user_model_sets",
@@ -64,6 +65,12 @@ export const platformModels = pgTable(
   (table) => [uniqueIndex("platform_models_provider_model_uq").on(table.provider, table.model)],
 );
 
+export const platformSettings = pgTable("platform_settings", {
+  id: integer("id").primaryKey().default(1),
+  concurrencyLimit: integer("concurrency_limit").notNull().default(4),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const quotaLedger = pgTable(
   "quota_ledger",
   {
@@ -71,9 +78,14 @@ export const quotaLedger = pgTable(
     userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
     projectId: uuid("project_id"),
     runId: uuid("run_id"),
+    modelCallId: text("model_call_id"),
+    operation: quotaOperation("operation").notNull().default("credit"),
+    idempotencyKey: text("idempotency_key").notNull().default(sql`gen_random_uuid()::text`),
+    reservationId: uuid("reservation_id"),
     source: text("source").notNull(),
     amount: numeric("amount", { precision: 18, scale: 8 }).notNull(),
     balance: numeric("balance", { precision: 18, scale: 8 }).notNull(),
+    metadata: jsonb("metadata").notNull().default({}),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
@@ -89,6 +101,8 @@ export const quotaLedger = pgTable(
     }),
     check("quota_ledger_run_requires_project_ck", sql`${table.runId} is null or ${table.projectId} is not null`),
     index("quota_ledger_user_created_idx").on(table.userId, table.createdAt),
+    uniqueIndex("quota_ledger_idempotency_uq").on(table.idempotencyKey),
+    index("quota_ledger_reservation_idx").on(table.reservationId),
   ],
 );
 

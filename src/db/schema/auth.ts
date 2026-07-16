@@ -1,4 +1,4 @@
-import { index, integer, jsonb, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { index, integer, jsonb, numeric, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 
 export const userRole = pgEnum("user_role", ["user", "admin"]);
 export const userStatus = pgEnum("user_status", ["active", "suspended", "disabled"]);
@@ -13,6 +13,7 @@ export const users = pgTable(
     role: userRole("role").notNull().default("user"),
     status: userStatus("status").notNull().default("active"),
     concurrencyLimit: integer("concurrency_limit").notNull().default(1),
+    budgetUsd: numeric("budget_usd", { precision: 18, scale: 8 }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

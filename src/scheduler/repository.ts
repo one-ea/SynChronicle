@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { and, asc, count, eq, inArray, lte, or, sql } from "drizzle-orm";
 import type { Database } from "../db/client.js";
-import { platformModels, projects, providerCredentials, runCommands, runs, tasks, userModelSets, users } from "../db/schema/index.js";
+import { platformModels, platformSettings, projects, providerCredentials, runCommands, runs, tasks, userModelSets, users } from "../db/schema/index.js";
 import { appendRunEventInTransaction } from "../realtime/append.js";
 import type { RequestAuth } from "../web/auth/plugin.js";
 import type { EventBroker } from "../realtime/broker.js";
@@ -22,7 +22,7 @@ const terminalRunStatuses = ["completed", "failed", "cancelled"] as const;
 const schedulerAdvisoryLock = 0x53594e43;
 
 export interface SchedulerRepositoryOptions {
-  platformConcurrency: number;
+  platformConcurrency?: number;
   eventBroker?: EventBroker;
 }
 
@@ -112,11 +112,11 @@ export function buildEligibleTaskQuery(executor: SchedulerExecutor, now: Date) {
 }
 
 export class SchedulerRepository {
-  private readonly platformConcurrency: number;
+  private readonly platformConcurrency?: number;
   private readonly eventBroker?: EventBroker;
 
-  constructor(private readonly db: Database, options: SchedulerRepositoryOptions = { platformConcurrency: 4 }) {
-    if (!Number.isInteger(options.platformConcurrency) || options.platformConcurrency <= 0) {
+  constructor(private readonly db: Database, options: SchedulerRepositoryOptions = {}) {
+    if (options.platformConcurrency !== undefined && (!Number.isInteger(options.platformConcurrency) || options.platformConcurrency <= 0)) {
       throw new Error("platformConcurrency must be a positive integer");
     }
     this.platformConcurrency = options.platformConcurrency;
@@ -225,7 +225,11 @@ export class SchedulerRepository {
         .select({ value: count() })
         .from(tasks)
         .where(inArray(tasks.status, activeTaskStatuses));
-      if (platformActive >= this.platformConcurrency) return null;
+      const [dynamicSettings] = this.platformConcurrency === undefined
+        ? await transaction.select({ concurrencyLimit: platformSettings.concurrencyLimit }).from(platformSettings).where(eq(platformSettings.id, 1)).limit(1)
+        : [];
+      const platformConcurrency = this.platformConcurrency ?? dynamicSettings?.concurrencyLimit ?? 4;
+      if (platformActive >= platformConcurrency) return null;
 
       const [candidate] = await buildEligibleTaskQuery(transaction, now);
       if (!candidate) return null;

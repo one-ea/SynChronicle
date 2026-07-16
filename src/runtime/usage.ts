@@ -2,6 +2,7 @@ import type { UsageState } from "../domain/index.js";
 import { defaultRegistry } from "../models/index.js";
 export interface ModelIdentity { provider: string; model: string; }
 export interface ModelUsage { inputTokens?: number; outputTokens?: number; cachedInputTokens?: number; totalCost?: number; latencyMs?: number; model?: ModelIdentity; costUnknown?: boolean; }
+export interface UsagePricing { inputCostPer1M: number; outputCostPer1M: number; cacheReadCostPer1M?: number; }
 const empty = () => ({ input: 0, output: 0, cache_read: 0, cache_write: 0, cost_usd: 0, saved_usd: 0, cache_capable: false, cache_breaks: 0 });
 export class UsageTracker {
   private state: UsageState = { schema: 1, updated_at: new Date().toISOString(), overall: empty(), per_agent: {}, per_model: {}, missing_assistant_usage: 0 };
@@ -30,9 +31,7 @@ export function normalizeUsage(value: unknown, model?: ModelIdentity): ModelUsag
     if (result.totalCost === undefined) {
       const pricing = defaultRegistry.resolve(`${model.provider}/${model.model}`);
       if (pricing) {
-        const cached = Math.min(result.cachedInputTokens ?? 0, result.inputTokens ?? 0);
-        const uncached = Math.max(0, (result.inputTokens ?? 0) - cached);
-        result.totalCost = (uncached * pricing.inputCostPer1M + cached * pricing.cacheReadCostPer1M + (result.outputTokens ?? 0) * pricing.outputCostPer1M) / 1_000_000;
+        result.totalCost = calculateUsageCost(result, pricing);
       } else {
         result.totalCost = 0;
         result.costUnknown = true;
@@ -40,4 +39,10 @@ export function normalizeUsage(value: unknown, model?: ModelIdentity): ModelUsag
     }
   }
   return accepted ? result : undefined;
+}
+
+export function calculateUsageCost(usage: Pick<ModelUsage, "inputTokens" | "outputTokens" | "cachedInputTokens">, pricing: UsagePricing): number {
+  const cached = Math.min(usage.cachedInputTokens ?? 0, usage.inputTokens ?? 0);
+  const uncached = Math.max(0, (usage.inputTokens ?? 0) - cached);
+  return (uncached * pricing.inputCostPer1M + cached * (pricing.cacheReadCostPer1M ?? pricing.inputCostPer1M) + (usage.outputTokens ?? 0) * pricing.outputCostPer1M) / 1_000_000;
 }

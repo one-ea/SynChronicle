@@ -4,7 +4,7 @@ import type { DatabaseTransaction } from "../projects/repository.js";
 
 export interface AuditEventInput {
   actorId: string;
-  action: "project.create" | "project.update" | "project.archive";
+  action: string;
   targetId: string | null;
   result: "success" | "invalid" | "not_found" | "conflict" | "error";
   requestId: string;

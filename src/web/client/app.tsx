@@ -4,6 +4,8 @@ import { SessionProvider, useSession } from "./auth/session.js";
 import { LoginPage } from "./pages/login.js";
 import { ProjectsPage, type Project } from "./pages/projects.js";
 import { WorkbenchPage, type WorkbenchProject } from "./pages/workbench.js";
+import { SettingsPage } from "./pages/settings.js";
+import { AdminPage } from "./pages/admin.js";
 
 function Application() {
   const session = useSession();
@@ -76,6 +78,9 @@ function Application() {
   }
 
   if (!session.authenticated) return <LoginPage api={apiRef.current} onAuthenticated={loadProjects} />;
+
+  if (window.location.pathname === "/settings") return <SettingsPage api={apiRef.current} />;
+  if (window.location.pathname === "/admin") return session.user?.role === "admin" ? <AdminPage api={apiRef.current} /> : <main className="boot-state">无权访问管理页面</main>;
 
   if (workbenchMatch) {
     if (loadError) return <main className="boot-state"><div className="message message-error" role="alert">{loadError}<a className="text-button" href="/projects">返回作品页</a></div></main>;
