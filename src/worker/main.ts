@@ -56,6 +56,7 @@ export async function startWorker(): Promise<void> {
     createHost: async (task) => {
       const runConfig = applyRunConfiguration(config, task.payload);
       return Host.new(runConfig, bundle, {
+        coordinatorTools: deterministicTestModel ? ["draft_chapter", "commit_chapter"] : undefined,
         nextModelInvocation: async ({ agent, kind, logicalKey }) => (await quotaLedger.allocateModelCall({ taskId: task.id, runId: task.runId, scope: `${agent}:${kind}`, invocationKey: logicalKey, leaseVersion: task.leaseVersion })).id,
         modelFactory: (provider, model, selection) => {
           if (deterministicTestModel) return quotaGuardedModel({ provider, modelName: model, userId: task.userId, projectId: task.projectId, runId: task.runId, taskId: task.id, leaseVersion: task.leaseVersion, agent: task.type, resolvePricing: async () => ({ inputPrice: 0, outputPrice: 0, priceSource: "platform", credentialSource: "environment" }), ledger: quotaLedger, model: deterministicTestModel(provider, model) as never });

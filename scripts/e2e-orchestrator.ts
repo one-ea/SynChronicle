@@ -26,11 +26,11 @@ export class TestProcessOrchestrator {
     this.web = this.start("web", "dist/web/main.js", this.options.env);
   }
 
-  startWorker(): void {
+  startWorker(options: { recovery?: boolean } = {}): void {
     if (this.worker?.running) throw new Error("test Worker is already running");
     this.workerSequence += 1;
     const id = `e2e-worker-${this.workerSequence}`;
-    this.worker = this.start(id, "dist/worker/main.js", { ...this.options.env, WORKER_ID: id });
+    this.worker = this.start(id, "dist/worker/main.js", { ...this.options.env, WORKER_ID: id, ...(options.recovery ? { SYNCHRONICLE_E2E_RECOVERY_WORKER: "1" } : {}) });
   }
 
   killWorker(): Promise<void> {

@@ -7,11 +7,11 @@ const streamText = "雾港的潮声越过窗沿，信纸上的墨迹仍带着远
 
 interface FullStackState {
   run: { status: string } | null;
-  tasks: Array<{ status: string; leaseOwner: string | null; leaseVersion: number }>;
-  events: Array<{ sequence: number; stableId: string | null; type: string }>;
+  tasks: Array<{ id: string; status: string; leaseOwner: string | null; leaseVersion: number }>;
+  events: Array<{ sequence: number; stableId: string | null; type: string; payload: unknown }>;
   checkpoints: unknown[];
-  projectChapters: unknown[];
-  projectArtifacts: unknown[];
+  chapters: Array<{ id: string; runId: string; body: string; version: number }>;
+  artifacts: Array<{ id: string; runId: string; type: string; contentText: string | null; contentJson: unknown; version: number }>;
   usage: Array<{ snapshotId: string }>;
   quota: Array<{ id: string }>;
   providerCalls: Array<{ method: string; model: string; workerId?: string }>;
@@ -101,6 +101,12 @@ test("real Web, database, and Worker execute controls, recovery, and durable out
   await expect(page.getByText(/运行已创建/)).toBeVisible();
   const runId = new URL(page.url()).searchParams.get("run")!;
   expect((await control.post(`/prepare-run?runId=${encodeURIComponent(runId)}&projectId=${encodeURIComponent(projectId)}`)).status()).toBe(201);
+  const baseline = await state(control, runId, projectId);
+  expect(baseline.chapters).toHaveLength(1);
+  expect(baseline.artifacts).toHaveLength(1);
+  const taskId = baseline.tasks[0]!.id;
+  const baselineChapterIds = new Set(baseline.chapters.map(({ id }) => id));
+  const baselineArtifactIds = new Set(baseline.artifacts.map(({ id }) => id));
   expect((await control.post("/worker/start")).status()).toBe(201);
   await waitForState(control, runId, projectId, (value) => value.tasks.some((task) => task.status === "running") && value.providerCalls.some((call) => call.model === "deterministic"), "Worker claim and first Provider call");
 
@@ -119,8 +125,6 @@ test("real Web, database, and Worker execute controls, recovery, and durable out
   await page.getByRole("button", { name: "暂停运行" }).click();
   const paused = await waitForState(control, runId, projectId, (value) => value.tasks.some((task) => task.status === "paused") && value.checkpoints.length > 0 && value.providerCalls.some((call) => call.model === "deterministic-v2"), "pause boundary and checkpoint");
   await expect(page.getByText("write")).toBeVisible();
-  expect(paused.projectChapters).toHaveLength(1);
-  expect(paused.projectArtifacts.length).toBeGreaterThan(0);
 
   await page.getByRole("button", { name: "继续运行" }).click();
   const previousProviderCalls = paused.providerCalls.filter((call) => call.model === "deterministic-v2").length;
@@ -129,17 +133,26 @@ test("real Web, database, and Worker execute controls, recovery, and durable out
   const previousWorker = running.tasks[0]!.leaseOwner!;
   await page.context().setOffline(true);
   await control.post("/worker/kill");
-  await control.post("/worker/start");
+  await control.post("/worker/start?recovery=1");
   const recovered = await waitForState(control, runId, projectId, (value) => value.tasks.some((task) => task.leaseOwner !== previousWorker && task.leaseVersion > leaseVersion) && value.providerCalls.some((call) => call.workerId !== previousWorker), "lease expiry, reclaim, and Host resume");
   const recoveryWorker = recovered.tasks[0]!.leaseOwner!;
   expect(recovered.processes.worker).toMatchObject({ id: recoveryWorker, running: true });
-  const completed = await waitForState(control, runId, projectId, (value) => value.tasks.some((task) => task.status === "completed"), "recovered task completion");
+  const completed = await waitForState(control, runId, projectId, (value) => value.tasks.some((task) => task.status === "completed") && value.chapters.some(({ id, body }) => !baselineChapterIds.has(id) && body.includes(streamText)) && value.artifacts.some(({ id, contentText }) => !baselineArtifactIds.has(id) && contentText?.includes(streamText)), "recovered durable chapter and artifact commit");
   await page.context().setOffline(false);
   await expect(page.getByText(streamText)).toHaveCount(1, { timeout: 15_000 });
 
   expect(completed.events.map(({ sequence }) => sequence)).toEqual([...completed.events.map(({ sequence }) => sequence)].sort((left, right) => left - right));
   expect(completed.events.map(({ stableId }) => stableId).filter(Boolean)).toHaveLength(new Set(completed.events.map(({ stableId }) => stableId).filter(Boolean)).size);
   expect(completed.events.some(({ type }) => type === "stream.delta")).toBe(true);
+  const newChapters = completed.chapters.filter(({ id }) => !baselineChapterIds.has(id));
+  const outputArtifacts = completed.artifacts.filter(({ id, contentText }) => !baselineArtifactIds.has(id) && contentText?.includes(streamText));
+  const outputStreamEvents = completed.events.filter(({ stableId, payload }) => stableId?.startsWith(`stream:${runId}:${taskId}:`) && JSON.stringify(payload).includes(streamText));
+  const completionEvents = completed.events.filter(({ stableId }) => stableId?.endsWith(`/${runId}:completed`));
+  expect(newChapters).toEqual([expect.objectContaining({ runId, body: expect.stringContaining(streamText), version: 2 })]);
+  expect(outputArtifacts).toEqual([expect.objectContaining({ runId, type: "drafts/01.draft.md", contentText: expect.stringContaining(streamText) })]);
+  expect(outputStreamEvents).toHaveLength(1);
+  expect(completionEvents).toHaveLength(1);
+  expect(completionEvents[0]!.stableId).toContain(runId);
   expect(completed.usage.length).toBeGreaterThan(0);
   expect(completed.usage.map(({ snapshotId }) => snapshotId)).toHaveLength(new Set(completed.usage.map(({ snapshotId }) => snapshotId)).size);
   expect(completed.quota.length).toBeGreaterThan(0);

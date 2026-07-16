@@ -10,6 +10,7 @@ describe("deterministic E2E Provider", () => {
   afterEach(() => {
     delete process.env.SYNCHRONICLE_E2E_PROVIDER_LOG;
     delete process.env.SYNCHRONICLE_E2E_FAKE_PROVIDER;
+    delete process.env.SYNCHRONICLE_E2E_RECOVERY_WORKER;
     vi.unstubAllEnvs();
   });
 
@@ -64,5 +65,29 @@ describe("deterministic E2E Provider", () => {
 
     await expect(result.text).resolves.toContain("雾港");
     expect(reopenBook).toHaveBeenCalledWith(expect.objectContaining({ chapters: [1], reason: "crash recovery boundary" }), expect.anything());
+  });
+
+  it("rewrites and commits a chapter through real tools during crash recovery", async () => {
+    vi.stubEnv("NODE_ENV", "test");
+    process.env.SYNCHRONICLE_E2E_FAKE_PROVIDER = "1";
+    process.env.SYNCHRONICLE_E2E_RECOVERY_WORKER = "1";
+    const reopenBook = vi.fn(async () => ({ reopened: true }));
+    const draftChapter = vi.fn(async () => ({ written: true }));
+    const commitChapter = vi.fn(async () => ({ committed: true }));
+    const result = streamText({
+      model: createDeterministicTestModel("e2e", "deterministic-v2"),
+      prompt: "recover and commit",
+      tools: {
+        reopen_book: tool({ description: "checkpoint", inputSchema: z.object({ chapters: z.array(z.number()), reason: z.string() }), execute: reopenBook }),
+        draft_chapter: tool({ description: "draft", inputSchema: z.object({ chapter: z.number(), content: z.string(), mode: z.enum(["write", "append"]) }), execute: draftChapter }),
+        commit_chapter: tool({ description: "commit", inputSchema: z.object({ chapter: z.number(), summary: z.string(), characters: z.array(z.string()), key_events: z.array(z.string()) }), execute: commitChapter }),
+      },
+      stopWhen: ({ steps }) => steps.length >= 4,
+    });
+
+    await expect(result.text).resolves.toContain("雾港");
+    expect(reopenBook).not.toHaveBeenCalled();
+    expect(draftChapter).toHaveBeenCalledWith(expect.objectContaining({ chapter: 1, content: expect.stringContaining("远方的盐味"), mode: "write" }), expect.anything());
+    expect(commitChapter).toHaveBeenCalledWith(expect.objectContaining({ chapter: 1, summary: expect.stringContaining("雾港") }), expect.anything());
   });
 });

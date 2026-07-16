@@ -53,7 +53,7 @@ const control = createServer(async (request, response) => {
     if (request.method === "GET" && url.pathname === "/processes") return send(response, 200, orchestrator.snapshot());
     if (request.method === "POST" && url.pathname === "/reset") { await writeFile(providerLog, "", { mode: 0o600 }); return send(response, 204, null); }
     if (request.method === "POST" && url.pathname === "/worker/kill") { await orchestrator.killWorker(); return send(response, 200, orchestrator.snapshot()); }
-    if (request.method === "POST" && url.pathname === "/worker/start") { orchestrator.startWorker(); return send(response, 201, orchestrator.snapshot()); }
+    if (request.method === "POST" && url.pathname === "/worker/start") { orchestrator.startWorker({ recovery: url.searchParams.get("recovery") === "1" }); return send(response, 201, orchestrator.snapshot()); }
     if (request.method === "POST" && url.pathname === "/prepare-run") {
       const runId = url.searchParams.get("runId");
       const projectId = url.searchParams.get("projectId");

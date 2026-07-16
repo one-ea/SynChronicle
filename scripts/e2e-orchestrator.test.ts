@@ -23,8 +23,9 @@ describe("E2E process orchestrator", () => {
     children[0]!.emit("exit", null, "SIGKILL");
     await killed;
     expect(settled).toBe(true);
-    orchestrator.startWorker();
+    orchestrator.startWorker({ recovery: true });
 
     expect(orchestrator.snapshot()).toMatchObject({ worker: { id: "e2e-worker-2", pid: 101, running: true } });
+    expect(children[1]!.env).toMatchObject({ WORKER_ID: "e2e-worker-2", SYNCHRONICLE_E2E_RECOVERY_WORKER: "1" });
   });
 });

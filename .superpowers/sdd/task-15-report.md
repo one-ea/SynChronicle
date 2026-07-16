@@ -25,16 +25,6 @@ Implemented the production security layer, deterministic real-stack E2E harness,
 - Trusted proxy RED: the prior boolean schema rejected an explicit allowlist and accepted broad trust. GREEN: explicit IP/CIDR parsing passes and `true` is rejected.
 - Transport RED: synchronous requester creation left one overall timer active. GREEN: the requester throw path clears the timer and the 56-test URL policy suite passes.
 
-## Local Verification
-
-- `pnpm typecheck`: passed.
-- `pnpm test`: 637 passed, 62 PostgreSQL-conditional skipped.
-- `pnpm vitest run src/web/security/security.test.ts src/providers/urlPolicy.test.ts`: 61 passed.
-- `pnpm build`: passed; tsup and Vite production outputs generated.
-- `pnpm exec playwright test --list`: passed; desktop and mobile real-stack cases discovered.
-- `npm pack --dry-run`: passed after the production build; 50 files, 843.7 kB package including Vite client assets.
-- `git diff --check`: passed.
-
 ## CI-Only Gates
 
 - Isolated PostgreSQL migration and all 62 conditional tests with zero skips.
@@ -69,23 +59,22 @@ Closed: Fastify test cleanup, direct CLI dispatch coverage, Argon2 build/test fo
 
 Retained risk: the IPv6 special-purpose range policy requires periodic maintenance as IANA assignments evolve.
 
-### Follow-up Local Verification
+## Durable Artifact Verification Follow-up
 
+- The checkpoint preparation route remains limited to crash-recovery input. Playwright captures run-scoped chapter and artifact baselines immediately after preparation.
+- The recovery Worker explicitly exposes `draft_chapter` and `commit_chapter` to the deterministic Coordinator. The fake Provider invokes those real Host tools after lease reclaim; it does not insert final chapter or artifact rows directly.
+- Completion requires exactly one new chapter version and exactly one matching draft artifact containing the deterministic Provider output. Assertions bind the output stream stable ID to the run and task and require one durable completion stable ID.
+- Full-stack imports use unique run and checkpoint UUIDs per Playwright project. The crash/recovery scenario has a 180-second budget and restores connectivity and disposes the control client in `finally`.
+- The progress ledger has one consolidated Task 12 entry. PostgreSQL, browser, Docker, Compose, and smoke evidence remains assigned to CI and unchecked in the task list.
+
+## Latest Local Verification
+
+- Target suite: 90 passed across deterministic Provider, crash orchestrator, Agent/Host execution, Workbench, security, CLI, and Web server coverage.
+- `pnpm test`: 648 passed; 62 PostgreSQL-conditional tests skipped explicitly because PostgreSQL is unavailable locally.
 - `pnpm typecheck`: passed.
-- `pnpm test`: 647 passed, 62 PostgreSQL-conditional skipped.
-- Follow-up target suite: 44 passed across fake Provider, orchestrator, Workbench, security, CLI, and server tests.
-- `pnpm build`: passed.
-- `pnpm exec playwright test --list`: passed; 8 responsive and 2 full-stack cases discovered.
-- `npm pack --dry-run`: passed; 50 files, 846.8 kB, including Vite client assets.
+- `pnpm build`: passed; tsup and Vite production outputs generated.
+- `pnpm exec playwright test --list`: passed; eight responsive cases across 375/768/1024/1440 and two full-stack Worker cases collected.
+- `npm pack --dry-run`: passed; 50 files, 848.9 kB package including Vite client assets.
 - `git diff --check`: passed.
 
 PostgreSQL-backed Vitest, full Playwright execution, Docker build, Compose config, and Compose smoke remain pending CI evidence and stay unchecked.
-
-## Takeover Verification And Review Fixes
-
-- Re-ran the focused fake Provider, crash orchestrator, Workbench, security, CLI, and server suites: 44 passed.
-- Re-ran the complete local Vitest suite: 647 passed and 62 PostgreSQL-conditional tests skipped explicitly.
-- Re-ran typecheck, Playwright collection, and diff validation successfully. Playwright collects eight responsive cases across 375/768/1024/1440 plus desktop and mobile full-stack Worker cases.
-- Full-stack imports now generate unique run and checkpoint UUIDs per Playwright project, preventing the desktop and mobile cases from colliding in their shared PostgreSQL database.
-- The real Worker crash/recovery scenario now owns a 180-second test budget and always restores browser connectivity and disposes its control client on failure.
-- The progress ledger now has one consolidated Task 12 entry. PostgreSQL, full browser, Docker, Compose, and smoke gates remain explicitly assigned to CI and unchecked in the task list.

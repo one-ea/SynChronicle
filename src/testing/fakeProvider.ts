@@ -2,6 +2,7 @@ import { appendFileSync } from "node:fs";
 import type { LanguageModel } from "ai";
 
 const text = "雾港的潮声越过窗沿，信纸上的墨迹仍带着远方的盐味。";
+const chapter = `# 潮声越过窗沿\n\n${text}`;
 const usage = { inputTokens: 8, outputTokens: 16, totalTokens: 24 };
 
 export function createDeterministicTestModel(provider: string, modelId: string) {
@@ -29,11 +30,17 @@ export function createDeterministicTestModel(provider: string, modelId: string) 
       const tools = JSON.stringify(options.tools ?? null);
       const hasAskUser = tools.includes("ask_user");
       const hasReopenBook = tools.includes("reopen_book");
+      const recoveryWorker = process.env.SYNCHRONICLE_E2E_RECOVERY_WORKER === "1";
+      const hasWritingTools = recoveryWorker && tools.includes("draft_chapter") && tools.includes("commit_chapter");
       const delayMs = Number(process.env.SYNCHRONICLE_E2E_PROVIDER_DELAY_MS ?? 50);
       const toolCall = modelId === "deterministic" && streamCalls === 1 && hasAskUser
         ? { toolCallId: "e2e-ask", toolName: "ask_user", input: JSON.stringify({ questions: [{ header: "篇幅", question: "希望写多长？", options: [{ label: "长篇", description: "完整长篇" }, { label: "短篇", description: "精炼短篇" }] }] }) }
-        : modelId === "deterministic-v2" && streamCalls === 1 && hasReopenBook
+        : modelId === "deterministic-v2" && streamCalls === 1 && hasWritingTools
+          ? { toolCallId: "e2e-draft", toolName: "draft_chapter", input: JSON.stringify({ chapter: 1, content: chapter, mode: "write" }) }
+          : modelId === "deterministic-v2" && streamCalls === 1 && hasReopenBook
           ? { toolCallId: "e2e-checkpoint", toolName: "reopen_book", input: JSON.stringify({ chapters: [1], reason: "crash recovery boundary" }) }
+          : modelId === "deterministic-v2" && streamCalls === 2 && hasWritingTools
+              ? { toolCallId: "e2e-commit", toolName: "commit_chapter", input: JSON.stringify({ chapter: 1, summary: "雾港来信在潮声中抵达。", characters: [], key_events: ["来信抵达"] }) }
           : null;
       const chunks: unknown[] = toolCall
         ? [

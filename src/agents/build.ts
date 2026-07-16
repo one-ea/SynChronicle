@@ -92,6 +92,7 @@ export function buildCoordinator(
   onReflectionEvent?: (event: IntegratedReflectionEvent) => unknown,
   hasBudget?: () => boolean,
   nextInvocationId?: (input: { agent: string; kind: "generate" | "stream"; logicalKey: string }) => Promise<string>,
+  coordinatorTools: readonly (keyof ReturnType<typeof createToolRegistry>)[] = [],
 ): BuiltCoordinator {
   const reflection = cfg.reflection === undefined
     ? { enabled: true, max_rounds: 3, pass_threshold: 85, review_retry_limit: 2 }
@@ -161,7 +162,7 @@ export function buildCoordinator(
     };
   };
   const coordinatorCtxMgr = makeContext("coordinator");
-  const coordinator = createCoordinator(models.forRoleWithFailover("coordinator"), prompt(bundle, "coordinator"), registry, { context: coordinatorCtxMgr, ...generation("coordinator"), ...usage });
+  const coordinator = createCoordinator(models.forRoleWithFailover("coordinator"), prompt(bundle, "coordinator"), registry, { context: coordinatorCtxMgr, ...generation("coordinator"), ...usage }, coordinatorTools);
   const architectModel = models.forRoleWithFailover("architect");
   const architectShort = createArchitect("architect_short", architectModel, prompt(bundle, "architect-short"), registry, { context: makeContext("architect_short"), executor: makeExecutor("architect_short", "architect"), ...generation("architect"), ...usage });
   const architectLong = createArchitect("architect_long", architectModel, prompt(bundle, "architect-long"), registry, { context: makeContext("architect_long"), executor: makeExecutor("architect_long", "architect"), ...generation("architect"), ...usage });
