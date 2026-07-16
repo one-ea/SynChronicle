@@ -29,21 +29,32 @@ The review exposed that the initial browser fixture used an empty `agents` recor
 
 ## Responsive Server Isolation Follow-up
 
-The responsive validation command previously inherited the global full-stack `webServer` and failed before test collection when `TEST_DATABASE_URL` was absent. A tested server selector now uses Vite on port 4173 with the root page as its readiness URL when the selected project set contains only `responsive` and PostgreSQL is unavailable. Full-stack project selections, runs without a project filter, and runs with `TEST_DATABASE_URL` continue to use `scripts/e2e-server.ts` and `/api/health/ready`.
+The responsive validation command previously inherited the global full-stack `webServer` and failed before test collection when `TEST_DATABASE_URL` was absent. A tested server selector now uses Vite on port 4173 with the root page as its readiness URL when the selected project set contains only `responsive`. Full-stack project selections and runs without a project filter continue to use `scripts/e2e-server.ts` and `/api/health/ready`.
 
 TDD evidence for this follow-up:
 
 - The original `pnpm exec playwright test --project=responsive` command failed with `TEST_DATABASE_URL is required`.
 - The first selector assertion failed because responsive-only runs still returned the e2e-server command.
-- After wiring the selector into `playwright.config.ts`, the four configuration cases passed and the standard responsive command passed all eight tests without a database environment variable.
+- After wiring the selector into `playwright.config.ts`, the initial configuration cases passed and the standard responsive command passed all eight tests without a database environment variable.
+
+## Deterministic Project Selection Follow-up
+
+The final review removed environment-dependent server selection. The CLI project set is now the sole decision source: an explicit responsive-only selection always uses Vite, while any explicit full-stack project or an unfiltered run always uses the full-stack orchestrator. `PLAYWRIGHT_RESPONSIVE_ONLY` no longer affects selection.
+
+TDD evidence for this follow-up:
+
+- The new PostgreSQL-plus-responsive case failed because the selector returned e2e-server.
+- The new responsive-flag-plus-fullstack case failed because the environment flag incorrectly returned Vite.
+- Removing both environment conditions made all five selector cases pass.
+- `TEST_DATABASE_URL=postgres://ignored pnpm exec playwright test --project=responsive` passed all eight tests, proving the database environment cannot override the CLI selection.
 
 ## Verification
 
-- `pnpm vitest run scripts/playwright-server.test.ts`: passed, 4 tests.
+- `pnpm vitest run scripts/playwright-server.test.ts`: passed, 5 tests.
 - `pnpm vitest run src/web/client/workbench/workbench.test.tsx src/web/client/app.a11y.test.tsx`: passed, 32 tests.
 - `pnpm typecheck`: passed.
 - `pnpm build`: passed.
-- `pnpm exec playwright test --project=responsive`: passed, 8 tests with the isolated Vite server and no database environment variable.
+- `TEST_DATABASE_URL=postgres://ignored pnpm exec playwright test --project=responsive`: passed, 8 tests with the isolated Vite server.
 - Public preview connectivity on port 5173: passed.
 
 ## Preview
@@ -52,4 +63,4 @@ Public preview: https://5173-d0d19cba6cc31e88.monkeycode-ai.online
 
 ## Concerns
 
-The Playwright web server logs an existing Worker startup error while binding a JavaScript `Date` value through `postgres` during quota reservation reconciliation. The responsive suite uses mocked browser API responses and all eight tests pass despite that separate Worker process error. This issue is outside Task 3 scope and remains visible for follow-up.
+The full-stack orchestrator previously logged an existing Worker startup error while binding a JavaScript `Date` value through `postgres` during quota reservation reconciliation. Responsive-only runs now stay isolated from that process. The Worker issue remains outside Task 3 scope.

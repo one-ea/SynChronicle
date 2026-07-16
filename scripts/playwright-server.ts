@@ -13,8 +13,8 @@ export function selectPlaywrightWebServer(argv: string[], env: NodeJS.ProcessEnv
     if (argument.startsWith("--project=")) projects.push(argument.slice("--project=".length));
     else if (argument === "--project" && argv[index + 1]) projects.push(argv[index + 1]!);
   }
-  const responsiveOnly = env.PLAYWRIGHT_RESPONSIVE_ONLY === "1" || (projects.length > 0 && projects.every((project) => project === "responsive"));
-  if (!env.TEST_DATABASE_URL?.trim() && responsiveOnly) {
+  const responsiveOnly = projects.length > 0 && projects.every((project) => project === "responsive");
+  if (responsiveOnly) {
     return {
       command: "pnpm exec vite --host 127.0.0.1 --port 4173",
       url: "http://127.0.0.1:4173/",
