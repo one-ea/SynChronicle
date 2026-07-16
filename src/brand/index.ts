@@ -17,7 +17,7 @@ export function checkBrandContract(root: string, packFiles: string[]): string[] 
   if (pkg.license !== "Apache-2.0") issues.push("package license");
 
   const readme = readFileSync(join(root, "README.md"), "utf8");
-  for (const term of [/\bgo install\b/i, /\bdocker\b/i, /\bbinary archive\b/i, /二进制归档/]) {
+  for (const term of [/\bgo install\b/i, /\bbinary archive\b/i, /二进制归档/]) {
     if (term.test(readme)) issues.push(`README:${term.source}`);
   }
 

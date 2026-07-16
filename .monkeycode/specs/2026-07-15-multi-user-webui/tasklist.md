@@ -906,7 +906,7 @@ git commit -m "feat(web): migrate and export database projects"
 - Produces container commands: `web`, `worker`, `migrate`。
 - Produces health endpoints: `/api/health/live`, `/api/health/ready`。
 
-- [ ] **Step 1: Write health behavior tests**
+- [x] **Step 1: Write health behavior tests**
 
 ```ts
 it("reports readiness only after database access and migrations succeed", async () => {
@@ -918,13 +918,13 @@ it("reports readiness only after database access and migrations succeed", async 
 });
 ```
 
-- [ ] **Step 2: Run health tests and verify failure**
+- [x] **Step 2: Run health tests and verify failure**
 
 Run: `pnpm vitest run src/web/health/health.test.ts`
 
 Expected: FAIL because readiness routes are missing.
 
-- [ ] **Step 3: Implement multi-stage Node.js 24 image**
+- [x] **Step 3: Implement multi-stage Node.js 24 image**
 
 ```dockerfile
 FROM node:24-bookworm-slim AS build
@@ -950,17 +950,17 @@ ENTRYPOINT ["./scripts/container-entrypoint.sh"]
 CMD ["web"]
 ```
 
-- [ ] **Step 4: Add Compose topology**
+- [x] **Step 4: Add Compose topology**
 
 Compose defines PostgreSQL with a named volume, Web on port 3000, Worker without ports, health checks, restart policies, and environment-file placeholders. Web and Worker depend on successful migration completion.
 
-- [ ] **Step 5: Verify image and deployment documentation**
+- [x] **Step 5: Verify image and deployment documentation**
 
 Run: `docker compose config && docker build -t synchronicle-web:test .`
 
 Expected: Compose validates and image builds. Run container smoke tests against a temporary PostgreSQL instance and assert readiness plus Worker registration.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add Dockerfile compose.yaml .dockerignore scripts/container-entrypoint.sh .env.web.example src/web/health README.md

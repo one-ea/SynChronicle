@@ -5,6 +5,7 @@ export default defineConfig({
     "cli/index": "src/cli/index.ts",
     "web/main": "src/web/main.ts",
     "worker/main": "src/worker/main.ts",
+    "db/maintenance-main": "src/db/maintenance-main.ts",
   },
   format: ["esm"],
   dts: false,

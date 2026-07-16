@@ -34,8 +34,10 @@ import { adminRoutes, DatabaseAdminRepository } from "./admin/routes.js";
 import { usageRoutes } from "./usage/routes.js";
 import { importProjectArchive, exportDatabaseProject, validateDatabaseProjectExport } from "../migration/fileProjectImporter.js";
 import { importExportRoutes } from "./projects/importExportRoutes.js";
+import { healthRoutes } from "./health/routes.js";
+import { sql } from "drizzle-orm";
 
-type WebServerCommonOptions = Partial<Pick<WebConfig, "publicUrl" | "trustProxy" | "credentialMasterKeys" | "credentialMasterKeyVersion" | "providerAllowedHosts">> & { staticRoot?: string | null; credentialRegistry?: MasterKeyRegistry };
+type WebServerCommonOptions = Partial<Pick<WebConfig, "publicUrl" | "trustProxy" | "credentialMasterKeys" | "credentialMasterKeyVersion" | "providerAllowedHosts">> & { staticRoot?: string | null; credentialRegistry?: MasterKeyRegistry; checkReadiness?: () => Promise<void> };
 
 const requestIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -115,6 +117,13 @@ export async function buildWebServer(options: WebServerOptions): Promise<Fastify
   await app.register(usageRoutes, { prefix: "/api/usage", db: database });
   await app.register(adminRoutes, { prefix: "/api/admin", repository: new DatabaseAdminRepository(database) });
   app.get("/api/health", async () => ({ status: "ok" as const }));
+  await app.register(healthRoutes, {
+    prefix: "/api/health",
+    checkReadiness: options.checkReadiness ?? (async () => {
+      const rows = await database.execute(sql`select 1 where to_regclass('drizzle.__drizzle_migrations') is not null`);
+      if (rows.length === 0) throw new Error("database migrations are incomplete");
+    }),
+  });
   const clientRoot = options.staticRoot === undefined
     ? resolve(dirname(fileURLToPath(import.meta.url)), "client")
     : options.staticRoot;

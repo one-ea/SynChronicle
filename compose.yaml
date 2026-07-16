@@ -1,0 +1,83 @@
+x-app: &app
+  image: synchronicle-web:${IMAGE_TAG:-latest}
+  build:
+    context: .
+  env_file:
+    - ${ENV_FILE:-.env.web.example}
+  init: true
+  restart: unless-stopped
+  networks:
+    - platform
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:17-bookworm
+    env_file:
+      - ${ENV_FILE:-.env.web.example}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - platform
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+
+  migrate:
+    <<: *app
+    command: ["migrate"]
+    restart: "no"
+
+  web:
+    <<: *app
+    command: ["web"]
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "node", "-e", "Promise.all(['/api/health/live','/api/health/ready'].map(p=>fetch('http://127.0.0.1:3000'+p))).then(rs=>{if(rs.some(r=>!r.ok))process.exit(1)})"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 768M
+
+  worker:
+    <<: *app
+    command: ["worker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    stop_grace_period: 45s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+
+volumes:
+  postgres_data:
+
+networks:
+  platform:
