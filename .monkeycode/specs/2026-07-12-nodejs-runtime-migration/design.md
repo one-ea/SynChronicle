@@ -441,7 +441,7 @@ const CheckpointSchema = z.object({
 
 ### Brand Contract Tests
 - README 不引用 Go、Docker 或二进制归档安装
-- LICENSE 保持 Apache License 2.0
+- LICENSE 使用 GNU General Public License v3.0
 - NOTICE 内容不变
 - npm pack 产物包含 README.md、LICENSE、NOTICE
 - 仓库中无 `.go` 文件

@@ -258,8 +258,8 @@ TEST_DATABASE_URL=postgres://user:password@127.0.0.1:5432/synchronicle_test pnpm
 
 ## 许可证
 
-SynChronicle 使用 Apache License 2.0 发布。
+SynChronicle 使用 GNU General Public License v3.0 发布。
 
 Copyright 2026 one-ea
 
-完整条款见 [LICENSE](LICENSE)，版权与归属声明见 [NOTICE](NOTICE)。
+完整条款见 [LICENSE](LICENSE)，版权声明见 [NOTICE](NOTICE)。

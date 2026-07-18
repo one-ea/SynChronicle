@@ -276,4 +276,4 @@ SynChronicle 当前的完整实现使用 Go 1.25 和 Bubble Tea TUI 框架，依
 5. The system SHALL 移除 README 中的二进制归档下载说明。
 6. The system SHALL 保留 README 中的配置、命令、输出结构、架构和许可证说明。
 7. The system SHALL 保留 `NOTICE` 内容不变。
-8. The system SHALL 保留 `LICENSE` 为 Apache License 2.0。
+8. The system SHALL 使用 GNU General Public License v3.0 作为 `LICENSE`。

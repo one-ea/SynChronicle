@@ -210,7 +210,7 @@
   - 更新 README 安装方式为 `npm install -g synchronicle`，Node.js 24 LTS 版本要求，移除 Docker 运行说明、Go install 说明、二进制归档下载说明
   - 保留 README 中的配置、命令、输出结构、架构和许可证说明
   - 保留 `NOTICE` 内容不变
-  - 保留 `LICENSE` 为 Apache License 2.0
+  - `LICENSE` 使用 GNU General Public License v3.0
   - 覆盖 Req 17 (文档更新) 全部 AC 1--8
   - [x] 21.1 运行 brand 测试确认 README 不含旧安装与容器发布说明
   - [x] 21.2 运行 `npm pack --dry-run` 确认产物包含 README.md、LICENSE、NOTICE
