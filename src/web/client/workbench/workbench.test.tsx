@@ -1,6 +1,4 @@
 // @vitest-environment jsdom
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { createRef } from "react";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -33,6 +31,10 @@ const project: WorkbenchProject = {
 function api(): ApiClient {
   const request = vi.fn(async (path: string) => path.endsWith("/diagnostics") ? { diagnostics: { summary: "run healthy", cursor: 12, checkpointVersion: 7 } } : path.endsWith("/model") ? { run: project.latestRun, command: { commandId: "model:test" } } : { run: project.latestRun });
   return { request: request as ApiClient["request"] };
+}
+
+function setupUser() {
+  return userEvent.setup({ delay: null });
 }
 
 describe("run event projection", () => {
@@ -105,7 +107,7 @@ describe("WorkbenchPage", () => {
 
   it("renders chapter text and reflection progress and sends a steering instruction", async () => {
     const client = api();
-    const user = userEvent.setup();
+    const user = setupUser();
     render(<WorkbenchPage api={client} project={project} initialEvents={[{
       sequence: 1,
       type: "reflection",
@@ -128,7 +130,7 @@ describe("WorkbenchPage", () => {
 
   it("exposes three mobile destinations and preserves the selected panel in the URL", async () => {
     window.history.replaceState({}, "", "/projects/project-1?run=11111111-1111-4111-8111-111111111111&panel=writing");
-    const user = userEvent.setup();
+    const user = setupUser();
     render(<WorkbenchPage api={api()} project={project} initialEvents={[]} />);
 
     const navigation = screen.getByRole("navigation", { name: "创作台区域" });
@@ -156,7 +158,7 @@ describe("WorkbenchPage", () => {
   it("defaults mobile workbench to writing and exposes a compact run summary", async () => {
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 375 });
     window.history.replaceState({}, "", "/projects/project-1");
-    const user = userEvent.setup();
+    const user = setupUser();
     render(<WorkbenchPage api={api()} project={project} initialEvents={[{
       sequence: 1,
       type: "reflection",
@@ -195,48 +197,6 @@ describe("WorkbenchPage", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("创作流过快");
   });
 
-  it("uses the mobile workbench layout only below 768px without obsolete layout controls", () => {
-    const css = readFileSync(resolve(process.cwd(), "src/web/client/styles/global.css"), "utf8");
-
-    expect(css).toMatch(/@media \(max-width: 767px\)[\s\S]*\.workbench-topbar/);
-    expect(css).not.toContain("@media (max-width: 768px)");
-    expect(css).toContain(".workbench-grid { display: block;");
-    expect(css).toContain(".mobile-workbench-nav");
-    expect(css).not.toContain(".layout-controls");
-    expect(css).not.toContain(".layout-control-row");
-  });
-
-  it("defines mobile, tablet, desktop, and safe-area workbench contracts", () => {
-    const css = readFileSync(resolve(process.cwd(), "src/web/client/styles/global.css"), "utf8");
-
-    expect(css).toMatch(/\.activity-scroll\s*\{(?=[^}]*min-height:\s*0)(?=[^}]*overflow:\s*auto)/);
-    expect(css).toMatch(/\.event-list\s*\{[^}]*max-width:\s*46rem/);
-    expect(css).toMatch(/@media \(max-width: 767px\)[\s\S]*\.workbench-grid\s*\{[^}]*height:\s*calc\(100dvh - 56px - 68px - env\(safe-area-inset-bottom\)\)/);
-    expect(css).toMatch(/@media \(max-width: 767px\)[\s\S]*\.mobile-workbench-nav\s*\{[^}]*bottom:\s*env\(safe-area-inset-bottom\)/);
-    expect(css).toMatch(/@media \(min-width: 768px\) and \(max-width: 1199px\)[\s\S]*\.workbench-grid > \[data-panel="project"\], \.workbench-grid > \[data-panel="status"\]\s*\{[^}]*display:\s*none/);
-    expect(css).toMatch(/@media \(min-width: 768px\) and \(max-width: 1199px\)[\s\S]*\.workbench-drawer\s*\{[^}]*max-width:\s*min\(78vw, 360px\)/);
-    expect(css).toMatch(/@media \(min-width: 1200px\)[\s\S]*\.workbench-grid\s*\{[^}]*grid-template-columns:\s*256px minmax\(0, 1fr\) 320px/);
-    expect(css).toMatch(/@media \(min-width: 1200px\)[\s\S]*\.workbench-grid\.left-closed\s*\{[^}]*grid-template-columns:\s*56px minmax\(0, 1fr\) 320px/);
-    expect(css).toMatch(/@media \(min-width: 1200px\)[\s\S]*\.workbench-grid\.right-closed\s*\{[^}]*grid-template-columns:\s*256px minmax\(0, 1fr\) 56px/);
-    expect(css).toMatch(/@media \(min-width: 1200px\)[\s\S]*\.workbench-grid\.left-closed\.right-closed\s*\{[^}]*grid-template-columns:\s*56px minmax\(0, 1fr\) 56px/);
-    expect(css).toMatch(/@media \(min-width: 1200px\)[\s\S]*\.mobile-workbench-nav, \.workbench-tablet-toolbar, \.workbench-drawer-layer, \.mobile-run-summary\s*\{[^}]*display:\s*none/);
-    expect(css).toMatch(/@media \(min-width: 1600px\)[\s\S]*\.activity-scroll\s*\{[^}]*padding-inline:\s*clamp\(4rem, 8vw, 9rem\)/);
-    expect(css).not.toContain(".workbench-grid > .writing-column { grid-column: 1 / -1;");
-  });
-
-  it("uses an explicit two-row activity grid by default and three rows on mobile", () => {
-    const css = readFileSync(resolve(process.cwd(), "src/web/client/styles/global.css"), "utf8");
-
-    expect(css).toMatch(/\.activity-panel\s*\{[^}]*grid-template-rows:\s*auto minmax\(0, 1fr\)/);
-    expect(css).toMatch(/\.activity-scroll\s*\{[^}]*grid-row:\s*2/);
-    expect(css).toMatch(/\.mobile-run-summary\s*\{[^}]*display:\s*none/);
-    expect(css).toMatch(/@media \(max-width: 767px\)[\s\S]*\.activity-panel\s*\{[^}]*grid-template-rows:\s*auto auto minmax\(0, 1fr\)/);
-    expect(css).toMatch(/@media \(max-width: 767px\)[\s\S]*\.activity-scroll\s*\{[^}]*grid-row:\s*3/);
-    expect(css).toMatch(/@media \(max-width: 767px\)[\s\S]*\.mobile-run-summary\s*\{[^}]*display:\s*(?:flex|grid)/);
-    expect(css).toMatch(/@media \(max-width: 767px\)[\s\S]*\.mobile-workbench-nav\s*\{[^}]*height:\s*68px/);
-    expect(css).toMatch(/@media \(max-width: 767px\)[\s\S]*\.mobile-workbench-nav svg\s*\{[^}]*flex:\s*0 0 20px/);
-  });
-
   it.each([
     ["running", "运行中"],
     ["paused", "已暂停"],
@@ -253,24 +213,10 @@ describe("WorkbenchPage", () => {
     unmount();
   });
 
-  it("defines the complete tablet workbench geometry contract", () => {
-    const css = readFileSync(resolve(process.cwd(), "src/web/client/styles/global.css"), "utf8");
-
-    expect(css).toContain("@media (min-width: 768px) and (max-width: 1199px)");
-    expect(css).toMatch(/\.workbench-tablet-toolbar\s*\{[^}]*height:\s*52px/);
-    expect(css).toMatch(/\.workbench-grid\s*\{[^}]*display:\s*block[^}]*height:\s*calc\(100dvh - 58px - 52px\)/);
-    expect(css).toMatch(/\.workbench-grid > \.writing-column\s*\{[^}]*height:\s*100%/);
-    expect(css).toMatch(/\.workbench-drawer-layer\s*\{(?=[^}]*position:\s*fixed)(?=[^}]*top:\s*110px)(?=[^}]*bottom:\s*0)/);
-    expect(css).toMatch(/\.workbench-drawer-backdrop\s*\{(?=[^}]*position:\s*absolute)(?=[^}]*inset:\s*0)/);
-    expect(css).toMatch(/\.workbench-drawer\s*\{(?=[^}]*position:\s*absolute)(?=[^}]*overflow:\s*auto)/);
-    expect(css).toMatch(/\.workbench-drawer-left\s*\{[^}]*left:\s*0/);
-    expect(css).toMatch(/\.workbench-drawer-right\s*\{[^}]*right:\s*0/);
-  });
-
   it("updates the shell layout mode on resize and clears the tablet drawer after leaving tablet", async () => {
     const originalWidth = window.innerWidth;
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 375 });
-    const user = userEvent.setup();
+    const user = setupUser();
     render(<WorkbenchPage api={api()} project={project} initialEvents={[]} />);
     const shell = document.querySelector(".workbench-shell");
 
@@ -294,7 +240,7 @@ describe("WorkbenchPage", () => {
     const originalWidth = window.innerWidth;
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 1024 });
     fireEvent(window, new Event("resize"));
-    const user = userEvent.setup();
+    const user = setupUser();
     render(<WorkbenchPage api={api()} project={project} initialEvents={[]} />);
 
     const projectTrigger = screen.getByRole("button", { name: "打开章节目录" });
@@ -322,7 +268,7 @@ describe("WorkbenchPage", () => {
   it("traps focus inside tablet drawers and restores focus from every close control", async () => {
     const originalWidth = window.innerWidth;
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 1024 });
-    const user = userEvent.setup();
+    const user = setupUser();
     render(<WorkbenchPage api={api()} project={project} initialEvents={[]} />);
 
     const projectTrigger = screen.getByRole("button", { name: "打开章节目录" });
@@ -351,7 +297,7 @@ describe("WorkbenchPage", () => {
 
   it("keeps run drawer Tab navigation inside enabled visible controls", async () => {
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 1024 });
-    const user = userEvent.setup();
+    const user = setupUser();
     render(<WorkbenchPage api={api()} project={{ ...project, latestRun: null }} initialEvents={[]} />);
 
     await user.click(screen.getByRole("button", { name: "打开运行状态" }));
@@ -369,7 +315,7 @@ describe("WorkbenchPage", () => {
 
   it("excludes aria-hidden and visually hidden controls from the drawer focus loop", async () => {
     const triggerRef = createRef<HTMLButtonElement>();
-    const user = userEvent.setup();
+    const user = setupUser();
     render(<><button ref={triggerRef}>打开</button><WorkbenchDrawer side="left" label="测试抽屉" open triggerRef={triggerRef} onClose={vi.fn()}>
       <button type="button">有效控件</button>
       <button type="button" aria-hidden="true">隐藏控件</button>
@@ -390,7 +336,7 @@ describe("WorkbenchPage", () => {
 
   it("requires an explicit model-set selection before creating a run", async () => {
     const request = vi.fn().mockResolvedValue({ run: { id: "22222222-2222-4222-8222-222222222222" } });
-    const user = userEvent.setup();
+    const user = setupUser();
     render(<WorkbenchPage api={{ request: request as ApiClient["request"] }} project={{ ...project, latestRun: null }} initialEvents={[]} />);
 
     const modelSet = screen.getByLabelText("模型集");
@@ -412,7 +358,7 @@ describe("WorkbenchPage", () => {
   });
 
   it("clears a selected model set when refreshed options remove it", async () => {
-    const user = userEvent.setup();
+    const user = setupUser();
     const sidebarProps = {
       state: initialRunViewState,
       connection: "idle" as const,
@@ -449,7 +395,7 @@ describe("WorkbenchPage", () => {
   it("announces pending run creation and prevents duplicate submission", async () => {
     let resolveRequest!: (value: { run: { id: string } }) => void;
     const request = vi.fn(() => new Promise<{ run: { id: string } }>((resolve) => { resolveRequest = resolve; }));
-    const user = userEvent.setup();
+    const user = setupUser();
     render(<WorkbenchPage api={{ request: request as ApiClient["request"] }} project={{ ...project, latestRun: null }} initialEvents={[]} />);
 
     await user.selectOptions(screen.getByLabelText("模型集"), "set-1");
@@ -467,15 +413,10 @@ describe("WorkbenchPage", () => {
     await vi.waitFor(() => expect(screen.queryByRole("button", { name: "正在启动" })).not.toBeInTheDocument());
   });
 
-  it("uses a not-allowed cursor for an unavailable create-run action", () => {
-    const css = readFileSync(resolve(process.cwd(), "src/web/client/styles/global.css"), "utf8");
-    expect(css).toContain('.run-create-card button:disabled:not([aria-busy="true"]) { cursor: not-allowed; }');
-  });
-
   it("accepts incremental events without losing the current chapter", async () => {
     let push!: (event: RunEventMessage) => void;
     render(<WorkbenchPage api={api()} project={project} initialEvents={[]} subscribe={(listener) => { push = listener; return () => undefined; }} />);
-    await userEvent.setup().click(screen.getByRole("button", { name: "查看章节《潮声抵达前》" }));
+    await setupUser().click(screen.getByRole("button", { name: "查看章节《潮声抵达前》" }));
 
     act(() => push({ sequence: 1, type: "stream.delta", payload: { taskId: "task-1", agent: "Writer", chunkSequence: 1, text: "新增段落" } }));
 
@@ -523,7 +464,7 @@ describe("WorkbenchPage", () => {
 
     act(() => push({ sequence: 8, type: "tool", payload: { id: "ask:question-live", tool: "ask_user", payload: { questions: [{ header: "篇幅", question: "希望写多长？", options: [{ label: "长篇" }, { label: "短篇" }] }] } } }));
 
-    const user = userEvent.setup();
+    const user = setupUser();
     await user.selectOptions(await screen.findByLabelText("希望写多长？"), "长篇");
     await user.click(screen.getByRole("button", { name: "提交回答" }));
     expect(client.request).toHaveBeenCalledWith(expect.stringMatching(/\/answer$/), expect.objectContaining({ body: expect.stringContaining("question-live") }));
@@ -531,7 +472,7 @@ describe("WorkbenchPage", () => {
 
   it("uses projected Agent/usage data and maps all workbench controls", async () => {
     const client = api();
-    const user = userEvent.setup();
+    const user = setupUser();
     vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<WorkbenchPage api={client} project={project} initialEvents={[]} />);
 
@@ -559,7 +500,7 @@ describe("WorkbenchPage", () => {
 
   it("shows request IDs and retries failed controls without unhandled rejection", async () => {
     const request = vi.fn().mockRejectedValueOnce(new ApiError("request", "failed", 503, "req-control")).mockResolvedValue({ run: project.latestRun });
-    const user = userEvent.setup();
+    const user = setupUser();
     render(<WorkbenchPage api={{ request: request as ApiClient["request"] }} project={project} initialEvents={[]} />);
     await user.click(screen.getByRole("button", { name: "暂停运行" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("req-control");
@@ -569,7 +510,7 @@ describe("WorkbenchPage", () => {
 
   it("uses configured model choices and announces command state", async () => {
     const client = api();
-    const user = userEvent.setup();
+    const user = setupUser();
     render(<WorkbenchPage api={client} project={project} initialEvents={[]} />);
     await user.selectOptions(screen.getByLabelText("Agent"), "writer");
     await user.selectOptions(screen.getByLabelText("Provider"), "openai");
@@ -609,7 +550,7 @@ describe("WorkbenchPage", () => {
     const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new DOMException("blocked", "SecurityError"); });
     const removeItem = vi.spyOn(Storage.prototype, "removeItem").mockImplementation(() => { throw new DOMException("blocked", "SecurityError"); });
     const client = api();
-    const user = userEvent.setup();
+    const user = setupUser();
 
     render(<WorkbenchPage api={client} project={project} initialEvents={[]} />);
     await user.selectOptions(screen.getByLabelText("Agent"), "writer");
@@ -627,7 +568,7 @@ describe("WorkbenchPage", () => {
 
   it("restores panel, focus, chapter, and scroll on popstate", async () => {
     window.history.replaceState({}, "", "/projects/project-1?panel=writing&chapter=chapter-1");
-    const user = userEvent.setup();
+    const user = setupUser();
     render(<WorkbenchPage api={api()} project={project} initialEvents={[]} />);
     const writingScroll = document.querySelector<HTMLElement>("[data-panel='writing'] .activity-scroll")!;
     writingScroll.scrollTop = 137;

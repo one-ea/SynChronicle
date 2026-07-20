@@ -67,3 +67,43 @@ pnpm vitest run src/web/client/workbench/workbench.test.tsx src/web/client/app.a
 
 - Run 1: 49/49 tests passed; workbench 2.927s; a11y 0.755s.
 - Run 2: 49/49 tests passed; workbench 2.742s; a11y 0.536s.
+
+## Stability Closure
+
+- Moved all five pure CSS contract tests out of the jsdom workbench integration file into `src/web/client/styles/workbench-responsive.test.ts`, which runs in Vitest's default Node environment.
+- The new test helper locates a media query by its exact condition and a workbench-specific anchor, then uses balanced-brace depth to extract only that media block. Mobile, tablet, desktop, and 1600px assertions now operate on their extracted block and cannot match rules from a later media query.
+- Removed the Node `fs` and `path` imports from `workbench.test.tsx`; that file now contains React behavior tests only.
+- Preserved the lifecycle Promise flush added during the prior review.
+- Repeated workbench runs showed failures drifting between unrelated `userEvent`-heavy tests while successful executions completed in milliseconds. Testing Library documents that `delay: null` skips `setTimeout` while still processing every user action, so the workbench tests now use a local `setupUser()` helper with that option. These tests do not exercise debounce, throttle, or macro-task timing behavior.
+- The default worker process still experienced environment-level pauses far beyond Vitest's five-second timeout. Running the focused files in a single threads-pool worker removed that process-level variance without changing global or local test timeouts.
+
+### Final Stability Runs
+
+CSS contracts, Node environment:
+
+```bash
+pnpm vitest run src/web/client/styles/workbench-responsive.test.ts
+```
+
+- Run 1: 5/5 passed in 5ms; environment setup 0ms.
+- Run 2: 5/5 passed in 6ms; environment setup 0ms.
+
+Workbench behavior:
+
+```bash
+pnpm vitest run src/web/client/workbench/workbench.test.tsx --pool=threads --maxWorkers=1
+```
+
+- Run 1: 41/41 passed in 2.738s.
+- Run 2: 41/41 passed in 2.358s.
+
+Accessibility:
+
+```bash
+pnpm vitest run src/web/client/app.a11y.test.tsx --pool=threads --maxWorkers=1
+```
+
+- Run 1: 3/3 passed in 0.747s.
+- Run 2: 3/3 passed in 0.514s.
+
+No test timeout was increased.
