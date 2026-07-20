@@ -198,12 +198,22 @@ describe("WorkbenchPage", () => {
   it("uses the mobile workbench layout only below 768px without obsolete layout controls", () => {
     const css = readFileSync(resolve(process.cwd(), "src/web/client/styles/global.css"), "utf8");
 
-    expect(css).toMatch(/@media \(max-width: 767px\) \{\n  \.workbench-topbar/);
+    expect(css).toMatch(/@media \(max-width: 767px\)[\s\S]*\.workbench-topbar/);
     expect(css).not.toContain("@media (max-width: 768px)");
     expect(css).toContain(".workbench-grid { display: block;");
     expect(css).toContain(".mobile-workbench-nav");
     expect(css).not.toContain(".layout-controls");
     expect(css).not.toContain(".layout-control-row");
+  });
+
+  it("defines mobile, tablet, desktop, and safe-area workbench contracts", () => {
+    const css = readFileSync(resolve(process.cwd(), "src/web/client/styles/global.css"), "utf8");
+
+    expect(css).toContain("@media (max-width: 767px)");
+    expect(css).toContain("@media (min-width: 768px) and (max-width: 1199px)");
+    expect(css).toContain("@media (min-width: 1200px)");
+    expect(css).toContain("env(safe-area-inset-bottom)");
+    expect(css).toContain("grid-template-columns: 256px minmax(0, 1fr) 320px");
   });
 
   it("uses an explicit two-row activity grid by default and three rows on mobile", () => {
@@ -240,11 +250,11 @@ describe("WorkbenchPage", () => {
 
     expect(css).toContain("@media (min-width: 768px) and (max-width: 1199px)");
     expect(css).toMatch(/\.workbench-tablet-toolbar\s*\{[^}]*height:\s*52px/);
-    expect(css).toMatch(/\.workbench-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)[^}]*height:\s*calc\(100dvh - 58px - 52px\)/);
+    expect(css).toMatch(/\.workbench-grid\s*\{[^}]*display:\s*block[^}]*height:\s*calc\(100dvh - 58px - 52px\)/);
     expect(css).toMatch(/\.workbench-grid > \.writing-column\s*\{[^}]*grid-column:\s*1 \/ -1[^}]*height:\s*100%/);
-    expect(css).toMatch(/\.workbench-drawer-layer\s*\{[^}]*position:\s*fixed[^}]*top:\s*110px[^}]*bottom:\s*0/);
+    expect(css).toMatch(/\.workbench-drawer-layer\s*\{(?=[^}]*position:\s*fixed)(?=[^}]*top:\s*110px)(?=[^}]*bottom:\s*0)/);
     expect(css).toMatch(/\.workbench-drawer-backdrop\s*\{(?=[^}]*position:\s*absolute)(?=[^}]*inset:\s*0)/);
-    expect(css).toMatch(/\.workbench-drawer\s*\{(?=[^}]*position:\s*absolute)(?=[^}]*overflow-y:\s*auto)/);
+    expect(css).toMatch(/\.workbench-drawer\s*\{(?=[^}]*position:\s*absolute)(?=[^}]*overflow:\s*auto)/);
     expect(css).toMatch(/\.workbench-drawer-left\s*\{[^}]*left:\s*0/);
     expect(css).toMatch(/\.workbench-drawer-right\s*\{[^}]*right:\s*0/);
   });
