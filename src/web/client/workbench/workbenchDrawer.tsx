@@ -11,6 +11,20 @@ interface WorkbenchDrawerProps {
 
 const focusableSelector = "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])";
 
+function isFocusable(element: HTMLElement) {
+  if (element.matches(":disabled, [aria-disabled='true']")) return false;
+  for (let current: HTMLElement | null = element; current; current = current.parentElement) {
+    if (current.matches("[hidden], [aria-hidden='true']")) return false;
+    const style = window.getComputedStyle(current);
+    if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return false;
+  }
+  return true;
+}
+
+function focusableElements(dialog: HTMLElement) {
+  return [...dialog.querySelectorAll<HTMLElement>(focusableSelector)].filter(isFocusable);
+}
+
 export function WorkbenchDrawer({ side, label, open, triggerRef, onClose, children }: WorkbenchDrawerProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
@@ -18,7 +32,8 @@ export function WorkbenchDrawer({ side, label, open, triggerRef, onClose, childr
 
   useEffect(() => {
     if (!open) return;
-    dialogRef.current?.querySelector<HTMLElement>(focusableSelector)?.focus();
+    const first = dialogRef.current ? focusableElements(dialogRef.current)[0] : undefined;
+    first?.focus();
 
     function keydown(event: KeyboardEvent) {
       if (event.key === "Escape") {
@@ -27,7 +42,7 @@ export function WorkbenchDrawer({ side, label, open, triggerRef, onClose, childr
         return;
       }
       if (event.key !== "Tab" || !dialogRef.current) return;
-      const focusable = [...dialogRef.current.querySelectorAll<HTMLElement>(focusableSelector)];
+      const focusable = focusableElements(dialogRef.current);
       const first = focusable[0];
       const last = focusable.at(-1);
       if (event.shiftKey && document.activeElement === first) {

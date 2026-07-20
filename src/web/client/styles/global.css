@@ -167,6 +167,21 @@ input { background: transparent; border: 0; border-bottom: 1px solid var(--ink-m
 .run-create-status { margin: 0; min-height: 1lh; }
 .mobile-workbench-nav { display: none; }
 
+@media (min-width: 768px) and (max-width: 1199px) {
+  .workbench-tablet-toolbar { align-items: center; background: var(--paper-raised); border-bottom: 1px solid var(--rule); display: grid; grid-template-columns: auto minmax(0, 1fr) auto; height: 52px; padding: 0 var(--space-2); }
+  .workbench-tablet-toolbar strong { overflow: hidden; padding: 0 var(--space-2); text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+  .workbench-tablet-toolbar button { background: transparent; border: 1px solid var(--rule); min-height: 44px; }
+  .workbench-grid { grid-template-columns: minmax(0, 1fr); height: calc(100dvh - 58px - 52px); }
+  .workbench-grid > .writing-column { grid-column: 1 / -1; height: 100%; }
+  .workbench-drawer-layer { position: fixed; top: 110px; bottom: 0; left: 0; right: 0; z-index: 40; }
+  .workbench-drawer-backdrop { background: rgb(33 29 36 / 48%); border: 0; inset: 0; position: absolute; width: 100%; }
+  .workbench-drawer { background: var(--paper); bottom: 0; box-shadow: 0 0 2rem rgb(33 29 36 / 18%); max-width: min(26rem, 88vw); overflow-y: auto; position: absolute; top: 0; width: 100%; }
+  .workbench-drawer-left { left: 0; }
+  .workbench-drawer-right { right: 0; }
+  .workbench-drawer .workbench-panel { border: 0; height: auto; min-height: 100%; }
+  .workbench-drawer-close { background: var(--paper-raised); border: 1px solid var(--rule); min-height: 44px; position: sticky; top: 0; width: 100%; z-index: 1; }
+}
+
 @media (max-width: 767px) {
   .workbench-topbar { grid-template-columns: 1fr auto; min-height: 56px; }
   .workbench-topbar p { display: none; }

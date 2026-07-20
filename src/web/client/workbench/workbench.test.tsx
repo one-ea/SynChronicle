@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { createRef } from "react";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ApiClient } from "../api/client.js";
@@ -9,6 +10,7 @@ import { WorkbenchPage, type WorkbenchProject } from "../pages/workbench.js";
 import { initialRunViewState, reduceRunEvent, type RunEventMessage } from "../realtime/useRunEvents.js";
 import { RunSidebar } from "./runSidebar.js";
 import { resolveWorkbenchLayout } from "./useWorkbenchLayout.js";
+import { WorkbenchDrawer } from "./workbenchDrawer.js";
 
 const project: WorkbenchProject = {
   id: "project-1",
@@ -156,6 +158,20 @@ describe("WorkbenchPage", () => {
     expect(css).not.toContain(".layout-control-row");
   });
 
+  it("defines the complete tablet workbench geometry contract", () => {
+    const css = readFileSync(resolve(process.cwd(), "src/web/client/styles/global.css"), "utf8");
+
+    expect(css).toContain("@media (min-width: 768px) and (max-width: 1199px)");
+    expect(css).toMatch(/\.workbench-tablet-toolbar\s*\{[^}]*height:\s*52px/);
+    expect(css).toMatch(/\.workbench-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)[^}]*height:\s*calc\(100dvh - 58px - 52px\)/);
+    expect(css).toMatch(/\.workbench-grid > \.writing-column\s*\{[^}]*grid-column:\s*1 \/ -1[^}]*height:\s*100%/);
+    expect(css).toMatch(/\.workbench-drawer-layer\s*\{[^}]*position:\s*fixed[^}]*top:\s*110px[^}]*bottom:\s*0/);
+    expect(css).toMatch(/\.workbench-drawer-backdrop\s*\{(?=[^}]*position:\s*absolute)(?=[^}]*inset:\s*0)/);
+    expect(css).toMatch(/\.workbench-drawer\s*\{(?=[^}]*position:\s*absolute)(?=[^}]*overflow-y:\s*auto)/);
+    expect(css).toMatch(/\.workbench-drawer-left\s*\{[^}]*left:\s*0/);
+    expect(css).toMatch(/\.workbench-drawer-right\s*\{[^}]*right:\s*0/);
+  });
+
   it("updates the shell layout mode on resize and clears the tablet drawer after leaving tablet", async () => {
     const originalWidth = window.innerWidth;
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 375 });
@@ -236,6 +252,45 @@ describe("WorkbenchPage", () => {
     await user.click(screen.getByRole("button", { name: "关闭章节目录" }));
     expect(projectTrigger).toHaveFocus();
     Object.defineProperty(window, "innerWidth", { configurable: true, value: originalWidth });
+  });
+
+  it("keeps run drawer Tab navigation inside enabled visible controls", async () => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1024 });
+    const user = userEvent.setup();
+    render(<WorkbenchPage api={api()} project={{ ...project, latestRun: null }} initialEvents={[]} />);
+
+    await user.click(screen.getByRole("button", { name: "打开运行状态" }));
+    const dialog = screen.getByRole("dialog", { name: "运行状态" });
+    const close = within(dialog).getByRole("button", { name: "关闭" });
+    const credential = within(dialog).getByRole("combobox", { name: "凭证" });
+    expect(within(dialog).getByRole("button", { name: "运行诊断" })).toBeDisabled();
+
+    close.focus();
+    await user.tab({ shift: true });
+    expect(credential).toHaveFocus();
+    await user.tab();
+    expect(close).toHaveFocus();
+  });
+
+  it("excludes aria-hidden and visually hidden controls from the drawer focus loop", async () => {
+    const triggerRef = createRef<HTMLButtonElement>();
+    const user = userEvent.setup();
+    render(<><button ref={triggerRef}>打开</button><WorkbenchDrawer side="left" label="测试抽屉" open triggerRef={triggerRef} onClose={vi.fn()}>
+      <button type="button">有效控件</button>
+      <button type="button" aria-hidden="true">隐藏控件</button>
+      <button type="button" style={{ display: "none" }}>不可见控件</button>
+      <span style={{ display: "none" }}><button type="button">祖先隐藏控件</button></span>
+      <button type="button" disabled>禁用控件</button>
+    </WorkbenchDrawer></>);
+
+    const dialog = screen.getByRole("dialog", { name: "测试抽屉" });
+    const close = within(dialog).getByRole("button", { name: "关闭" });
+    const valid = within(dialog).getByRole("button", { name: "有效控件" });
+    close.focus();
+    await user.tab({ shift: true });
+    expect(valid).toHaveFocus();
+    await user.tab();
+    expect(close).toHaveFocus();
   });
 
   it("requires an explicit model-set selection before creating a run", async () => {
