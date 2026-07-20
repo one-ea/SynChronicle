@@ -134,9 +134,43 @@ describe("WorkbenchPage", () => {
     const navigation = screen.getByRole("navigation", { name: "创作台区域" });
     expect(navigation).toBeVisible();
     expect(within(navigation).getAllByRole("button")).toHaveLength(3);
-    await user.click(screen.getByRole("button", { name: "状态" }));
+    await user.click(screen.getByRole("button", { name: "运行" }));
     expect(new URL(window.location.href).searchParams.get("panel")).toBe("status");
-    expect(screen.getByRole("button", { name: "状态" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "运行" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("defaults mobile workbench to writing and exposes a compact run summary", async () => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 375 });
+    window.history.replaceState({}, "", "/projects/project-1");
+    const user = userEvent.setup();
+    render(<WorkbenchPage api={api()} project={project} initialEvents={[{
+      sequence: 1,
+      type: "reflection",
+      payload: { round: 2, maxRounds: 3, score: 88, passed: false },
+    }]} />);
+
+    expect(screen.getByRole("button", { name: "创作" })).toHaveAttribute("aria-current", "page");
+    const summary = screen.getByRole("button", { name: "查看运行状态：运行中，88 分" });
+    expect(summary).toBeVisible();
+    expect(summary).not.toHaveAttribute("role", "status");
+
+    await user.click(summary);
+    expect(screen.getByRole("button", { name: "运行" })).toHaveAttribute("aria-current", "page");
+    expect(new URL(window.location.href).searchParams.get("panel")).toBe("status");
+  });
+
+  it("groups mobile run content without changing its interactive controls", () => {
+    render(<WorkbenchPage api={api()} project={project} initialEvents={[{
+      sequence: 1,
+      type: "reflection",
+      payload: { round: 2, maxRounds: 3, score: 88, passed: false },
+    }]} />);
+
+    expect(screen.getByRole("region", { name: "运行摘要详情" })).toContainElement(document.querySelector(".run-facts"));
+    expect(screen.getByRole("region", { name: "反思进度" })).toHaveClass("run-progress-card");
+    expect(document.querySelector(".run-agents-card .usage-card")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "运行操作" })).toContainElement(screen.getByRole("button", { name: "暂停运行" }));
+    expect(screen.getByRole("region", { name: "运行配置" })).toContainElement(screen.getByRole("button", { name: "运行诊断" }));
   });
 
   it("announces reconnecting and backpressure states", () => {
@@ -185,7 +219,7 @@ describe("WorkbenchPage", () => {
     act(() => window.dispatchEvent(new Event("resize")));
     expect(shell).toHaveAttribute("data-layout-mode", "tablet");
 
-    await user.click(screen.getByRole("button", { name: "状态" }));
+    await user.click(screen.getByRole("button", { name: "运行" }));
     expect(shell).toHaveAttribute("data-tablet-drawer", "status");
 
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 1200 });
@@ -401,7 +435,7 @@ describe("WorkbenchPage", () => {
 
       expect(request).toHaveBeenCalledTimes(1);
       expect(screen.getByRole("button", { name: "查看章节《新章节》" })).toBeVisible();
-      expect(screen.getByText("completed")).toBeVisible();
+      expect(within(screen.getByRole("region", { name: "运行摘要详情" })).getByText("completed")).toBeVisible();
     } finally { vi.useRealTimers(); }
   });
 
@@ -536,7 +570,7 @@ describe("WorkbenchPage", () => {
     render(<WorkbenchPage api={api()} project={project} initialEvents={[]} />);
     const writingScroll = document.querySelector<HTMLElement>("[data-panel='writing'] .activity-scroll")!;
     writingScroll.scrollTop = 137;
-    await user.click(screen.getByRole("button", { name: "状态" }));
+    await user.click(screen.getByRole("button", { name: "运行" }));
     await act(async () => {
       window.history.replaceState({}, "", "/projects/project-1?panel=writing&chapter=chapter-1");
       window.dispatchEvent(new PopStateEvent("popstate"));

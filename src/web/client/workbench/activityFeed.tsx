@@ -9,12 +9,24 @@ function eventLabel(event: RunEventMessage) {
   return event.agent ?? (typeof payload.agent === "string" ? payload.agent : event.type);
 }
 
-export function ActivityFeed({ state, chapter }: { state: RunViewState; chapter?: WorkbenchChapter }) {
+interface ActivityFeedProps {
+  state: RunViewState;
+  chapter?: WorkbenchChapter;
+  runSummary?: { status: string; score?: number };
+  onOpenRun?(): void;
+}
+
+export function ActivityFeed({ state, chapter, runSummary, onOpenRun }: ActivityFeedProps) {
   return <main className="workbench-panel activity-panel" id="main-content" tabIndex={-1}>
     <header className="panel-heading activity-heading">
       <div><p className="eyebrow">Live writing</p><h1>创作流</h1></div>
       <span className="event-count" title="当前保留最近 200 条事件">{state.events.length} 条事件</span>
     </header>
+    {runSummary ? <button className="mobile-run-summary" type="button" aria-label={`查看运行状态：${runSummary.status}${runSummary.score !== undefined ? `，${runSummary.score} 分` : ""}`} onClick={onOpenRun}>
+      <span>{runSummary.status}</span>
+      {runSummary.score !== undefined ? <strong>{runSummary.score} 分</strong> : null}
+      <span aria-hidden="true">›</span>
+    </button> : null}
     <div className="activity-scroll" data-scroll-key="writing">
       {chapter && <article className="chapter-reader" aria-labelledby="chapter-reader-title">
         <p className="section-number">Chapter {String(chapter.sequence).padStart(2, "0")}</p>
