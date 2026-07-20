@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ApiClient } from "../api/client.js";
 import { ApiError } from "../api/client.js";
 import { WorkbenchPage, type WorkbenchProject } from "../pages/workbench.js";
 import { initialRunViewState, reduceRunEvent, type RunEventMessage } from "../realtime/useRunEvents.js";
 import { RunSidebar } from "./runSidebar.js";
+import { resolveWorkbenchLayout } from "./useWorkbenchLayout.js";
 
 const project: WorkbenchProject = {
   id: "project-1",
@@ -82,6 +83,21 @@ describe("run event projection", () => {
 describe("WorkbenchPage", () => {
   beforeEach(() => sessionStorage.clear());
 
+  it("resolves the three workbench layout ranges", () => {
+    expect(resolveWorkbenchLayout(375)).toBe("mobile");
+    expect(resolveWorkbenchLayout(767)).toBe("mobile");
+    expect(resolveWorkbenchLayout(768)).toBe("tablet");
+    expect(resolveWorkbenchLayout(1199)).toBe("tablet");
+    expect(resolveWorkbenchLayout(1200)).toBe("desktop");
+    expect(resolveWorkbenchLayout(1920)).toBe("desktop");
+  });
+
+  it("removes arbitrary panel width controls from the workbench", () => {
+    render(<WorkbenchPage api={api()} project={project} initialEvents={[]} />);
+    expect(screen.queryByRole("button", { name: "布局" })).not.toBeInTheDocument();
+    expect(document.querySelector(".workbench-shell")).toHaveAttribute("data-layout-mode");
+  });
+
   it("renders chapter text and reflection progress and sends a steering instruction", async () => {
     const client = api();
     const user = userEvent.setup();
@@ -124,80 +140,6 @@ describe("WorkbenchPage", () => {
 
     rerender(<WorkbenchPage api={api()} project={project} initialEvents={[]} connectionOverride="backpressure" />);
     expect(screen.getByRole("alert")).toHaveTextContent("创作流过快");
-  });
-
-  it("opens labeled layout controls and resets both panel widths", async () => {
-    const user = userEvent.setup();
-    render(<WorkbenchPage api={api()} project={project} initialEvents={[]} />);
-    const trigger = screen.getByRole("button", { name: "布局" });
-
-    expect(trigger).toHaveAttribute("aria-expanded", "false");
-    expect(trigger).toHaveAttribute("aria-haspopup", "dialog");
-    await user.click(trigger);
-
-    const dialog = screen.getByRole("dialog", { name: "布局" });
-    const leftWidth = within(dialog).getByRole("slider", { name: "作品栏" });
-    const rightWidth = within(dialog).getByRole("slider", { name: "状态栏" });
-
-    expect(trigger).toHaveAttribute("aria-expanded", "true");
-    expect(leftWidth).toHaveFocus();
-    expect(leftWidth).toHaveAttribute("type", "range");
-    expect(rightWidth).toHaveAttribute("type", "range");
-    expect(within(dialog).getByText("280 px")).toBeVisible();
-    expect(within(dialog).getByText("300 px")).toBeVisible();
-
-    fireEvent.change(leftWidth, { target: { value: "340" } });
-    fireEvent.change(rightWidth, { target: { value: "360" } });
-    expect(within(dialog).getByText("340 px")).toBeVisible();
-    expect(within(dialog).getByText("360 px")).toBeVisible();
-    expect(document.querySelector(".workbench-grid")).toHaveStyle({ "--left-open-width": "340px", "--right-open-width": "360px" });
-
-    await user.click(within(dialog).getByRole("button", { name: "重置布局" }));
-    expect(leftWidth).toHaveValue("280");
-    expect(rightWidth).toHaveValue("300");
-    expect(within(dialog).getByText("280 px")).toBeVisible();
-    expect(within(dialog).getByText("300 px")).toBeVisible();
-  });
-
-  it("dismisses layout controls with Escape and restores trigger focus", async () => {
-    const user = userEvent.setup();
-    render(<WorkbenchPage api={api()} project={project} initialEvents={[]} />);
-    const trigger = screen.getByRole("button", { name: "布局" });
-
-    await user.click(trigger);
-    await user.keyboard("{Escape}");
-
-    expect(screen.queryByRole("dialog", { name: "布局" })).not.toBeInTheDocument();
-    expect(trigger).toHaveAttribute("aria-expanded", "false");
-    expect(trigger).toHaveFocus();
-  });
-
-  it("dismisses layout controls when the trigger is clicked again", async () => {
-    const user = userEvent.setup();
-    render(<WorkbenchPage api={api()} project={project} initialEvents={[]} />);
-    const trigger = screen.getByRole("button", { name: "布局" });
-
-    await user.click(trigger);
-    await user.click(trigger);
-
-    expect(screen.queryByRole("dialog", { name: "布局" })).not.toBeInTheDocument();
-    expect(trigger).toHaveAttribute("aria-expanded", "false");
-    expect(trigger).toHaveFocus();
-  });
-
-  it("dismisses layout controls on an outside pointer interaction without stealing focus", async () => {
-    const user = userEvent.setup();
-    render(<WorkbenchPage api={api()} project={project} initialEvents={[]} />);
-    const trigger = screen.getByRole("button", { name: "布局" });
-    const outside = screen.getByRole("button", { name: "发送" });
-
-    await user.click(trigger);
-    fireEvent.pointerDown(outside);
-    outside.focus();
-    await Promise.resolve();
-
-    expect(screen.queryByRole("dialog", { name: "布局" })).not.toBeInTheDocument();
-    expect(outside).toHaveFocus();
   });
 
   it("uses the mobile workbench layout and hides layout controls through 768px", () => {

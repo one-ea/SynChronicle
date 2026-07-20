@@ -1,12 +1,12 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ApiClient } from "../api/client.js";
 import { useRunEvents, type ConnectionState, type RunEventMessage } from "../realtime/useRunEvents.js";
 import { ActivityFeed } from "../workbench/activityFeed.js";
-import { LayoutControls } from "../workbench/layoutControls.js";
 import { MobileNav, type WorkbenchPanel } from "../workbench/mobileNav.js";
 import { ProjectNav } from "../workbench/projectNav.js";
 import { PromptInput } from "../workbench/promptInput.js";
 import { RunSidebar } from "../workbench/runSidebar.js";
+import { useWorkbenchLayout } from "../workbench/useWorkbenchLayout.js";
 
 export interface WorkbenchChapter { id: string; runId?: string; sequence: number; title: string; status: string; body: string; version?: number }
 export interface WorkbenchProject {
@@ -76,8 +76,8 @@ export function WorkbenchPage({ api, project: initialProject, initialEvents, sub
   const [selectedChapter, setSelectedChapter] = useState(() => project.chapters?.find(({ id }) => id === chapterId));
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
-  const [leftWidth, setLeftWidth] = useState(280);
-  const [rightWidth, setRightWidth] = useState(300);
+  const layoutMode = useWorkbenchLayout();
+  const [tabletDrawer, setTabletDrawer] = useState<"project" | "status" | null>(null);
   const [diagnostics, setDiagnostics] = useState<string | null>(null);
   const [pendingQuestion, setPendingQuestion] = useState(project.pendingQuestion);
   const [abortWaiting, setAbortWaiting] = useState(Boolean(project.latestRun?.waiting_for_durable_commit));
@@ -88,6 +88,9 @@ export function WorkbenchPage({ api, project: initialProject, initialEvents, sub
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const previousConnection = useRef<ConnectionState | undefined>(undefined);
   const { state, connection } = useRunEvents({ runId, initialEvents, subscribe });
+  useEffect(() => {
+    if (layoutMode !== "tablet") setTabletDrawer(null);
+  }, [layoutMode]);
   const refreshSnapshot = () => {
     if (refreshTimer.current) return;
     refreshTimer.current = setTimeout(() => {
@@ -234,10 +237,10 @@ export function WorkbenchPage({ api, project: initialProject, initialEvents, sub
     setDiagnostics(`${result.diagnostics.summary} · cursor ${result.diagnostics.cursor} · checkpoint ${result.diagnostics.checkpointVersion ?? "none"}`);
   }
 
-  return <div className="workbench-shell">
+  return <div className="workbench-shell" data-layout-mode={layoutMode} data-tablet-drawer={tabletDrawer ?? undefined}>
     <a className="skip-link" href="#main-content">跳到创作流</a>
-    <header className="workbench-topbar"><a href="/projects" className="wordmark">SynChronicle</a><p>{project.title}</p><div className="workbench-topbar-actions"><span>{project.latestRun?.status === "running" ? "创作进行中" : "创作台"}</span><LayoutControls leftWidth={leftWidth} rightWidth={rightWidth} setLeftWidth={setLeftWidth} setRightWidth={setRightWidth} /></div></header>
-    <div className={`workbench-grid left-${leftCollapsed ? "closed" : "open"} right-${rightCollapsed ? "closed" : "open"}`} style={{ "--left-open-width": `${leftWidth}px`, "--right-open-width": `${rightWidth}px` } as CSSProperties}>
+    <header className="workbench-topbar"><a href="/projects" className="wordmark">SynChronicle</a><p>{project.title}</p><div className="workbench-topbar-actions"><span>{project.latestRun?.status === "running" ? "创作进行中" : "创作台"}</span></div></header>
+    <div className={`workbench-grid left-${leftCollapsed ? "closed" : "open"} right-${rightCollapsed ? "closed" : "open"}`}>
       <div data-panel="project" data-mobile-active={panel === "project"}><ProjectNav title={project.title} chapters={project.chapters ?? []} selectedChapterId={selectedChapter?.id} collapsed={leftCollapsed} onToggle={() => setLeftCollapsed((value) => !value)} onSelect={selectChapter} /></div>
       <div className="writing-column" data-panel="writing" data-mobile-active={panel === "writing"}><ActivityFeed state={state} chapter={selectedChapter} /><PromptInput onSend={steer} /></div>
       <div data-panel="status" data-mobile-active={panel === "status"}><RunSidebar state={state} connection={connectionOverride ?? connection} status={project.latestRun?.status} agents={state.agents.length ? state.agents : project.agents ?? []} usage={state.usage ?? project.usage} pendingQuestion={pendingQuestion} modelConfiguration={project.modelConfiguration} commandFeedback={commandFeedback} commandRetry={commandFeedback?.startsWith("模型切换失败") && lastModelSwitch ? () => switchModel(lastModelSwitch.role, lastModelSwitch.provider, lastModelSwitch.model, lastModelSwitch.credentialId, lastModelSwitch.parameters) : undefined} diagnostics={diagnostics} abortWaiting={abortWaiting} controlsDisabled={!runId} collapsed={rightCollapsed} onToggle={() => setRightCollapsed((value) => !value)} onStart={startRun} onCommand={command} onAnswer={answer} onSwitchModel={switchModel} onDiagnose={diagnose} /></div>
