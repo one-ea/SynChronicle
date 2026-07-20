@@ -80,29 +80,29 @@ export function RunSidebar(props: RunSidebarProps) {
   }
   async function start(event: FormEvent<HTMLFormElement>) { event.preventDefault(); if (pending || !selectedModelSetAvailable) return; await run(() => props.onStart(selectedModelSetId)); }
   const connectionRole = connection === "backpressure" || connection === "error" ? "alert" : "status";
-  return <aside className="workbench-panel run-sidebar" aria-label="运行状态" data-collapsed={collapsed} tabIndex={-1}>
+  return <aside className="workbench-panel run-sidebar run-instrument-panel" aria-label="运行状态" data-collapsed={collapsed} tabIndex={-1}>
     <header className="panel-heading">
       {presentation === "desktop" && <button className="panel-toggle" type="button" onClick={onToggle} aria-expanded={!collapsed} aria-label={collapsed ? "展开运行状态" : "折叠运行状态"}>{collapsed ? "<" : ">"}</button>}
       <div><p className="eyebrow">Run room</p><h2>运行状态</h2></div>
     </header>
     {!collapsed && <div className="run-sidebar-body">
-      <section className="run-summary-card" aria-label="运行摘要详情">
+      <section className="run-summary-card run-instrument-card" aria-label="运行摘要详情">
         <p className={`connection-state connection-${connection}`} role={connectionRole}>{connectionCopy[connection]}</p>
         <dl className="run-facts"><div><dt>阶段</dt><dd>{status ?? "未开始"}</dd></div><div><dt>游标</dt><dd>{state.lastSequence}</dd></div><div><dt>上下文事件</dt><dd>{state.events.length}/200</dd></div></dl>
       </section>
-      {state.reflection && <section className="reflection-card run-progress-card" aria-label="反思进度">
+      {state.reflection && <section className="reflection-card run-progress-card run-instrument-card" aria-label="反思进度">
         <p>Reviewer · 第 {state.reflection.round ?? "-"}/{state.reflection.maxRounds ?? "-"} 轮</p>
         <strong>{state.reflection.score ?? "-"}</strong><small>{state.reflection.passed ? "通过" : "继续修订"}</small>
       </section>}
-      <section className="agent-list run-agents-card"><h3>Agents</h3>{props.agents.length ? props.agents.map((agent) => <p key={agent.name}><span>{agent.name}</span><small>{agent.summary ?? agent.state}</small></p>) : <p className="muted-copy">暂无 Agent 状态事件。</p>}<section className="usage-card"><h3>Usage</h3>{props.usage ? <><p>{props.usage.totalTokens} tokens</p><p>${props.usage.cost}</p></> : <p>暂无用量记录。</p>}</section></section>
+      <section className="agent-list run-agents-card run-instrument-card"><h3>Agents</h3>{props.agents.length ? props.agents.map((agent) => <p key={agent.name}><span>{agent.name}</span><small>{agent.summary ?? agent.state}</small></p>) : <p className="muted-copy">暂无 Agent 状态事件。</p>}<section className="usage-card"><h3>Usage</h3>{props.usage ? <><p>{props.usage.totalTokens} tokens</p><p>${props.usage.cost}</p></> : <p>暂无用量记录。</p>}</section></section>
       {props.controlsDisabled && <form className="sidebar-form run-create-card" onSubmit={(event) => void start(event)}><h3>创建运行</h3><p id="model-set-helper" className="muted-copy">选择本次运行使用的模型集。启动后仍可在安全边界切换模型。</p><label>模型集<select name="modelSetId" required value={selectedModelSetId} aria-describedby="model-set-helper" onChange={(event) => setSelectedModelSetId(event.currentTarget.value)}><option value="" disabled>请选择</option>{modelSets.map((set) => <option key={set.id} value={set.id}>{set.name} · v{set.version}</option>)}</select></label><button type="submit" disabled={!selectedModelSetAvailable || pending} aria-busy={pending}>{pending ? "正在启动" : "启动运行"}</button><p className="run-create-status" aria-live="polite">{pending ? "正在启动运行。" : ""}</p></form>}
-      <section className="run-actions-card" aria-label="运行操作">
+      <section className="run-actions-card run-instrument-card" aria-label="运行操作">
         <div className="control-placeholder" aria-label="运行控制"><button type="button" disabled={props.controlsDisabled || pending} onClick={() => void run(() => props.onCommand("pause"))} aria-label="暂停运行">暂停</button><button type="button" disabled={props.controlsDisabled || pending} onClick={() => void run(() => props.onCommand("resume"))} aria-label="继续运行">继续</button><button type="button" disabled={props.controlsDisabled || pending} onClick={() => void run(() => props.onCommand("abort"))} aria-label="终止运行">终止</button></div>
         {props.abortWaiting && <p className="message" role="status">正在等待 durable commit 完成，终止将在安全边界生效。</p>}
         {props.commandFeedback && <p className="message" role="status">{props.commandFeedback}{props.commandRetry && <button type="button" onClick={() => void run(props.commandRetry!)}>重试模型切换</button>}</p>}
         {failure && <p className="message message-error" role="alert">{failure.message}<button type="button" onClick={() => void run(failure.retry)}>重试</button></p>}
       </section>
-      <section className="run-configuration-card" aria-label="运行配置">
+      <section className="run-configuration-card run-instrument-card" aria-label="运行配置">
         {props.pendingQuestion && <form className="sidebar-form" onSubmit={(event) => void answer(event)}><h3>需要你的回答</h3>{props.pendingQuestion.questions.map((question) => <label key={question.question}>{question.question}<select name={question.question} required defaultValue=""><option value="" disabled>请选择</option>{question.options.map((option) => <option key={option}>{option}</option>)}</select></label>)}<button type="submit" disabled={pending}>提交回答</button></form>}
         <form className="sidebar-form" onSubmit={(event) => void model(event)}><h3>模型切换</h3>{configuredSet && <p className="muted-copy">{configuredSet.name} · v{configuredSet.version}</p>}<label>Agent<select name="role" required defaultValue=""><option value="" disabled>请选择</option>{Object.keys(configuredSet?.agents ?? {}).map((role) => <option key={role}>{role}</option>)}</select></label><label>Provider<select name="provider" required value={selectedProvider} onChange={(event) => setSelectedProvider(event.currentTarget.value)}><option value="" disabled>请选择</option>{props.modelConfiguration?.providers.map(({ provider }) => <option key={provider}>{provider}</option>)}</select></label><label>模型<select name="model" required defaultValue=""><option value="" disabled>请选择</option>{props.modelConfiguration?.providers.find(({ provider }) => provider === selectedProvider)?.models.map((model) => <option key={model}>{model}</option>)}</select></label><label>凭证<select name="credentialId" defaultValue=""><option value="">平台凭证</option>{props.modelConfiguration?.providers.find(({ provider }) => provider === selectedProvider)?.credentials.map((credential) => <option key={credential.id} value={credential.id}>{credential.label}</option>)}</select></label><button type="submit" disabled={props.controlsDisabled || pending}>切换模型</button></form>
         <section className="diagnostics-card"><button type="button" disabled={props.controlsDisabled || pending} onClick={() => void run(props.onDiagnose)}>运行诊断</button>{props.diagnostics && <p role="status">{props.diagnostics}</p>}</section>

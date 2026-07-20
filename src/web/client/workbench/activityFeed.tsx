@@ -20,19 +20,20 @@ type ActivityFeedProps = ActivityFeedBaseProps & (
 );
 
 export function ActivityFeed({ state, chapter, runSummary, onOpenRun }: ActivityFeedProps) {
+  const runErrors = runSummary ? [runSummary.connectionError, runSummary.operationError].filter(Boolean).join("，") : "";
   return <main className="workbench-panel activity-panel" id="main-content" tabIndex={-1}>
     <header className="panel-heading activity-heading">
       <div><p className="eyebrow">Live writing</p><h1>创作流</h1></div>
       <span className="event-count" title="当前保留最近 200 条事件">{state.events.length} 条事件</span>
     </header>
-    {runSummary ? <button className={`mobile-run-summary${runSummary.connectionError || runSummary.operationError ? " mobile-run-summary-error" : ""}`} type="button" aria-label={`${runSummary.connectionError || runSummary.operationError ? "查看运行错误" : "查看运行状态"}：${runSummary.connectionError ?? runSummary.operationError ?? runSummary.status}${runSummary.score !== undefined ? `，${runSummary.score} 分` : ""}`} onClick={onOpenRun}>
+    {runSummary ? <button className={`mobile-run-summary${runErrors ? " mobile-run-summary-error" : ""}`} type="button" aria-label={`${runErrors ? "查看运行错误" : "查看运行状态"}：${runErrors || runSummary.status}${runSummary.score !== undefined ? `，${runSummary.score} 分` : ""}`} onClick={onOpenRun}>
       <span>{runSummary.connectionError ?? runSummary.status}</span>
       {runSummary.score !== undefined ? <strong>{runSummary.score} 分</strong> : null}
       {runSummary.operationError ? <small>{runSummary.operationError}</small> : null}
       <span aria-hidden="true">›</span>
     </button> : null}
     <div className="activity-scroll" data-scroll-key="writing">
-      {chapter && <article className="chapter-reader" aria-labelledby="chapter-reader-title">
+      {chapter && <article className="chapter-reader manuscript-page" aria-labelledby="chapter-reader-title">
         <p className="section-number">Chapter {String(chapter.sequence).padStart(2, "0")}</p>
         <h2 id="chapter-reader-title">{chapter.title}</h2>
         {chapter.body ? <p>{chapter.body}</p> : <p className="muted-copy">这一章仍在等待正文。</p>}

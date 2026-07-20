@@ -34,6 +34,17 @@ const desktop = extractMediaBlock("(min-width: 1200px)", ".workbench-grid");
 const wideDesktop = extractMediaBlock("(min-width: 1600px)", ".activity-scroll");
 
 describe("responsive workbench CSS", () => {
+  it("defines an editorial studio token system and distinct desktop surfaces", () => {
+    expect(css).toMatch(/--studio-chrome:\s*#211b2b/);
+    expect(css).toMatch(/--studio-canvas:\s*#e8e2d9/);
+    expect(css).toMatch(/--studio-paper:\s*#fffdf8/);
+    expect(css).toMatch(/--studio-elevation-sheet:\s*0 1rem 3rem/);
+    expect(css).toMatch(/\.studio-topbar\s*\{(?=[^}]*background:\s*var\(--studio-chrome\))(?=[^}]*color:\s*var\(--studio-chrome-ink\))/);
+    expect(css).toMatch(/\.chapter-list \.chapter-current::before\s*\{(?=[^}]*background:\s*var\(--studio-accent\))(?=[^}]*width:\s*4px)/);
+    expect(css).toMatch(/\.manuscript-page\s*\{(?=[^}]*background:\s*var\(--studio-paper\))(?=[^}]*box-shadow:\s*var\(--studio-elevation-paper\))/);
+    expect(css).toMatch(/\.run-instrument-card\s*\{(?=[^}]*background:\s*var\(--studio-paper\))(?=[^}]*border:\s*1px solid var\(--studio-card-border\))/);
+  });
+
   it("keeps shared overflow, reading measure, and disabled-action contracts", () => {
     expect(css).toMatch(/\.activity-scroll\s*\{(?=[^}]*min-height:\s*0)(?=[^}]*overflow:\s*auto)/);
     expect(css).toMatch(/\.event-list\s*\{[^}]*max-width:\s*46rem/);
@@ -53,6 +64,9 @@ describe("responsive workbench CSS", () => {
     expect(mobile).toMatch(/\.mobile-run-summary\s*\{[^}]*display:\s*flex/);
     expect(mobile).toMatch(/\.mobile-workbench-nav\s*\{(?=[^}]*bottom:\s*env\(safe-area-inset-bottom\))(?=[^}]*height:\s*68px)/);
     expect(mobile).toMatch(/\.mobile-workbench-nav svg\s*\{[^}]*flex:\s*0 0 20px/);
+    expect(mobile).toMatch(/\.mobile-composer\s*\{(?=[^}]*box-shadow:\s*var\(--studio-elevation-composer\))(?=[^}]*z-index:\s*10)/);
+    expect(mobile).toMatch(/\.mobile-workbench-nav button\[aria-current="page"\]\s*\{(?=[^}]*border-radius:\s*999px)(?=[^}]*margin:\s*6px)/);
+    expect(mobile).toMatch(/\.manuscript-page\s*\{[^}]*border-radius:\s*18px/);
   });
 
   it("defines the tablet block without crossing its media boundary", () => {
@@ -64,6 +78,8 @@ describe("responsive workbench CSS", () => {
     expect(tablet).toMatch(/\.workbench-drawer-layer\s*\{(?=[^}]*position:\s*fixed)(?=[^}]*top:\s*110px)(?=[^}]*bottom:\s*0)/);
     expect(tablet).toMatch(/\.workbench-drawer-backdrop\s*\{(?=[^}]*position:\s*absolute)(?=[^}]*inset:\s*0)/);
     expect(tablet).toMatch(/\.workbench-drawer\s*\{(?=[^}]*position:\s*absolute)(?=[^}]*overflow:\s*auto)(?=[^}]*max-width:\s*min\(78vw, 360px\))/);
+    expect(tablet).toMatch(/\.workbench-drawer-backdrop\s*\{[^}]*backdrop-filter:\s*blur\(3px\)/);
+    expect(tablet).toMatch(/\.workbench-drawer\s*\{[^}]*box-shadow:\s*var\(--studio-elevation-sheet\)/);
     expect(tablet).toMatch(/\.workbench-drawer-left\s*\{[^}]*left:\s*0/);
     expect(tablet).toMatch(/\.workbench-drawer-right\s*\{[^}]*right:\s*0/);
   });

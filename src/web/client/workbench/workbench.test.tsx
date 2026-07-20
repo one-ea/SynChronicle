@@ -105,6 +105,18 @@ describe("WorkbenchPage", () => {
     expect(document.querySelector(".workbench-shell")).toHaveAttribute("data-layout-mode");
   });
 
+  it("exposes the editorial studio hierarchy through stable semantic classes", () => {
+    window.history.replaceState({}, "", "/projects/project-1?chapter=chapter-1");
+    render(<WorkbenchPage api={api()} project={project} initialEvents={[]} />);
+
+    expect(document.querySelector(".workbench-topbar")).toHaveClass("studio-topbar");
+    expect(document.querySelector(".project-nav")).toHaveClass("manuscript-directory");
+    expect(document.querySelector(".chapter-reader")).toHaveClass("manuscript-page");
+    expect(document.querySelector(".run-sidebar")).toHaveClass("run-instrument-panel");
+    expect(document.querySelector(".run-summary-card")).toHaveClass("run-instrument-card");
+    expect(document.querySelector(".prompt-input")).toHaveClass("mobile-composer");
+  });
+
   it("renders chapter text and reflection progress and sends a steering instruction", async () => {
     const client = api();
     const user = setupUser();
@@ -560,6 +572,8 @@ describe("WorkbenchPage", () => {
     const entry = screen.getByRole("button", { name: /查看运行错误/ });
     expect(entry).toHaveTextContent("创作流过快");
     expect(entry).toHaveTextContent("request-with-a-very-long-identifier");
+    expect(entry).toHaveAccessibleName(expect.stringContaining("创作流过快，正在从游标恢复"));
+    expect(entry).toHaveAccessibleName(expect.stringContaining("网络或服务请求失败"));
     await user.click(entry);
     expect(screen.getByRole("button", { name: /^运行$/ })).toHaveAttribute("aria-current", "page");
   });

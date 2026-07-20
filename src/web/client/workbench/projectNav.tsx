@@ -11,7 +11,7 @@ interface ProjectNavProps {
 }
 
 export function ProjectNav({ title, chapters, selectedChapterId, collapsed, presentation = "desktop", onToggle, onSelect }: ProjectNavProps) {
-  return <aside className="workbench-panel project-nav" aria-label="作品结构" data-collapsed={collapsed} tabIndex={-1}>
+  return <aside className="workbench-panel project-nav manuscript-directory" aria-label="作品结构" data-collapsed={collapsed} tabIndex={-1}>
     <header className="panel-heading">
       <div><p className="eyebrow">Manuscript</p><h2>{title}</h2></div>
       {presentation === "desktop" && <button className="panel-toggle" type="button" onClick={onToggle} aria-expanded={!collapsed} aria-label={collapsed ? "展开作品结构" : "折叠作品结构"}>{collapsed ? ">" : "<"}</button>}

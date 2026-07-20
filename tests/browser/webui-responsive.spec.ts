@@ -159,6 +159,9 @@ for (const width of [375, 768, 1024, 1200, 1440, 1920]) {
       await expect(page.getByRole("navigation", { name: "创作台区域" })).toBeVisible();
       await expect(page.getByRole("button", { name: "创作" })).toHaveAttribute("aria-current", "page");
       await expect(page.getByRole("button", { name: "打开章节目录" })).toBeHidden();
+      await expect(page.locator(".manuscript-page")).toHaveCSS("border-radius", "18px");
+      await expect(page.locator(".mobile-composer")).toHaveCSS("z-index", "10");
+      await expect(page.getByRole("button", { name: "创作" })).toHaveCSS("border-radius", "999px");
       const composerBox = await page.locator(".prompt-input").boundingBox();
       const navigationBox = await page.getByRole("navigation", { name: "创作台区域" }).boundingBox();
       expect(composerBox).not.toBeNull();
@@ -171,6 +174,7 @@ for (const width of [375, 768, 1024, 1200, 1440, 1920]) {
       await expect(chapterTrigger).toBeVisible();
       await chapterTrigger.click();
       await expectInsideViewport(page, page.getByRole("dialog", { name: "章节目录" }));
+      await expect(page.getByRole("dialog", { name: "章节目录" })).toHaveCSS("box-shadow", /rgba/);
       await expectNoHorizontalOverflow(page);
       expect(Math.abs(((await writingCanvas.boundingBox())?.width ?? 0) - (canvasWidth ?? 0))).toBeLessThanOrEqual(1);
       await page.keyboard.press("Escape");
@@ -179,6 +183,9 @@ for (const width of [375, 768, 1024, 1200, 1440, 1920]) {
       await expect(page.getByRole("complementary", { name: "作品结构" })).toBeVisible();
       await expect(page.getByRole("complementary", { name: "运行状态" })).toBeVisible();
       await expect(page.getByRole("button", { name: "布局" })).toHaveCount(0);
+      await expect(page.locator(".studio-topbar")).toHaveCSS("background-color", "rgb(33, 27, 43)");
+      await expect(page.locator(".manuscript-page")).toHaveCSS("background-color", "rgb(255, 253, 248)");
+      await expect(page.locator(".chapter-current")).toHaveCSS("position", "relative");
       const projectBox = await page.getByRole("complementary", { name: "作品结构" }).boundingBox();
       const statusBox = await page.getByRole("complementary", { name: "运行状态" }).boundingBox();
       expect(projectBox?.width).toBeGreaterThanOrEqual(250);

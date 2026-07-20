@@ -269,7 +269,7 @@ export function WorkbenchPage({ api, project: initialProject, initialEvents, sub
 
   return <div className="workbench-shell" data-layout-mode={layoutMode} data-tablet-drawer={tabletDrawer ?? undefined}>
     <a className="skip-link" href="#main-content">跳到创作流</a>
-    <header className="workbench-topbar"><a href="/projects" className="wordmark">SynChronicle</a><p>{selectedChapter?.title ?? project.title}</p><div className="workbench-topbar-actions"><span>{project.latestRun?.status === "running" ? "创作进行中" : "创作台"}</span></div></header>
+    <header className="workbench-topbar studio-topbar"><a href="/projects" className="wordmark">SynChronicle</a><p>{selectedChapter?.title ?? project.title}</p><div className="workbench-topbar-actions"><span>{project.latestRun?.status === "running" ? "创作进行中" : "创作台"}</span></div></header>
     {layoutMode === "tablet" && <div className="workbench-tablet-toolbar">
       <button ref={projectDrawerTrigger} type="button" onClick={() => setTabletDrawer("project")}>打开章节目录</button>
       <strong>{selectedChapter?.title ?? project.title}</strong>
