@@ -313,7 +313,7 @@ describe("WorkbenchPage", () => {
     expect(close).toHaveFocus();
   });
 
-  it("excludes aria-hidden and visually hidden controls from the drawer focus loop", async () => {
+  it("excludes aria-hidden, visually hidden, and every negative tabindex control from the drawer focus loop", async () => {
     const triggerRef = createRef<HTMLButtonElement>();
     const user = setupUser();
     render(<><button ref={triggerRef}>打开</button><WorkbenchDrawer side="left" label="测试抽屉" open triggerRef={triggerRef} onClose={vi.fn()}>
@@ -322,6 +322,7 @@ describe("WorkbenchPage", () => {
       <button type="button" style={{ display: "none" }}>不可见控件</button>
       <span style={{ display: "none" }}><button type="button">祖先隐藏控件</button></span>
       <button type="button" disabled>禁用控件</button>
+      <button type="button" tabIndex={-2}>负 tabindex 控件</button>
     </WorkbenchDrawer></>);
 
     const dialog = screen.getByRole("dialog", { name: "测试抽屉" });

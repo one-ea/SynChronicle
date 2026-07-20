@@ -12,6 +12,7 @@ interface WorkbenchDrawerProps {
 const focusableSelector = "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])";
 
 function isFocusable(element: HTMLElement) {
+  if (element.tabIndex < 0) return false;
   if (element.matches(":disabled, [aria-disabled='true']")) return false;
   for (let current: HTMLElement | null = element; current; current = current.parentElement) {
     if (current.matches("[hidden], [aria-hidden='true']")) return false;

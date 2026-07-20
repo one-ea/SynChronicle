@@ -188,6 +188,7 @@ input { background: transparent; border: 0; border-bottom: 1px solid var(--ink-m
   .workbench-grid { display: block; height: calc(100dvh - 56px - 68px - env(safe-area-inset-bottom)); }
   .workbench-grid > [data-panel] { display: none; height: 100%; }
   .workbench-grid > [data-mobile-active="true"] { display: block; }
+  .workbench-grid > .writing-column[data-mobile-active="true"] { display: grid; }
   .project-nav, .run-sidebar { border: 0; }
   .panel-toggle { display: none; }
   .writing-column { height: 100%; }

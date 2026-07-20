@@ -5,6 +5,12 @@ import userEvent from "@testing-library/user-event";
 import { App } from "./app.js";
 import { WorkbenchPage } from "./pages/workbench.js";
 
+const originalInnerWidth = window.innerWidth;
+
+afterEach(() => {
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: originalInnerWidth });
+});
+
 it("has no detectable WCAG AA violations on the login page", async () => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "Unauthorized" }), {
     status: 401,
@@ -17,9 +23,9 @@ it("has no detectable WCAG AA violations on the login page", async () => {
   expect(result.violations).toEqual([]);
 });
 
-it("has no detectable WCAG AA violations on the creative workbench", async () => {
+it("has no detectable WCAG AA violations with the tablet chapter drawer open", async () => {
   Object.defineProperty(window, "innerWidth", { configurable: true, value: 1024 });
-  const { container } = render(<WorkbenchPage api={{ request: vi.fn().mockResolvedValue({}) }} project={{
+  render(<WorkbenchPage api={{ request: vi.fn().mockResolvedValue({}) }} project={{
     id: "project-1",
     title: "雾港来信",
     chapters: [{ id: "chapter-1", title: "潮声抵达前", sequence: 1, status: "draft", body: "正文" }],
@@ -31,11 +37,10 @@ it("has no detectable WCAG AA violations on the creative workbench", async () =>
     },
   }} initialEvents={[]} />);
   await screen.findByRole("heading", { name: "创作流" });
-  await userEvent.setup().click(screen.getByRole("button", { name: "打开运行状态" }));
-  await screen.findByRole("dialog", { name: "运行状态" });
-  expect(screen.getByLabelText("模型集")).toHaveAccessibleDescription("选择本次运行使用的模型集。启动后仍可在安全边界切换模型。");
+  await userEvent.setup().click(screen.getByRole("button", { name: "打开章节目录" }));
+  await screen.findByRole("dialog", { name: "章节目录" });
 
-  const result = await axe.run(container, { runOnly: { type: "tag", values: ["wcag2a", "wcag2aa"] } });
+  const result = await axe.run(document.body, { runOnly: { type: "tag", values: ["wcag2a", "wcag2aa"] } });
   expect(result.violations).toEqual([]);
 });
 
