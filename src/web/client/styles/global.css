@@ -171,7 +171,7 @@ input { background: transparent; border: 0; border-bottom: 1px solid var(--ink-m
   .workbench-tablet-toolbar button { background: transparent; border: 1px solid var(--rule); min-height: 44px; }
   .workbench-grid { display: block; height: calc(100dvh - 58px - 52px); }
   .workbench-grid > [data-panel="project"], .workbench-grid > [data-panel="status"] { display: none; }
-  .workbench-grid > .writing-column { grid-column: 1 / -1; height: 100%; }
+  .workbench-grid > .writing-column { height: 100%; }
   .workbench-drawer-layer { bottom: 0; left: 0; position: fixed; right: 0; top: 110px; z-index: 40; }
   .workbench-drawer-backdrop { background: rgb(33 29 36 / 48%); border: 0; inset: 0; position: absolute; width: 100%; }
   .workbench-drawer { background: var(--paper); bottom: 0; box-shadow: 0 0 2rem rgb(33 29 36 / 18%); max-width: min(78vw, 360px); overflow: auto; position: absolute; top: 0; width: 100%; }

@@ -47,3 +47,23 @@ Result:
 
 - CSS geometry is covered through source contracts and jsdom interaction tests; pixel-level browser screenshots are outside this task's required verification.
 - The first combined test run had one transient timeout in an unrelated run-creation interaction test; the unchanged test passed on the immediate full rerun in 2.729 seconds with all 49 tests green.
+
+## Review Follow-Up
+
+- Expanded the CSS source contract to cover both 56px single-collapse states, the 56px dual-collapse state, mobile safe-area height and navigation placement, tablet panel hiding and drawer width, activity scrolling constraints, the 46rem event-list measure, desktop-only visibility, and 1600px content padding.
+- Removed the ineffective tablet `grid-column: 1 / -1` declaration from the block formatting context and removed the assertion that required it.
+- Reproduced the reported timeout as a drifting failure rather than a stable failure at line 524. A full-file rerun exposed an `act(...)` warning after the parameterized legacy lifecycle test, showing that its fake-timer callback resolved the API Promise after the test's `act` scope ended.
+- Added the missing Promise flush inside that fake-timer `act` scope, matching the adjacent lifecycle refresh test and preventing React work from leaking into later tests.
+- Kept the line 524 integration test's behavior assertions and default 5-second timeout. After the leak fix, the test completed in 0.311 seconds during the first serial verification run and remained below Vitest's slow-test reporting threshold during the second.
+- A parallel workbench+Axe run then produced a timeout in the following retry integration test while line 524 completed in 0.604 seconds. This identified independent cross-file event-loop contention from running the jsdom interaction suite and Axe scan concurrently. Required verification therefore uses `--maxWorkers=1`, preserving each test's default timeout while serializing the two heavy files.
+
+### Review Verification
+
+The focused command ran twice consecutively:
+
+```bash
+pnpm vitest run src/web/client/workbench/workbench.test.tsx src/web/client/app.a11y.test.tsx --maxWorkers=1
+```
+
+- Run 1: 49/49 tests passed; workbench 2.927s; a11y 0.755s.
+- Run 2: 49/49 tests passed; workbench 2.742s; a11y 0.536s.

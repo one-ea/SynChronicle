@@ -209,11 +209,19 @@ describe("WorkbenchPage", () => {
   it("defines mobile, tablet, desktop, and safe-area workbench contracts", () => {
     const css = readFileSync(resolve(process.cwd(), "src/web/client/styles/global.css"), "utf8");
 
-    expect(css).toContain("@media (max-width: 767px)");
-    expect(css).toContain("@media (min-width: 768px) and (max-width: 1199px)");
-    expect(css).toContain("@media (min-width: 1200px)");
-    expect(css).toContain("env(safe-area-inset-bottom)");
-    expect(css).toContain("grid-template-columns: 256px minmax(0, 1fr) 320px");
+    expect(css).toMatch(/\.activity-scroll\s*\{(?=[^}]*min-height:\s*0)(?=[^}]*overflow:\s*auto)/);
+    expect(css).toMatch(/\.event-list\s*\{[^}]*max-width:\s*46rem/);
+    expect(css).toMatch(/@media \(max-width: 767px\)[\s\S]*\.workbench-grid\s*\{[^}]*height:\s*calc\(100dvh - 56px - 68px - env\(safe-area-inset-bottom\)\)/);
+    expect(css).toMatch(/@media \(max-width: 767px\)[\s\S]*\.mobile-workbench-nav\s*\{[^}]*bottom:\s*env\(safe-area-inset-bottom\)/);
+    expect(css).toMatch(/@media \(min-width: 768px\) and \(max-width: 1199px\)[\s\S]*\.workbench-grid > \[data-panel="project"\], \.workbench-grid > \[data-panel="status"\]\s*\{[^}]*display:\s*none/);
+    expect(css).toMatch(/@media \(min-width: 768px\) and \(max-width: 1199px\)[\s\S]*\.workbench-drawer\s*\{[^}]*max-width:\s*min\(78vw, 360px\)/);
+    expect(css).toMatch(/@media \(min-width: 1200px\)[\s\S]*\.workbench-grid\s*\{[^}]*grid-template-columns:\s*256px minmax\(0, 1fr\) 320px/);
+    expect(css).toMatch(/@media \(min-width: 1200px\)[\s\S]*\.workbench-grid\.left-closed\s*\{[^}]*grid-template-columns:\s*56px minmax\(0, 1fr\) 320px/);
+    expect(css).toMatch(/@media \(min-width: 1200px\)[\s\S]*\.workbench-grid\.right-closed\s*\{[^}]*grid-template-columns:\s*256px minmax\(0, 1fr\) 56px/);
+    expect(css).toMatch(/@media \(min-width: 1200px\)[\s\S]*\.workbench-grid\.left-closed\.right-closed\s*\{[^}]*grid-template-columns:\s*56px minmax\(0, 1fr\) 56px/);
+    expect(css).toMatch(/@media \(min-width: 1200px\)[\s\S]*\.mobile-workbench-nav, \.workbench-tablet-toolbar, \.workbench-drawer-layer, \.mobile-run-summary\s*\{[^}]*display:\s*none/);
+    expect(css).toMatch(/@media \(min-width: 1600px\)[\s\S]*\.activity-scroll\s*\{[^}]*padding-inline:\s*clamp\(4rem, 8vw, 9rem\)/);
+    expect(css).not.toContain(".workbench-grid > .writing-column { grid-column: 1 / -1;");
   });
 
   it("uses an explicit two-row activity grid by default and three rows on mobile", () => {
@@ -251,7 +259,7 @@ describe("WorkbenchPage", () => {
     expect(css).toContain("@media (min-width: 768px) and (max-width: 1199px)");
     expect(css).toMatch(/\.workbench-tablet-toolbar\s*\{[^}]*height:\s*52px/);
     expect(css).toMatch(/\.workbench-grid\s*\{[^}]*display:\s*block[^}]*height:\s*calc\(100dvh - 58px - 52px\)/);
-    expect(css).toMatch(/\.workbench-grid > \.writing-column\s*\{[^}]*grid-column:\s*1 \/ -1[^}]*height:\s*100%/);
+    expect(css).toMatch(/\.workbench-grid > \.writing-column\s*\{[^}]*height:\s*100%/);
     expect(css).toMatch(/\.workbench-drawer-layer\s*\{(?=[^}]*position:\s*fixed)(?=[^}]*top:\s*110px)(?=[^}]*bottom:\s*0)/);
     expect(css).toMatch(/\.workbench-drawer-backdrop\s*\{(?=[^}]*position:\s*absolute)(?=[^}]*inset:\s*0)/);
     expect(css).toMatch(/\.workbench-drawer\s*\{(?=[^}]*position:\s*absolute)(?=[^}]*overflow:\s*auto)/);
@@ -502,7 +510,7 @@ describe("WorkbenchPage", () => {
       const request = vi.fn().mockResolvedValue({ workbench: project });
       render(<WorkbenchPage api={{ request: request as ApiClient["request"] }} project={project} initialEvents={[]} subscribe={(listener) => { push = listener; return () => undefined; }} />);
       act(() => push({ sequence: 1, ...event }));
-      await act(async () => { await vi.advanceTimersByTimeAsync(150); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(150); await Promise.resolve(); });
       expect(request).toHaveBeenCalledTimes(1);
     } finally { vi.useRealTimers(); }
   });
