@@ -176,6 +176,7 @@ export function WorkbenchPage({ api, project: initialProject, initialEvents, sub
     nextUrl.searchParams.set("panel", next);
     window.history.pushState({}, "", nextUrl);
     setPanel(next);
+    if (layoutMode === "tablet" && next !== "writing") setTabletDrawer(next);
     queueMicrotask(() => document.querySelector<HTMLElement>(`[data-panel='${next}'] button, [data-panel='${next}'] [tabindex='-1']`)?.focus());
   }
 

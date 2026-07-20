@@ -142,14 +142,38 @@ describe("WorkbenchPage", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("创作流过快");
   });
 
-  it("uses the mobile workbench layout and hides layout controls through 768px", () => {
+  it("uses the mobile workbench layout only below 768px without obsolete layout controls", () => {
     const css = readFileSync(resolve(process.cwd(), "src/web/client/styles/global.css"), "utf8");
-    const responsiveWorkbench = css.match(/@media \(max-width: 768px\) \{([\s\S]*?)\n\}/)?.[1] ?? "";
 
-    expect(responsiveWorkbench).toContain(".workbench-grid { display: block;");
-    expect(responsiveWorkbench).toContain(".layout-controls { display: none;");
-    expect(responsiveWorkbench).toContain(".mobile-workbench-nav");
-    expect(responsiveWorkbench).toContain("display: grid;");
+    expect(css).toMatch(/@media \(max-width: 767px\) \{\n  \.workbench-topbar/);
+    expect(css).not.toContain("@media (max-width: 768px)");
+    expect(css).toContain(".workbench-grid { display: block;");
+    expect(css).toContain(".mobile-workbench-nav");
+    expect(css).not.toContain(".layout-controls");
+    expect(css).not.toContain(".layout-control-row");
+  });
+
+  it("updates the shell layout mode on resize and clears the tablet drawer after leaving tablet", async () => {
+    const originalWidth = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 375 });
+    const user = userEvent.setup();
+    render(<WorkbenchPage api={api()} project={project} initialEvents={[]} />);
+    const shell = document.querySelector(".workbench-shell");
+
+    expect(shell).toHaveAttribute("data-layout-mode", "mobile");
+
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 768 });
+    act(() => window.dispatchEvent(new Event("resize")));
+    expect(shell).toHaveAttribute("data-layout-mode", "tablet");
+
+    await user.click(screen.getByRole("button", { name: "状态" }));
+    expect(shell).toHaveAttribute("data-tablet-drawer", "status");
+
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1200 });
+    act(() => window.dispatchEvent(new Event("resize")));
+    expect(shell).toHaveAttribute("data-layout-mode", "desktop");
+    expect(shell).not.toHaveAttribute("data-tablet-drawer");
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: originalWidth });
   });
 
   it("requires an explicit model-set selection before creating a run", async () => {
