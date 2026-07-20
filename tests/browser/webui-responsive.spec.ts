@@ -36,6 +36,10 @@ async function expectInsideViewport(page: Page, locator: Locator) {
   expect(box!.y + box!.height).toBeLessThanOrEqual(viewport!.height);
 }
 
+async function expectNoHorizontalOverflow(page: Page) {
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1);
+}
+
 async function installProjectRoutes(page: Page) {
   expect(() => validateModelSetInput(modelSetInput, {
     credentials: [],
@@ -76,8 +80,8 @@ for (const width of [375, 768, 1024, 1200, 1440, 1920]) {
     await installProjectRoutes(page);
     await page.goto(`/projects/${project.id}?panel=writing&chapter=chapter-1`, { waitUntil: "domcontentloaded" });
 
-    expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1);
     await expect(page.getByRole("heading", { name: "创作流" })).toBeVisible();
+    await expectNoHorizontalOverflow(page);
 
     if (width < 768) {
       await expect(page.getByRole("navigation", { name: "创作台区域" })).toBeVisible();
@@ -95,6 +99,7 @@ for (const width of [375, 768, 1024, 1200, 1440, 1920]) {
       await expect(chapterTrigger).toBeVisible();
       await chapterTrigger.click();
       await expectInsideViewport(page, page.getByRole("dialog", { name: "章节目录" }));
+      await expectNoHorizontalOverflow(page);
       expect(Math.abs(((await writingCanvas.boundingBox())?.width ?? 0) - (canvasWidth ?? 0))).toBeLessThanOrEqual(1);
       await page.keyboard.press("Escape");
       await expect(chapterTrigger).toBeFocused();
@@ -114,9 +119,12 @@ for (const width of [375, 768, 1024, 1200, 1440, 1920]) {
     const createRun = page.getByRole("button", { name: "启动运行" });
     if (width < 768) {
       await page.getByRole("button", { name: "运行", exact: true }).click();
+      await expect(modelSet).toBeVisible();
+      await expectNoHorizontalOverflow(page);
     } else if (width < 1200) {
       await page.getByRole("button", { name: "打开运行状态" }).click();
       await expect(page.getByRole("dialog", { name: "运行状态" })).toBeVisible();
+      await expectNoHorizontalOverflow(page);
     }
     await expect(modelSet).toBeVisible();
     await expect(createRun).toBeVisible();

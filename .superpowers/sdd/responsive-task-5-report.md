@@ -38,3 +38,20 @@ Implemented the six-width responsive and accessibility regression gate for 375, 
 ## Concerns
 
 - Browser geometry tolerances depend on Chromium layout rounding; the 1px thresholds intentionally accommodate fractional pixels.
+
+## Review Follow-Up
+
+- Moved the initial workbench overflow assertion after the creative-flow heading becomes visible, so it measures the final rendered UI.
+- Added zero-horizontal-overflow assertions after mobile switches to the run panel and after tablet opens both chapter and run drawers.
+- Restored the tablet run drawer Axe scenario and its model-set accessible-description assertion.
+- Retained a separate tablet chapter drawer Axe scenario.
+- Both tablet accessibility scenarios restore `window.innerWidth` through the test-level `afterEach` cleanup.
+
+## Review Verification
+
+- Focused Vitest: 50 passed.
+- Responsive Playwright: 12 passed across six viewport widths.
+- Typecheck: exit 0.
+- Production build: exit 0.
+- Diff check: exit 0 with no output.
+- Commands ran sequentially to avoid resource contention.
