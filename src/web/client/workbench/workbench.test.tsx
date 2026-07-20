@@ -206,11 +206,14 @@ describe("WorkbenchPage", () => {
     expect(css).not.toContain(".layout-control-row");
   });
 
-  it("keeps the run summary mobile-only in a three-row activity grid", () => {
+  it("uses an explicit two-row activity grid by default and three rows on mobile", () => {
     const css = readFileSync(resolve(process.cwd(), "src/web/client/styles/global.css"), "utf8");
 
-    expect(css).toMatch(/\.activity-panel\s*\{[^}]*grid-template-rows:\s*auto auto minmax\(0, 1fr\)/);
+    expect(css).toMatch(/\.activity-panel\s*\{[^}]*grid-template-rows:\s*auto minmax\(0, 1fr\)/);
+    expect(css).toMatch(/\.activity-scroll\s*\{[^}]*grid-row:\s*2/);
     expect(css).toMatch(/\.mobile-run-summary\s*\{[^}]*display:\s*none/);
+    expect(css).toMatch(/@media \(max-width: 767px\)[\s\S]*\.activity-panel\s*\{[^}]*grid-template-rows:\s*auto auto minmax\(0, 1fr\)/);
+    expect(css).toMatch(/@media \(max-width: 767px\)[\s\S]*\.activity-scroll\s*\{[^}]*grid-row:\s*3/);
     expect(css).toMatch(/@media \(max-width: 767px\)[\s\S]*\.mobile-run-summary\s*\{[^}]*display:\s*(?:flex|grid)/);
     expect(css).toMatch(/@media \(max-width: 767px\)[\s\S]*\.mobile-workbench-nav\s*\{[^}]*height:\s*68px/);
     expect(css).toMatch(/@media \(max-width: 767px\)[\s\S]*\.mobile-workbench-nav svg\s*\{[^}]*flex:\s*0 0 20px/);

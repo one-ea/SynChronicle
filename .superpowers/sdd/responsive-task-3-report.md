@@ -76,3 +76,24 @@ Result:
 - TypeScript typecheck: passed.
 - Total tests: 48 passed, 0 failed.
 - One initial full-suite run encountered a transient timeout in an unchanged run-creation test; the isolated test passed in 344ms and the complete verification rerun passed.
+
+## Grid Placement Review Fix
+
+- Restored the default desktop/tablet activity grid to `auto minmax(0, 1fr)`.
+- Assigned `.activity-scroll` explicitly to grid row 2 in the default layout.
+- Applied `auto auto minmax(0, 1fr)` only inside the mobile media query.
+- Assigned `.activity-scroll` explicitly to grid row 3 on mobile, keeping the visible summary in the natural-height middle row.
+- Updated the CSS contract test to assert both exact mode-specific grid definitions and explicit scroll placement.
+
+## Grid Placement TDD Evidence
+
+- Replaced the previous default-three-row assertion with a failing default-two-row and mobile-three-row contract.
+- Confirmed RED against the prior default three-row implementation.
+- Confirmed the focused grid contract test passed after the CSS fix.
+
+## Grid Placement Verification
+
+- Workbench tests: 45 passed.
+- Accessibility tests: 3 passed.
+- TypeScript typecheck: passed.
+- Total tests: 48 passed, 0 failed.

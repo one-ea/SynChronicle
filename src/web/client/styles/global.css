@@ -117,11 +117,11 @@ input { background: transparent; border: 0; border-bottom: 1px solid var(--ink-m
 .chapter-list small { color: var(--ink-muted); }
 .panel-empty { color: var(--ink-muted); padding: var(--space-3); }
 .writing-column { display: grid; grid-template-rows: minmax(0, 1fr) auto; }
-.activity-panel { display: grid; grid-template-rows: auto auto minmax(0, 1fr); overflow: hidden; }
+.activity-panel { display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
 .activity-heading { align-items: end; }
 .activity-heading h1 { font-size: clamp(2.4rem, 5vw, 4rem); }
 .event-count { color: var(--ink-muted); font-size: 0.75rem; }
-.activity-scroll { overflow: auto; padding: clamp(1.25rem, 4vw, 3.5rem); scroll-behavior: smooth; }
+.activity-scroll { grid-row: 2; overflow: auto; padding: clamp(1.25rem, 4vw, 3.5rem); scroll-behavior: smooth; }
 .chapter-reader, .stream-card { margin: 0 auto var(--space-4); max-width: 46rem; }
 .chapter-reader h2 { font-size: clamp(2rem, 4vw, 3.4rem); margin-bottom: var(--space-3); }
 .chapter-reader > p:last-child, .stream-card > p:last-child { font-size: 1.05rem; line-height: 1.9; white-space: pre-wrap; }
@@ -192,7 +192,8 @@ input { background: transparent; border: 0; border-bottom: 1px solid var(--ink-m
   .project-nav, .run-sidebar { border: 0; }
   .panel-toggle { display: none; }
   .writing-column { height: 100%; }
-  .activity-scroll { padding: var(--space-2); }
+  .activity-panel { grid-template-rows: auto auto minmax(0, 1fr); }
+  .activity-scroll { grid-row: 3; padding: var(--space-2); }
   .mobile-run-summary { align-items: center; background: var(--paper-raised); border: 0; border-bottom: 1px solid var(--rule); display: grid; gap: var(--space-1); grid-template-columns: minmax(0, 1fr) auto auto; padding: 0.75rem var(--space-2); text-align: left; }
   .prompt-input > div { grid-template-columns: 1fr; }
   .prompt-input .button { width: 100%; }
