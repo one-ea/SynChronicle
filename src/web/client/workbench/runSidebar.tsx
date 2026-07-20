@@ -33,6 +33,7 @@ interface RunSidebarProps {
   onAnswer(questionId: string, answers: Record<string, string>): Promise<void>;
   onSwitchModel(role: string, provider: string, model: string, credentialId?: string, parameters?: Record<string, unknown>): Promise<void>;
   onDiagnose(): Promise<void>;
+  onFailureChange?(message: string | null): void;
 }
 
 export function RunSidebar(props: RunSidebarProps) {
@@ -47,7 +48,21 @@ export function RunSidebar(props: RunSidebarProps) {
   useEffect(() => {
     if (selectedModelSetId && !selectedModelSetAvailable) setSelectedModelSetId("");
   }, [selectedModelSetAvailable, selectedModelSetId]);
-  async function run(action: () => Promise<void>) { setPending(true); setFailure(null); try { await action(); } catch (error) { const requestId = error instanceof ApiError && error.requestId ? ` 请求 ID：${error.requestId}` : ""; setFailure({ message: `${error instanceof ApiError && error.kind === "request" ? "网络或服务请求失败" : "操作失败"}。${requestId}`, retry: action }); } finally { setPending(false); } }
+  async function run(action: () => Promise<void>) {
+    setPending(true);
+    setFailure(null);
+    props.onFailureChange?.(null);
+    try {
+      await action();
+    } catch (error) {
+      const requestId = error instanceof ApiError && error.requestId ? ` 请求 ID：${error.requestId}` : "";
+      const message = `${error instanceof ApiError && error.kind === "request" ? "网络或服务请求失败" : "操作失败"}。${requestId}`;
+      setFailure({ message, retry: action });
+      props.onFailureChange?.(message);
+    } finally {
+      setPending(false);
+    }
+  }
   async function answer(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!props.pendingQuestion) return;
@@ -65,7 +80,7 @@ export function RunSidebar(props: RunSidebarProps) {
   }
   async function start(event: FormEvent<HTMLFormElement>) { event.preventDefault(); if (pending || !selectedModelSetAvailable) return; await run(() => props.onStart(selectedModelSetId)); }
   const connectionRole = connection === "backpressure" || connection === "error" ? "alert" : "status";
-  return <aside className="workbench-panel run-sidebar" aria-label="运行状态" data-collapsed={collapsed}>
+  return <aside className="workbench-panel run-sidebar" aria-label="运行状态" data-collapsed={collapsed} tabIndex={-1}>
     <header className="panel-heading">
       {presentation === "desktop" && <button className="panel-toggle" type="button" onClick={onToggle} aria-expanded={!collapsed} aria-label={collapsed ? "展开运行状态" : "折叠运行状态"}>{collapsed ? "<" : ">"}</button>}
       <div><p className="eyebrow">Run room</p><h2>运行状态</h2></div>

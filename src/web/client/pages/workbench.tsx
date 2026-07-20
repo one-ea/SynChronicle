@@ -95,15 +95,23 @@ export function WorkbenchPage({ api, project: initialProject, initialEvents, sub
   const [commandFeedback, setCommandFeedback] = useState<string | null>(null);
   const [pendingCommandId, setPendingCommandId] = useState<string | null>(() => initialRunId ? safeSessionGet(commandStorageKey(project.id, initialRunId)) : null);
   const [lastModelSwitch, setLastModelSwitch] = useState<{ role: string; provider: string; model: string; credentialId?: string; parameters?: Record<string, unknown> } | null>(null);
+  const [operationError, setOperationError] = useState<string | null>(null);
   const scrollPositions = useRef<Record<WorkbenchPanel, number>>({ project: 0, writing: 0, status: 0 });
   const projectDrawerTrigger = useRef<HTMLButtonElement>(null);
   const statusDrawerTrigger = useRef<HTMLButtonElement>(null);
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const previousConnection = useRef<ConnectionState | undefined>(undefined);
+  const previousLayoutMode = useRef(layoutMode);
   const { state, connection } = useRunEvents({ runId, initialEvents, subscribe });
   useEffect(() => {
     if (layoutMode !== "tablet") setTabletDrawer(null);
   }, [layoutMode]);
+  useEffect(() => {
+    if (previousLayoutMode.current === layoutMode) return;
+    previousLayoutMode.current = layoutMode;
+    const visiblePanel: WorkbenchPanel = layoutMode === "mobile" ? panel : "writing";
+    queueMicrotask(() => document.querySelector<HTMLElement>(`[data-panel='${visiblePanel}'] main, [data-panel='${visiblePanel}'] aside`)?.focus());
+  }, [layoutMode, panel]);
   const refreshSnapshot = () => {
     if (refreshTimer.current) return;
     refreshTimer.current = setTimeout(() => {
@@ -253,27 +261,25 @@ export function WorkbenchPage({ api, project: initialProject, initialEvents, sub
 
   const embeddedPanels = layoutMode !== "desktop";
   const projectNav = <ProjectNav title={project.title} chapters={project.chapters ?? []} selectedChapterId={selectedChapter?.id} collapsed={embeddedPanels ? false : leftCollapsed} presentation={embeddedPanels ? "embedded" : "desktop"} onToggle={() => setLeftCollapsed((value) => !value)} onSelect={selectChapter} />;
-  const runSidebar = <RunSidebar state={state} connection={connectionOverride ?? connection} status={project.latestRun?.status} agents={state.agents.length ? state.agents : project.agents ?? []} usage={state.usage ?? project.usage} pendingQuestion={pendingQuestion} modelConfiguration={project.modelConfiguration} commandFeedback={commandFeedback} commandRetry={commandFeedback?.startsWith("模型切换失败") && lastModelSwitch ? () => switchModel(lastModelSwitch.role, lastModelSwitch.provider, lastModelSwitch.model, lastModelSwitch.credentialId, lastModelSwitch.parameters) : undefined} diagnostics={diagnostics} abortWaiting={abortWaiting} controlsDisabled={!runId} collapsed={embeddedPanels ? false : rightCollapsed} presentation={embeddedPanels ? "embedded" : "desktop"} onToggle={() => setRightCollapsed((value) => !value)} onStart={startRun} onCommand={command} onAnswer={answer} onSwitchModel={switchModel} onDiagnose={diagnose} />;
+  const effectiveConnection = connectionOverride ?? connection;
+  const runSidebar = <RunSidebar state={state} connection={effectiveConnection} status={project.latestRun?.status} agents={state.agents.length ? state.agents : project.agents ?? []} usage={state.usage ?? project.usage} pendingQuestion={pendingQuestion} modelConfiguration={project.modelConfiguration} commandFeedback={commandFeedback} commandRetry={commandFeedback?.startsWith("模型切换失败") && lastModelSwitch ? () => switchModel(lastModelSwitch.role, lastModelSwitch.provider, lastModelSwitch.model, lastModelSwitch.credentialId, lastModelSwitch.parameters) : undefined} diagnostics={diagnostics} abortWaiting={abortWaiting} controlsDisabled={!runId} collapsed={embeddedPanels ? false : rightCollapsed} presentation={embeddedPanels ? "embedded" : "desktop"} onToggle={() => setRightCollapsed((value) => !value)} onStart={startRun} onCommand={command} onAnswer={answer} onSwitchModel={switchModel} onDiagnose={diagnose} onFailureChange={setOperationError} />;
   const runStatus = runStatusLabel(project.latestRun?.status);
-  const writingColumn = <div className="writing-column" data-panel="writing" data-mobile-active={panel === "writing"}><ActivityFeed state={state} chapter={selectedChapter} runSummary={{ status: runStatus, score: state.reflection?.score }} onOpenRun={() => selectPanel("status")} /><PromptInput onSend={steer} /></div>;
+  const connectionError = effectiveConnection === "backpressure" ? "创作流过快，正在从游标恢复" : effectiveConnection === "error" ? "实时事件解析失败" : undefined;
+  const writingColumn = <div className="writing-column" data-panel="writing" data-mobile-active={panel === "writing"}><ActivityFeed state={state} chapter={selectedChapter} runSummary={{ status: runStatus, score: state.reflection?.score, connectionError, operationError }} onOpenRun={() => selectPanel("status")} /><PromptInput onSend={steer} /></div>;
 
   return <div className="workbench-shell" data-layout-mode={layoutMode} data-tablet-drawer={tabletDrawer ?? undefined}>
     <a className="skip-link" href="#main-content">跳到创作流</a>
-    <header className="workbench-topbar"><a href="/projects" className="wordmark">SynChronicle</a><p>{project.title}</p><div className="workbench-topbar-actions"><span>{project.latestRun?.status === "running" ? "创作进行中" : "创作台"}</span></div></header>
+    <header className="workbench-topbar"><a href="/projects" className="wordmark">SynChronicle</a><p>{selectedChapter?.title ?? project.title}</p><div className="workbench-topbar-actions"><span>{project.latestRun?.status === "running" ? "创作进行中" : "创作台"}</span></div></header>
     {layoutMode === "tablet" && <div className="workbench-tablet-toolbar">
       <button ref={projectDrawerTrigger} type="button" onClick={() => setTabletDrawer("project")}>打开章节目录</button>
       <strong>{selectedChapter?.title ?? project.title}</strong>
       <button ref={statusDrawerTrigger} type="button" onClick={() => setTabletDrawer("status")}>打开运行状态</button>
     </div>}
     <div className={`workbench-grid left-${leftCollapsed ? "closed" : "open"} right-${rightCollapsed ? "closed" : "open"}`}>
-      {layoutMode === "desktop" && <div data-panel="project">{projectNav}</div>}
-      {layoutMode === "mobile" && <div data-panel="project" data-mobile-active={panel === "project"}>{projectNav}</div>}
+      <div data-panel="project" data-mobile-active={panel === "project"}><WorkbenchDrawer side="left" label="章节目录" inline={layoutMode !== "tablet"} inactive={layoutMode === "mobile" && panel !== "project"} open={layoutMode === "tablet" && tabletDrawer === "project"} triggerRef={projectDrawerTrigger} onClose={() => setTabletDrawer(null)}>{projectNav}</WorkbenchDrawer></div>
       {writingColumn}
-      {layoutMode === "desktop" && <div data-panel="status">{runSidebar}</div>}
-      {layoutMode === "mobile" && <div data-panel="status" data-mobile-active={panel === "status"}>{runSidebar}</div>}
+      <div data-panel="status" data-mobile-active={panel === "status"}><WorkbenchDrawer side="right" label="运行状态" inline={layoutMode !== "tablet"} inactive={layoutMode === "mobile" && panel !== "status"} open={layoutMode === "tablet" && tabletDrawer === "status"} triggerRef={statusDrawerTrigger} onClose={() => setTabletDrawer(null)}>{runSidebar}</WorkbenchDrawer></div>
     </div>
-    <WorkbenchDrawer side="left" label="章节目录" open={layoutMode === "tablet" && tabletDrawer === "project"} triggerRef={projectDrawerTrigger} onClose={() => setTabletDrawer(null)}>{projectNav}</WorkbenchDrawer>
-    <WorkbenchDrawer side="right" label="运行状态" open={layoutMode === "tablet" && tabletDrawer === "status"} triggerRef={statusDrawerTrigger} onClose={() => setTabletDrawer(null)}>{runSidebar}</WorkbenchDrawer>
     <MobileNav current={panel} onChange={selectPanel} />
   </div>;
 }

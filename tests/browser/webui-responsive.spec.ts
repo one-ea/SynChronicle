@@ -40,7 +40,7 @@ async function expectNoHorizontalOverflow(page: Page) {
   expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1);
 }
 
-async function installProjectRoutes(page: Page) {
+async function installProjectRoutes(page: Page, longContent = false) {
   expect(() => validateModelSetInput(modelSetInput, {
     credentials: [],
     platformModels: providerCatalog.flatMap(({ provider, models }) => models.map((model) => ({ provider, model }))),
@@ -51,12 +51,84 @@ async function installProjectRoutes(page: Page) {
   await page.route(`**/api/projects/${project.id}/workbench`, async (route) => {
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ workbench: {
       ...project,
-      chapters: [{ id: "chapter-1", runId: null, sequence: 1, title: "潮声抵达前", status: "draft", body: "她在码头读完了第一封信。", version: 1 }],
-      latestRun: null, agents: [], usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, cost: "0.00000000", byAgent: [] }, pendingQuestion: null,
+       chapters: [{ id: "chapter-1", runId: null, sequence: 1, title: longContent ? "一段足够长且没有空格的章节标题ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" : "潮声抵达前", status: "draft", body: "她在码头读完了第一封信。", version: 1 }],
+       latestRun: longContent ? { id: "11111111-1111-4111-8111-111111111111", status: "running" } : null,
+       agents: longContent ? [{ name: "WriterAgentWithAnExtremelyLongUnbrokenNameABCDEFGHIJKLMNOPQRSTUVWXYZ", state: "failed", summary: "诊断文本ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" }] : [], usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, cost: "0.00000000", byAgent: [] }, pendingQuestion: null,
       modelConfiguration,
     } }) });
   });
 }
+
+test("mobile long content and short viewport stay contained", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 480 });
+  await installProjectRoutes(page, true);
+  await page.goto(`/projects/${project.id}?panel=writing&chapter=chapter-1`, { waitUntil: "domcontentloaded" });
+
+  const topbarTitle = page.locator(".workbench-topbar p");
+  await expect(topbarTitle).toBeVisible();
+  await expect(topbarTitle).toContainText("一段足够长");
+  await expectInsideViewport(page, topbarTitle);
+  await expectNoHorizontalOverflow(page);
+
+  await page.getByRole("button", { name: "运行", exact: true }).click();
+  await expect(page.getByText("WriterAgentWithAnExtremelyLongUnbrokenNameABCDEFGHIJKLMNOPQRSTUVWXYZ")).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+  await expectInsideViewport(page, page.getByRole("navigation", { name: "创作台区域" }));
+});
+
+test("tablet run drawer preserves form state and pending lock across close and reopen", async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 700 });
+  await installProjectRoutes(page);
+  let finishRun!: () => void;
+  const runFinished = new Promise<void>((resolve) => { finishRun = resolve; });
+  await page.route(`**/api/projects/${project.id}/runs`, async (route) => {
+    await runFinished;
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ run: { id: "22222222-2222-4222-8222-222222222222" } }) });
+  });
+  await page.goto(`/projects/${project.id}?panel=writing&chapter=chapter-1`, { waitUntil: "domcontentloaded" });
+
+  await page.getByRole("button", { name: "打开运行状态" }).click();
+  await page.getByRole("combobox", { name: "模型集" }).selectOption("set-1");
+  await page.getByRole("button", { name: "启动运行" }).click();
+  await expect(page.getByRole("button", { name: "正在启动" })).toBeDisabled();
+  await page.getByRole("button", { name: "关闭", exact: true }).click();
+  await page.getByRole("button", { name: "打开运行状态" }).click();
+
+  await expect(page.getByRole("combobox", { name: "模型集" })).toHaveValue("set-1");
+  await expect(page.getByRole("button", { name: "正在启动" })).toBeDisabled();
+  expect(await page.locator(".run-sidebar").count()).toBe(1);
+  finishRun();
+});
+
+test("responsive mode changes focus the visible primary region", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 700 });
+  await installProjectRoutes(page);
+  await page.goto(`/projects/${project.id}?panel=project&chapter=chapter-1`, { waitUntil: "domcontentloaded" });
+  await expect(page.getByRole("complementary", { name: "作品结构" })).toBeVisible();
+
+  await page.setViewportSize({ width: 1024, height: 700 });
+  await expect(page.getByRole("main")).toBeFocused();
+  await page.setViewportSize({ width: 375, height: 700 });
+  await expect(page.getByRole("complementary", { name: "作品结构" })).toBeFocused();
+});
+
+test("mobile writing exposes connection and operation errors with a run entry", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 700 });
+  await installProjectRoutes(page, true);
+  await page.route(`**/api/projects/${project.id}/runs/*/pause`, async (route) => {
+    await route.fulfill({ status: 503, contentType: "application/json", headers: { "x-request-id": "request-with-a-very-long-identifier" }, body: JSON.stringify({ error: { kind: "request", message: "failed" } }) });
+  });
+  await page.goto(`/projects/${project.id}?panel=writing&chapter=chapter-1`, { waitUntil: "domcontentloaded" });
+
+  await page.getByRole("button", { name: "运行", exact: true }).click();
+  await page.getByRole("button", { name: "暂停运行" }).click();
+  await expect(page.getByRole("alert")).toContainText("request-with-a-very-long-identifier");
+  await page.getByRole("button", { name: "创作" }).click();
+  const errorEntry = page.getByRole("button", { name: /查看运行错误/ });
+  await expect(errorEntry).toContainText("request-with-a-very-long-identifier");
+  await errorEntry.click();
+  await expect(page.getByRole("button", { name: "运行", exact: true })).toHaveAttribute("aria-current", "page");
+});
 
 for (const width of [375, 768, 1024, 1200, 1440, 1920]) {
   test(`project library stays reachable at ${width}px`, async ({ page }) => {

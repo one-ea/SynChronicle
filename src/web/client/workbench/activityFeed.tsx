@@ -15,7 +15,7 @@ interface ActivityFeedBaseProps {
 }
 
 type ActivityFeedProps = ActivityFeedBaseProps & (
-  | { runSummary: { status: string; score?: number }; onOpenRun(): void }
+  | { runSummary: { status: string; score?: number; connectionError?: string; operationError?: string | null }; onOpenRun(): void }
   | { runSummary?: undefined; onOpenRun?: undefined }
 );
 
@@ -25,9 +25,10 @@ export function ActivityFeed({ state, chapter, runSummary, onOpenRun }: Activity
       <div><p className="eyebrow">Live writing</p><h1>创作流</h1></div>
       <span className="event-count" title="当前保留最近 200 条事件">{state.events.length} 条事件</span>
     </header>
-    {runSummary ? <button className="mobile-run-summary" type="button" aria-label={`查看运行状态：${runSummary.status}${runSummary.score !== undefined ? `，${runSummary.score} 分` : ""}`} onClick={onOpenRun}>
-      <span>{runSummary.status}</span>
+    {runSummary ? <button className={`mobile-run-summary${runSummary.connectionError || runSummary.operationError ? " mobile-run-summary-error" : ""}`} type="button" aria-label={`${runSummary.connectionError || runSummary.operationError ? "查看运行错误" : "查看运行状态"}：${runSummary.connectionError ?? runSummary.operationError ?? runSummary.status}${runSummary.score !== undefined ? `，${runSummary.score} 分` : ""}`} onClick={onOpenRun}>
+      <span>{runSummary.connectionError ?? runSummary.status}</span>
       {runSummary.score !== undefined ? <strong>{runSummary.score} 分</strong> : null}
+      {runSummary.operationError ? <small>{runSummary.operationError}</small> : null}
       <span aria-hidden="true">›</span>
     </button> : null}
     <div className="activity-scroll" data-scroll-key="writing">

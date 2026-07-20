@@ -223,14 +223,14 @@ describe("WorkbenchPage", () => {
     expect(shell).toHaveAttribute("data-layout-mode", "mobile");
 
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 768 });
-    act(() => window.dispatchEvent(new Event("resize")));
+    await act(async () => { window.dispatchEvent(new Event("resize")); await Promise.resolve(); });
     expect(shell).toHaveAttribute("data-layout-mode", "tablet");
 
     await user.click(screen.getByRole("button", { name: "运行" }));
     expect(shell).toHaveAttribute("data-tablet-drawer", "status");
 
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 1200 });
-    act(() => window.dispatchEvent(new Event("resize")));
+    await act(async () => { window.dispatchEvent(new Event("resize")); await Promise.resolve(); });
     expect(shell).toHaveAttribute("data-layout-mode", "desktop");
     expect(shell).not.toHaveAttribute("data-tablet-drawer");
     Object.defineProperty(window, "innerWidth", { configurable: true, value: originalWidth });
@@ -245,8 +245,8 @@ describe("WorkbenchPage", () => {
 
     const projectTrigger = screen.getByRole("button", { name: "打开章节目录" });
     const statusTrigger = screen.getByRole("button", { name: "打开运行状态" });
-    expect(screen.queryByLabelText("作品结构")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("运行状态")).not.toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "作品结构" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "运行状态" })).not.toBeInTheDocument();
 
     await user.click(projectTrigger);
     expect(screen.getByRole("dialog", { name: "章节目录" })).toBeVisible();
@@ -263,6 +263,44 @@ describe("WorkbenchPage", () => {
     expect(screen.queryByRole("dialog", { name: "运行状态" })).not.toBeInTheDocument();
     expect(statusTrigger).toHaveFocus();
     Object.defineProperty(window, "innerWidth", { configurable: true, value: originalWidth });
+  });
+
+  it("keeps one run sidebar mounted with its form state while the tablet drawer closes", async () => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1024 });
+    const user = setupUser();
+    render(<WorkbenchPage api={api()} project={{ ...project, latestRun: null }} initialEvents={[]} />);
+
+    await user.click(screen.getByRole("button", { name: "打开运行状态" }));
+    const dialog = screen.getByRole("dialog", { name: "运行状态" });
+    await user.selectOptions(within(dialog).getByLabelText("模型集"), "set-1");
+    await user.click(within(dialog).getByRole("button", { name: "关闭" }));
+
+    expect(document.querySelectorAll(".run-sidebar")).toHaveLength(1);
+    expect(screen.queryByRole("dialog", { name: "运行状态" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "打开运行状态" }));
+    expect(within(screen.getByRole("dialog", { name: "运行状态" })).getByLabelText("模型集")).toHaveValue("set-1");
+  });
+
+  it("keeps an in-flight run action locked while the tablet drawer closes and reopens", async () => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1024 });
+    let resolveRequest!: (value: { run: { id: string } }) => void;
+    const request = vi.fn(() => new Promise<{ run: { id: string } }>((resolve) => { resolveRequest = resolve; }));
+    const user = setupUser();
+    render(<WorkbenchPage api={{ request: request as ApiClient["request"] }} project={{ ...project, latestRun: null }} initialEvents={[]} />);
+
+    await user.click(screen.getByRole("button", { name: "打开运行状态" }));
+    await user.selectOptions(screen.getByLabelText("模型集"), "set-1");
+    fireEvent.click(screen.getByRole("button", { name: "启动运行" }));
+    await vi.waitFor(() => expect(screen.getByRole("button", { name: "正在启动" })).toBeDisabled());
+    fireEvent.click(screen.getByRole("button", { name: "关闭" }));
+    fireEvent.click(screen.getByRole("button", { name: "打开运行状态" }));
+
+    expect(screen.getByRole("button", { name: "正在启动" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "正在启动" }));
+    expect(request).toHaveBeenCalledTimes(1);
+
+    await act(async () => { resolveRequest({ run: { id: "22222222-2222-4222-8222-222222222222" } }); await Promise.resolve(); });
   });
 
   it("traps focus inside tablet drawers and restores focus from every close control", async () => {
@@ -507,6 +545,38 @@ describe("WorkbenchPage", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("req-control");
     await user.click(screen.getByRole("button", { name: "重试" }));
     expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows mobile connection and operation errors in writing with a run-page entry", async () => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 375 });
+    const request = vi.fn().mockRejectedValue(new ApiError("request", "failed", 503, "request-with-a-very-long-identifier"));
+    const user = setupUser();
+    render(<WorkbenchPage api={{ request: request as ApiClient["request"] }} project={project} initialEvents={[]} connectionOverride="backpressure" />);
+
+    await user.click(screen.getByRole("button", { name: /^运行$/ }));
+    await user.click(screen.getByRole("button", { name: "暂停运行" }));
+    await user.click(screen.getByRole("button", { name: "创作" }));
+
+    const entry = screen.getByRole("button", { name: /查看运行错误/ });
+    expect(entry).toHaveTextContent("创作流过快");
+    expect(entry).toHaveTextContent("request-with-a-very-long-identifier");
+    await user.click(entry);
+    expect(screen.getByRole("button", { name: /^运行$/ })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("moves focus to the visible primary region after responsive mode changes", async () => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 375 });
+    const user = setupUser();
+    render(<WorkbenchPage api={api()} project={project} initialEvents={[]} />);
+    await user.click(screen.getByRole("button", { name: "章节" }));
+
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1024 });
+    await act(async () => { window.dispatchEvent(new Event("resize")); await Promise.resolve(); });
+    await vi.waitFor(() => expect(screen.getByRole("main")).toHaveFocus());
+
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 375 });
+    await act(async () => { window.dispatchEvent(new Event("resize")); await Promise.resolve(); });
+    await vi.waitFor(() => expect(screen.getByRole("complementary", { name: "作品结构" })).toHaveFocus());
   });
 
   it("uses configured model choices and announces command state", async () => {

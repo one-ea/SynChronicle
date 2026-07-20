@@ -97,12 +97,12 @@ input { background: transparent; border: 0; border-bottom: 1px solid var(--ink-m
 .workbench-topbar p { font-family: var(--font-display); font-size: 1.2rem; font-weight: 600; margin: 0; }
 .workbench-topbar span { color: var(--ink-muted); font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; }
 .workbench-topbar-actions { align-items: center; display: flex; gap: var(--space-1); justify-self: end; }
-.workbench-grid, .workbench-grid > div, .workbench-panel { min-width: 0; }
+.workbench-grid, .workbench-grid > div, .workbench-panel, .panel-heading > div, .agent-list p, .message, .diagnostics-card p { min-width: 0; }
 .workbench-panel { background: var(--paper); height: 100%; min-width: 0; }
 .project-nav { border-right: 1px solid var(--rule); overflow: auto; }
 .run-sidebar { border-left: 1px solid var(--rule); overflow: auto; }
 .panel-heading { align-items: start; border-bottom: 1px solid var(--rule); display: flex; gap: var(--space-1); justify-content: space-between; min-height: 104px; padding: var(--space-2); }
-.panel-heading h2 { font-size: 1.65rem; }
+.panel-heading h2 { font-size: 1.65rem; overflow-wrap: anywhere; }
 .panel-heading .eyebrow { margin: 0 0 0.35rem; }
 .panel-toggle { background: transparent; border: 1px solid var(--rule); flex: 0 0 44px; height: 44px; min-width: 44px; }
 [data-collapsed="true"] .panel-heading { align-items: center; border: 0; flex-direction: column; padding-inline: 0.35rem; }
@@ -147,7 +147,9 @@ input { background: transparent; border: 0; border-bottom: 1px solid var(--ink-m
 .reflection-card strong { display: block; font-family: var(--font-display); font-size: 4rem; line-height: 1; margin: 0.5rem 0; }
 .agent-list, .usage-card { border-top: 1px solid var(--rule); margin-top: var(--space-3); padding-top: var(--space-2); }
 .agent-list h3, .usage-card h3 { font-family: var(--font-display); font-size: 1.25rem; }
-.agent-list p { display: flex; justify-content: space-between; }
+.agent-list p { display: flex; gap: var(--space-1); justify-content: space-between; overflow-wrap: anywhere; }
+.agent-list p > * { min-width: 0; overflow-wrap: anywhere; }
+.message, .diagnostics-card p, .event-list p, .event-list small { overflow-wrap: anywhere; }
 .agent-list small, .usage-card p, .muted-copy { color: var(--ink-muted); }
 .control-placeholder { display: grid; gap: var(--space-1); grid-template-columns: repeat(3, 1fr); margin-top: var(--space-3); }
 .control-placeholder button { min-height: 44px; }
@@ -163,14 +165,19 @@ input { background: transparent; border: 0; border-bottom: 1px solid var(--ink-m
 .run-create-card button:disabled:not([aria-busy="true"]) { cursor: not-allowed; }
 .run-create-status { margin: 0; min-height: 1lh; }
 .mobile-run-summary { display: none; }
+.mobile-run-summary small { min-width: 0; overflow-wrap: anywhere; }
+.mobile-run-summary-error { color: var(--danger); }
 .mobile-workbench-nav { display: none; }
+
+.workbench-drawer-layer[data-inline] { display: contents; }
+.workbench-drawer-layer[data-inline] > .workbench-drawer { display: contents; }
 
 @media (min-width: 768px) and (max-width: 1199px) {
   .workbench-tablet-toolbar { align-items: center; background: var(--paper-raised); border-bottom: 1px solid var(--rule); display: grid; grid-template-columns: auto minmax(0, 1fr) auto; height: 52px; padding: 0 var(--space-2); }
   .workbench-tablet-toolbar strong { overflow: hidden; padding: 0 var(--space-2); text-align: center; text-overflow: ellipsis; white-space: nowrap; }
   .workbench-tablet-toolbar button { background: transparent; border: 1px solid var(--rule); min-height: 44px; }
   .workbench-grid { display: block; height: calc(100dvh - 58px - 52px); }
-  .workbench-grid > [data-panel="project"], .workbench-grid > [data-panel="status"] { display: none; }
+  .workbench-grid > [data-panel="project"], .workbench-grid > [data-panel="status"] { display: block; }
   .workbench-grid > .writing-column { height: 100%; }
   .workbench-drawer-layer { bottom: 0; left: 0; position: fixed; right: 0; top: 110px; z-index: 40; }
   .workbench-drawer-backdrop { background: rgb(33 29 36 / 48%); border: 0; inset: 0; position: absolute; width: 100%; }
@@ -183,8 +190,10 @@ input { background: transparent; border: 0; border-bottom: 1px solid var(--ink-m
 
 @media (max-width: 767px) {
   .workbench-shell { padding-bottom: env(safe-area-inset-bottom); }
-  .workbench-topbar { grid-template-columns: 1fr auto; min-height: 56px; }
-  .workbench-topbar p { display: none; }
+  .workbench-topbar { gap: var(--space-1); grid-template-columns: auto minmax(0, 1fr) auto; min-height: 56px; }
+  .workbench-topbar .wordmark { font-size: 1.05rem; }
+  .workbench-topbar p { display: -webkit-box; font-size: 1rem; line-height: 1.15; max-height: 2.3em; min-width: 0; overflow: hidden; overflow-wrap: anywhere; text-align: center; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+  .workbench-topbar-actions span { display: none; }
   .workbench-grid { display: block; height: calc(100dvh - 56px - 68px - env(safe-area-inset-bottom)); }
   .workbench-grid > [data-panel] { display: none; height: 100%; }
   .workbench-grid > [data-mobile-active="true"] { display: block; }
@@ -194,7 +203,9 @@ input { background: transparent; border: 0; border-bottom: 1px solid var(--ink-m
   .writing-column { height: 100%; }
   .activity-panel { grid-template-rows: auto auto minmax(0, 1fr); }
   .activity-scroll { grid-row: 3; padding: var(--space-2); }
-  .mobile-run-summary { align-items: center; background: var(--paper-raised); border: 0; border-bottom: 1px solid var(--rule); display: flex; gap: var(--space-1); min-height: 48px; padding: 0.75rem var(--space-2); text-align: left; width: 100%; }
+  .mobile-run-summary { align-items: center; background: var(--paper-raised); border: 0; border-bottom: 1px solid var(--rule); display: flex; gap: var(--space-1); min-height: 48px; min-width: 0; padding: 0.75rem var(--space-2); text-align: left; width: 100%; }
+  .mobile-run-summary > span:first-child, .mobile-run-summary small { min-width: 0; }
+  .mobile-run-summary small { flex: 1; }
   .prompt-input > div { grid-template-columns: 1fr; }
   .prompt-input .button { width: 100%; }
   .mobile-workbench-nav { background: var(--paper-raised); border-top: 1px solid var(--rule); bottom: env(safe-area-inset-bottom); display: grid; grid-template-columns: repeat(3, 1fr); height: 68px; left: 0; position: fixed; right: 0; z-index: 20; }

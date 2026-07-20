@@ -58,7 +58,8 @@ describe("responsive workbench CSS", () => {
   it("defines the tablet block without crossing its media boundary", () => {
     expect(tablet).toMatch(/\.workbench-tablet-toolbar\s*\{[^}]*height:\s*52px/);
     expect(tablet).toMatch(/\.workbench-grid\s*\{[^}]*display:\s*block[^}]*height:\s*calc\(100dvh - 58px - 52px\)/);
-    expect(tablet).toMatch(/\.workbench-grid > \[data-panel="project"\], \.workbench-grid > \[data-panel="status"\]\s*\{[^}]*display:\s*none/);
+    expect(tablet).toMatch(/\.workbench-grid > \[data-panel="project"\], \.workbench-grid > \[data-panel="status"\]\s*\{[^}]*display:\s*block/);
+    expect(css).toMatch(/\.workbench-drawer-layer\[data-inline\]\s*\{[^}]*display:\s*contents/);
     expect(tablet).toMatch(/\.workbench-grid > \.writing-column\s*\{[^}]*height:\s*100%/);
     expect(tablet).toMatch(/\.workbench-drawer-layer\s*\{(?=[^}]*position:\s*fixed)(?=[^}]*top:\s*110px)(?=[^}]*bottom:\s*0)/);
     expect(tablet).toMatch(/\.workbench-drawer-backdrop\s*\{(?=[^}]*position:\s*absolute)(?=[^}]*inset:\s*0)/);
