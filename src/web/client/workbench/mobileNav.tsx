@@ -9,7 +9,7 @@ const panels: Array<{ id: WorkbenchPanel; label: string; path: string }> = [
 export function MobileNav({ current, onChange }: { current: WorkbenchPanel; onChange(panel: WorkbenchPanel): void }) {
   return <nav className="mobile-workbench-nav" aria-label="创作台区域">
     {panels.map(({ id, label, path }) => <button key={id} type="button" aria-current={current === id ? "page" : undefined} onClick={() => onChange(id)}>
-      <svg aria-hidden="true" viewBox="0 0 24 24"><path d={path} /></svg><span>{label}</span>
+      <svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={path} /></svg><span>{label}</span>
     </button>)}
   </nav>;
 }

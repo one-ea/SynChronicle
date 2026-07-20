@@ -9,12 +9,15 @@ function eventLabel(event: RunEventMessage) {
   return event.agent ?? (typeof payload.agent === "string" ? payload.agent : event.type);
 }
 
-interface ActivityFeedProps {
+interface ActivityFeedBaseProps {
   state: RunViewState;
   chapter?: WorkbenchChapter;
-  runSummary?: { status: string; score?: number };
-  onOpenRun?(): void;
 }
+
+type ActivityFeedProps = ActivityFeedBaseProps & (
+  | { runSummary: { status: string; score?: number }; onOpenRun(): void }
+  | { runSummary?: undefined; onOpenRun?: undefined }
+);
 
 export function ActivityFeed({ state, chapter, runSummary, onOpenRun }: ActivityFeedProps) {
   return <main className="workbench-panel activity-panel" id="main-content" tabIndex={-1}>

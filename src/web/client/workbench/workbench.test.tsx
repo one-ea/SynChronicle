@@ -139,6 +139,20 @@ describe("WorkbenchPage", () => {
     expect(screen.getByRole("button", { name: "运行" })).toHaveAttribute("aria-current", "page");
   });
 
+  it("uses fixed currentColor SVG icons within the mobile navigation height", () => {
+    render(<WorkbenchPage api={api()} project={project} initialEvents={[]} />);
+    const navigation = screen.getByRole("navigation", { name: "创作台区域" });
+    const currentIcon = within(navigation).getByRole("button", { name: "创作" }).querySelector("svg");
+
+    expect(currentIcon).toHaveAttribute("width", "20");
+    expect(currentIcon).toHaveAttribute("height", "20");
+    expect(currentIcon).toHaveAttribute("fill", "none");
+    expect(currentIcon).toHaveAttribute("stroke", "currentColor");
+    expect(currentIcon).toHaveAttribute("stroke-width", "2");
+    expect(currentIcon).toHaveAttribute("stroke-linecap", "round");
+    expect(currentIcon).toHaveAttribute("stroke-linejoin", "round");
+  });
+
   it("defaults mobile workbench to writing and exposes a compact run summary", async () => {
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 375 });
     window.history.replaceState({}, "", "/projects/project-1");
@@ -190,6 +204,32 @@ describe("WorkbenchPage", () => {
     expect(css).toContain(".mobile-workbench-nav");
     expect(css).not.toContain(".layout-controls");
     expect(css).not.toContain(".layout-control-row");
+  });
+
+  it("keeps the run summary mobile-only in a three-row activity grid", () => {
+    const css = readFileSync(resolve(process.cwd(), "src/web/client/styles/global.css"), "utf8");
+
+    expect(css).toMatch(/\.activity-panel\s*\{[^}]*grid-template-rows:\s*auto auto minmax\(0, 1fr\)/);
+    expect(css).toMatch(/\.mobile-run-summary\s*\{[^}]*display:\s*none/);
+    expect(css).toMatch(/@media \(max-width: 767px\)[\s\S]*\.mobile-run-summary\s*\{[^}]*display:\s*(?:flex|grid)/);
+    expect(css).toMatch(/@media \(max-width: 767px\)[\s\S]*\.mobile-workbench-nav\s*\{[^}]*height:\s*68px/);
+    expect(css).toMatch(/@media \(max-width: 767px\)[\s\S]*\.mobile-workbench-nav svg\s*\{[^}]*flex:\s*0 0 20px/);
+  });
+
+  it.each([
+    ["running", "运行中"],
+    ["paused", "已暂停"],
+    ["completed", "已完成"],
+    ["failed", "运行失败"],
+    ["cancelled", "已取消"],
+    ["pending", "等待中"],
+    ["queued", "排队中"],
+    ["custom-status", "custom-status"],
+  ])("localizes run status %s as %s in the compact summary", (status, label) => {
+    const { unmount } = render(<WorkbenchPage api={api()} project={{ ...project, latestRun: { ...project.latestRun!, status } }} initialEvents={[]} />);
+
+    expect(screen.getByRole("button", { name: `查看运行状态：${label}` })).toHaveTextContent(label);
+    unmount();
   });
 
   it("defines the complete tablet workbench geometry contract", () => {

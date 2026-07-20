@@ -45,3 +45,34 @@ Result:
 ## Concerns
 
 - None identified within the Task 3 scope.
+
+## Review Fixes
+
+- Updated `ActivityFeed` to use `auto auto minmax(0, 1fr)` so the heading and compact summary retain natural height while the writing body remains the only flexible scrolling row.
+- Added a default hidden rule for `.mobile-run-summary` and enabled it only inside the `<768px` media query.
+- Updated mobile workbench geometry for a 68px navigation bar.
+- Added explicit 20x20 semantic SVG dimensions and `currentColor` stroke attributes, with constrained mobile layout sizing.
+- Added localized labels for `running`, `paused`, `completed`, `failed`, `cancelled`, `pending`, and `queued`, preserving unknown status values.
+- Made `onOpenRun` required by the `ActivityFeed` prop type whenever `runSummary` is present.
+
+## Review TDD Evidence
+
+- Added failing tests for the three-row activity grid, mobile-only summary visibility, 68px navigation geometry, SVG sizing and stroke inheritance, and localized run statuses.
+- Confirmed the current implementation failed eight of ten focused review tests before production changes.
+- Confirmed all ten focused review tests passed after the fixes.
+
+## Review Verification
+
+Command:
+
+```bash
+pnpm vitest run src/web/client/workbench/workbench.test.tsx src/web/client/app.a11y.test.tsx && pnpm typecheck
+```
+
+Result:
+
+- Workbench tests: 45 passed.
+- Accessibility tests: 3 passed.
+- TypeScript typecheck: passed.
+- Total tests: 48 passed, 0 failed.
+- One initial full-suite run encountered a transient timeout in an unchanged run-creation test; the isolated test passed in 344ms and the complete verification rerun passed.

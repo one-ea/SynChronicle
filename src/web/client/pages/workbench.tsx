@@ -38,6 +38,16 @@ function initialPanel(): WorkbenchPanel {
   const panel = new URL(window.location.href).searchParams.get("panel");
   return panel === "project" || panel === "status" ? panel : "writing";
 }
+const runStatusCopy: Record<string, string> = {
+  running: "运行中",
+  paused: "已暂停",
+  completed: "已完成",
+  failed: "运行失败",
+  cancelled: "已取消",
+  pending: "等待中",
+  queued: "排队中",
+};
+function runStatusLabel(status?: string): string { return status ? runStatusCopy[status] ?? status : "未开始"; }
 function commandStorageKey(projectId: string, runId: string) { return `synchronicle:command:${projectId}:${runId}`; }
 function safeSessionGet(key: string) { try { return sessionStorage.getItem(key); } catch { return null; } }
 function safeSessionSet(key: string, value: string) { try { sessionStorage.setItem(key, value); } catch { /* Persistence is optional. */ } }
@@ -244,7 +254,7 @@ export function WorkbenchPage({ api, project: initialProject, initialEvents, sub
   const embeddedPanels = layoutMode !== "desktop";
   const projectNav = <ProjectNav title={project.title} chapters={project.chapters ?? []} selectedChapterId={selectedChapter?.id} collapsed={embeddedPanels ? false : leftCollapsed} presentation={embeddedPanels ? "embedded" : "desktop"} onToggle={() => setLeftCollapsed((value) => !value)} onSelect={selectChapter} />;
   const runSidebar = <RunSidebar state={state} connection={connectionOverride ?? connection} status={project.latestRun?.status} agents={state.agents.length ? state.agents : project.agents ?? []} usage={state.usage ?? project.usage} pendingQuestion={pendingQuestion} modelConfiguration={project.modelConfiguration} commandFeedback={commandFeedback} commandRetry={commandFeedback?.startsWith("模型切换失败") && lastModelSwitch ? () => switchModel(lastModelSwitch.role, lastModelSwitch.provider, lastModelSwitch.model, lastModelSwitch.credentialId, lastModelSwitch.parameters) : undefined} diagnostics={diagnostics} abortWaiting={abortWaiting} controlsDisabled={!runId} collapsed={embeddedPanels ? false : rightCollapsed} presentation={embeddedPanels ? "embedded" : "desktop"} onToggle={() => setRightCollapsed((value) => !value)} onStart={startRun} onCommand={command} onAnswer={answer} onSwitchModel={switchModel} onDiagnose={diagnose} />;
-  const runStatus = project.latestRun?.status === "running" ? "运行中" : project.latestRun?.status ?? "未开始";
+  const runStatus = runStatusLabel(project.latestRun?.status);
   const writingColumn = <div className="writing-column" data-panel="writing" data-mobile-active={panel === "writing"}><ActivityFeed state={state} chapter={selectedChapter} runSummary={{ status: runStatus, score: state.reflection?.score }} onOpenRun={() => selectPanel("status")} /><PromptInput onSend={steer} /></div>;
 
   return <div className="workbench-shell" data-layout-mode={layoutMode} data-tablet-drawer={tabletDrawer ?? undefined}>
