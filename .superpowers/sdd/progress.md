@@ -51,3 +51,10 @@ Final integration gap wave: lease-version-fenced quota attempts/outbox, fenced d
 Final integration local gate: target regressions, typecheck, tsup/Vite build, Playwright discovery, npm pack dry-run, Drizzle check, and diff check passed. PostgreSQL conditional tests, full browser execution, Docker, Compose, and smoke remain pending CI and stay unchecked.
 Terminal run synchronization wave: public run/checkpoint lifecycle events, continuously connected snapshot refresh, pre-aborted Provider release/listener cleanup, and throttled/session-race login audit are implemented with target TDD coverage.
 Terminal synchronization local gate: 659 Vitest tests, target tests, typecheck, build, Playwright discovery, npm pack dry-run, Drizzle check, and diff check passed. 63 PostgreSQL-conditional tests, full browser execution, Docker, Compose, and smoke remain pending CI and stay unchecked.
+Responsive redesign Task 1: complete (commits 3fc4fdb..e5f85b8, review clean).
+Responsive redesign Task 2: complete (commits e5f85b8..0dcb35d, spec and quality approved).
+Responsive redesign Task 3: complete (commits 0dcb35d..e643984, review clean).
+Responsive redesign Task 4: complete (commits e643984..1520b27, review clean).
+Responsive redesign Task 5: complete (commits 1520b27..8bf0ea6, review clean; prior focus filtering and viewport isolation minors closed).
+Responsive redesign final review gaps: complete (commit 37d403f; review approved with no Critical/Important findings).
+Responsive editorial visual refresh: complete (commit 85e7050; 46 Workbench, 6 CSS contract, 4 A11y, and 16 responsive Playwright checks passed in isolated sequential verification).
