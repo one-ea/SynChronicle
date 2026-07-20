@@ -26,6 +26,7 @@ interface RunSidebarProps {
   abortWaiting: boolean;
   controlsDisabled: boolean;
   collapsed: boolean;
+  presentation?: "desktop" | "embedded";
   onToggle(): void;
   onStart(modelSetId: string): Promise<void>;
   onCommand(command: "pause" | "resume" | "abort"): Promise<void>;
@@ -35,7 +36,7 @@ interface RunSidebarProps {
 }
 
 export function RunSidebar(props: RunSidebarProps) {
-  const { state, connection, status, collapsed, onToggle } = props;
+  const { state, connection, status, collapsed, onToggle, presentation = "desktop" } = props;
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<{ message: string; retry: () => Promise<void> } | null>(null);
   const [selectedModelSetId, setSelectedModelSetId] = useState("");
@@ -66,7 +67,7 @@ export function RunSidebar(props: RunSidebarProps) {
   const connectionRole = connection === "backpressure" || connection === "error" ? "alert" : "status";
   return <aside className="workbench-panel run-sidebar" aria-label="运行状态" data-collapsed={collapsed}>
     <header className="panel-heading">
-      <button className="panel-toggle" type="button" onClick={onToggle} aria-expanded={!collapsed} aria-label={collapsed ? "展开运行状态" : "折叠运行状态"}>{collapsed ? "<" : ">"}</button>
+      {presentation === "desktop" && <button className="panel-toggle" type="button" onClick={onToggle} aria-expanded={!collapsed} aria-label={collapsed ? "展开运行状态" : "折叠运行状态"}>{collapsed ? "<" : ">"}</button>}
       <div><p className="eyebrow">Run room</p><h2>运行状态</h2></div>
     </header>
     {!collapsed && <div className="run-sidebar-body">

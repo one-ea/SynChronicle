@@ -5,15 +5,16 @@ interface ProjectNavProps {
   chapters: WorkbenchChapter[];
   selectedChapterId?: string;
   collapsed: boolean;
+  presentation?: "desktop" | "embedded";
   onToggle(): void;
   onSelect(chapter: WorkbenchChapter): void;
 }
 
-export function ProjectNav({ title, chapters, selectedChapterId, collapsed, onToggle, onSelect }: ProjectNavProps) {
+export function ProjectNav({ title, chapters, selectedChapterId, collapsed, presentation = "desktop", onToggle, onSelect }: ProjectNavProps) {
   return <aside className="workbench-panel project-nav" aria-label="作品结构" data-collapsed={collapsed}>
     <header className="panel-heading">
       <div><p className="eyebrow">Manuscript</p><h2>{title}</h2></div>
-      <button className="panel-toggle" type="button" onClick={onToggle} aria-expanded={!collapsed} aria-label={collapsed ? "展开作品结构" : "折叠作品结构"}>{collapsed ? ">" : "<"}</button>
+      {presentation === "desktop" && <button className="panel-toggle" type="button" onClick={onToggle} aria-expanded={!collapsed} aria-label={collapsed ? "展开作品结构" : "折叠作品结构"}>{collapsed ? ">" : "<"}</button>}
     </header>
     {!collapsed && (chapters.length ? <ol className="chapter-list">
       {chapters.map((chapter) => <li key={chapter.id}>

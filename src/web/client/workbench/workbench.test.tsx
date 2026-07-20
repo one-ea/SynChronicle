@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { act, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ApiClient } from "../api/client.js";
 import { ApiError } from "../api/client.js";
@@ -81,7 +81,10 @@ describe("run event projection", () => {
 });
 
 describe("WorkbenchPage", () => {
-  beforeEach(() => sessionStorage.clear());
+  beforeEach(() => {
+    sessionStorage.clear();
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1200 });
+  });
 
   it("resolves the three workbench layout ranges", () => {
     expect(resolveWorkbenchLayout(375)).toBe("mobile");
@@ -173,6 +176,65 @@ describe("WorkbenchPage", () => {
     act(() => window.dispatchEvent(new Event("resize")));
     expect(shell).toHaveAttribute("data-layout-mode", "desktop");
     expect(shell).not.toHaveAttribute("data-tablet-drawer");
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: originalWidth });
+  });
+
+  it("opens mutually exclusive tablet drawers and restores trigger focus", async () => {
+    const originalWidth = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1024 });
+    fireEvent(window, new Event("resize"));
+    const user = userEvent.setup();
+    render(<WorkbenchPage api={api()} project={project} initialEvents={[]} />);
+
+    const projectTrigger = screen.getByRole("button", { name: "打开章节目录" });
+    const statusTrigger = screen.getByRole("button", { name: "打开运行状态" });
+    expect(screen.queryByLabelText("作品结构")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("运行状态")).not.toBeInTheDocument();
+
+    await user.click(projectTrigger);
+    expect(screen.getByRole("dialog", { name: "章节目录" })).toBeVisible();
+    expect(document.querySelectorAll(".project-nav")).toHaveLength(1);
+
+    await user.click(statusTrigger);
+    expect(screen.queryByRole("dialog", { name: "章节目录" })).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "运行状态" })).toBeVisible();
+    expect(document.querySelectorAll(".run-sidebar")).toHaveLength(1);
+    const ids = [...document.querySelectorAll<HTMLElement>("[id]")].map(({ id }) => id);
+    expect(new Set(ids).size).toBe(ids.length);
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "运行状态" })).not.toBeInTheDocument();
+    expect(statusTrigger).toHaveFocus();
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: originalWidth });
+  });
+
+  it("traps focus inside tablet drawers and restores focus from every close control", async () => {
+    const originalWidth = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1024 });
+    const user = userEvent.setup();
+    render(<WorkbenchPage api={api()} project={project} initialEvents={[]} />);
+
+    const projectTrigger = screen.getByRole("button", { name: "打开章节目录" });
+    await user.click(projectTrigger);
+    const dialog = screen.getByRole("dialog", { name: "章节目录" });
+    const close = within(dialog).getByRole("button", { name: "关闭" });
+    const last = within(dialog).getByRole("button", { name: "查看章节《没有寄件人的灯塔》" });
+    expect(close).toHaveFocus();
+
+    last.focus();
+    await user.tab();
+    expect(close).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(last).toHaveFocus();
+
+    await user.click(last);
+    expect(last).toHaveFocus();
+
+    await user.click(close);
+    expect(projectTrigger).toHaveFocus();
+    await user.click(projectTrigger);
+    await user.click(screen.getByRole("button", { name: "关闭章节目录" }));
+    expect(projectTrigger).toHaveFocus();
     Object.defineProperty(window, "innerWidth", { configurable: true, value: originalWidth });
   });
 

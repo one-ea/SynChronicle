@@ -7,6 +7,7 @@ import { ProjectNav } from "../workbench/projectNav.js";
 import { PromptInput } from "../workbench/promptInput.js";
 import { RunSidebar } from "../workbench/runSidebar.js";
 import { useWorkbenchLayout } from "../workbench/useWorkbenchLayout.js";
+import { WorkbenchDrawer } from "../workbench/workbenchDrawer.js";
 
 export interface WorkbenchChapter { id: string; runId?: string; sequence: number; title: string; status: string; body: string; version?: number }
 export interface WorkbenchProject {
@@ -85,6 +86,8 @@ export function WorkbenchPage({ api, project: initialProject, initialEvents, sub
   const [pendingCommandId, setPendingCommandId] = useState<string | null>(() => initialRunId ? safeSessionGet(commandStorageKey(project.id, initialRunId)) : null);
   const [lastModelSwitch, setLastModelSwitch] = useState<{ role: string; provider: string; model: string; credentialId?: string; parameters?: Record<string, unknown> } | null>(null);
   const scrollPositions = useRef<Record<WorkbenchPanel, number>>({ project: 0, writing: 0, status: 0 });
+  const projectDrawerTrigger = useRef<HTMLButtonElement>(null);
+  const statusDrawerTrigger = useRef<HTMLButtonElement>(null);
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const previousConnection = useRef<ConnectionState | undefined>(undefined);
   const { state, connection } = useRunEvents({ runId, initialEvents, subscribe });
@@ -238,14 +241,28 @@ export function WorkbenchPage({ api, project: initialProject, initialEvents, sub
     setDiagnostics(`${result.diagnostics.summary} · cursor ${result.diagnostics.cursor} · checkpoint ${result.diagnostics.checkpointVersion ?? "none"}`);
   }
 
+  const embeddedPanels = layoutMode !== "desktop";
+  const projectNav = <ProjectNav title={project.title} chapters={project.chapters ?? []} selectedChapterId={selectedChapter?.id} collapsed={embeddedPanels ? false : leftCollapsed} presentation={embeddedPanels ? "embedded" : "desktop"} onToggle={() => setLeftCollapsed((value) => !value)} onSelect={selectChapter} />;
+  const runSidebar = <RunSidebar state={state} connection={connectionOverride ?? connection} status={project.latestRun?.status} agents={state.agents.length ? state.agents : project.agents ?? []} usage={state.usage ?? project.usage} pendingQuestion={pendingQuestion} modelConfiguration={project.modelConfiguration} commandFeedback={commandFeedback} commandRetry={commandFeedback?.startsWith("模型切换失败") && lastModelSwitch ? () => switchModel(lastModelSwitch.role, lastModelSwitch.provider, lastModelSwitch.model, lastModelSwitch.credentialId, lastModelSwitch.parameters) : undefined} diagnostics={diagnostics} abortWaiting={abortWaiting} controlsDisabled={!runId} collapsed={embeddedPanels ? false : rightCollapsed} presentation={embeddedPanels ? "embedded" : "desktop"} onToggle={() => setRightCollapsed((value) => !value)} onStart={startRun} onCommand={command} onAnswer={answer} onSwitchModel={switchModel} onDiagnose={diagnose} />;
+  const writingColumn = <div className="writing-column" data-panel="writing" data-mobile-active={panel === "writing"}><ActivityFeed state={state} chapter={selectedChapter} /><PromptInput onSend={steer} /></div>;
+
   return <div className="workbench-shell" data-layout-mode={layoutMode} data-tablet-drawer={tabletDrawer ?? undefined}>
     <a className="skip-link" href="#main-content">跳到创作流</a>
     <header className="workbench-topbar"><a href="/projects" className="wordmark">SynChronicle</a><p>{project.title}</p><div className="workbench-topbar-actions"><span>{project.latestRun?.status === "running" ? "创作进行中" : "创作台"}</span></div></header>
+    {layoutMode === "tablet" && <div className="workbench-tablet-toolbar">
+      <button ref={projectDrawerTrigger} type="button" onClick={() => setTabletDrawer("project")}>打开章节目录</button>
+      <strong>{selectedChapter?.title ?? project.title}</strong>
+      <button ref={statusDrawerTrigger} type="button" onClick={() => setTabletDrawer("status")}>打开运行状态</button>
+    </div>}
     <div className={`workbench-grid left-${leftCollapsed ? "closed" : "open"} right-${rightCollapsed ? "closed" : "open"}`}>
-      <div data-panel="project" data-mobile-active={panel === "project"}><ProjectNav title={project.title} chapters={project.chapters ?? []} selectedChapterId={selectedChapter?.id} collapsed={leftCollapsed} onToggle={() => setLeftCollapsed((value) => !value)} onSelect={selectChapter} /></div>
-      <div className="writing-column" data-panel="writing" data-mobile-active={panel === "writing"}><ActivityFeed state={state} chapter={selectedChapter} /><PromptInput onSend={steer} /></div>
-      <div data-panel="status" data-mobile-active={panel === "status"}><RunSidebar state={state} connection={connectionOverride ?? connection} status={project.latestRun?.status} agents={state.agents.length ? state.agents : project.agents ?? []} usage={state.usage ?? project.usage} pendingQuestion={pendingQuestion} modelConfiguration={project.modelConfiguration} commandFeedback={commandFeedback} commandRetry={commandFeedback?.startsWith("模型切换失败") && lastModelSwitch ? () => switchModel(lastModelSwitch.role, lastModelSwitch.provider, lastModelSwitch.model, lastModelSwitch.credentialId, lastModelSwitch.parameters) : undefined} diagnostics={diagnostics} abortWaiting={abortWaiting} controlsDisabled={!runId} collapsed={rightCollapsed} onToggle={() => setRightCollapsed((value) => !value)} onStart={startRun} onCommand={command} onAnswer={answer} onSwitchModel={switchModel} onDiagnose={diagnose} /></div>
+      {layoutMode === "desktop" && <div data-panel="project">{projectNav}</div>}
+      {layoutMode === "mobile" && <div data-panel="project" data-mobile-active={panel === "project"}>{projectNav}</div>}
+      {writingColumn}
+      {layoutMode === "desktop" && <div data-panel="status">{runSidebar}</div>}
+      {layoutMode === "mobile" && <div data-panel="status" data-mobile-active={panel === "status"}>{runSidebar}</div>}
     </div>
+    <WorkbenchDrawer side="left" label="章节目录" open={layoutMode === "tablet" && tabletDrawer === "project"} triggerRef={projectDrawerTrigger} onClose={() => setTabletDrawer(null)}>{projectNav}</WorkbenchDrawer>
+    <WorkbenchDrawer side="right" label="运行状态" open={layoutMode === "tablet" && tabletDrawer === "status"} triggerRef={statusDrawerTrigger} onClose={() => setTabletDrawer(null)}>{runSidebar}</WorkbenchDrawer>
     <MobileNav current={panel} onChange={selectPanel} />
   </div>;
 }
