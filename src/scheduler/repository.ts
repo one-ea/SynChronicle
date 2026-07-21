@@ -8,6 +8,7 @@ import type { EventBroker } from "../realtime/broker.js";
 import { redactSecrets } from "../credentials/redactor.js";
 import { LEGACY_COMMAND_ID_PREFIX } from "./types.js";
 import { hasKnownPlatformPrice } from "../quota/pricing.js";
+import { normalizePlatformModelCapabilities, assertSelectionAllowed } from "../models/capabilities.js";
 import type {
   EnqueueRunInput,
   ClaimedTask,
@@ -138,16 +139,35 @@ export class SchedulerRepository {
     return Boolean(task);
   }
 
-  async validateModelSelection(auth: RequestAuth, selection: { provider: string; model: string; credentialId?: string }): Promise<boolean> {
-    if (selection.credentialId) {
-      const [credential] = await this.db.select({ id: providerCredentials.id }).from(providerCredentials).where(and(eq(providerCredentials.id, selection.credentialId), eq(providerCredentials.userId, auth.userId), eq(providerCredentials.provider, selection.provider), eq(providerCredentials.status, "active"))).limit(1);
-      if (!credential) return false;
-      const configured = await this.db.select({ model: platformModels.model, metadata: platformModels.metadata, inputPrice: platformModels.inputPrice, outputPrice: platformModels.outputPrice }).from(platformModels).where(and(eq(platformModels.provider, selection.provider), eq(platformModels.status, "active")));
-      const available = configured.filter((model) => hasKnownPlatformPrice(model.metadata, model.inputPrice, model.outputPrice));
-      return available.length === 0 || available.some(({ model }) => model === selection.model);
+  async validateModelSelection(auth: RequestAuth, selection: { provider: string; model: string; credentialId?: string; parameters?: { temperature?: number; maxTokens?: number; reasoningEffort?: "low" | "medium" | "high" } }): Promise<boolean> {
+    const [model] = await this.db.select({
+      capabilities: platformModels.capabilities,
+      metadata: platformModels.metadata,
+      inputPrice: platformModels.inputPrice,
+      outputPrice: platformModels.outputPrice,
+    }).from(platformModels).where(
+      and(eq(platformModels.provider, selection.provider), eq(platformModels.model, selection.model), eq(platformModels.status, "active"))
+    ).limit(1);
+
+    if (!model || !hasKnownPlatformPrice(model.metadata, model.inputPrice, model.outputPrice)) return false;
+
+    const caps = normalizePlatformModelCapabilities(model.capabilities);
+    try {
+      assertSelectionAllowed(selection, { capabilities: caps }, {
+        allowPlatformCredential: caps.policy.allowPlatformCredential,
+        allowUserCredential: caps.policy.allowUserCredential,
+      });
+    } catch {
+      return false;
     }
-    const [model] = await this.db.select({ metadata: platformModels.metadata, inputPrice: platformModels.inputPrice, outputPrice: platformModels.outputPrice }).from(platformModels).where(and(eq(platformModels.provider, selection.provider), eq(platformModels.model, selection.model), eq(platformModels.status, "active"))).limit(1);
-    return Boolean(model && hasKnownPlatformPrice(model.metadata, model.inputPrice, model.outputPrice));
+
+    if (selection.credentialId) {
+      const [credential] = await this.db.select({ id: providerCredentials.id }).from(providerCredentials).where(
+        and(eq(providerCredentials.id, selection.credentialId), eq(providerCredentials.userId, auth.userId), eq(providerCredentials.provider, selection.provider), eq(providerCredentials.status, "active"))
+      ).limit(1);
+      if (!credential) return false;
+    }
+    return true;
   }
 
   async enqueueRun(auth: RequestAuth, projectId: string, input: EnqueueRunInput): Promise<RunRow | null> {

@@ -3,10 +3,38 @@ import Fastify from "fastify";
 import { describe, expect, it } from "vitest";
 import type { RequestAuth } from "../auth/plugin.js";
 import { runRoutes, type RunCommandRepository, type RunRecord } from "./routes.js";
+import { normalizePlatformModelCapabilities, assertSelectionAllowed, type PlatformModelCapabilities } from "../../models/capabilities.js";
 
 class MemoryRuns implements RunCommandRepository {
   readonly runs = new Map<string, RunRecord>();
   readonly starts = new Map<string, string>();
+  private readonly catalog: Map<string, PlatformModelCapabilities>;
+
+  constructor() {
+    this.catalog = new Map();
+    this.catalog.set("openai:gpt-5", normalizePlatformModelCapabilities({
+      contextWindow: 128000,
+      maxOutputTokens: 16384,
+      pricing: { inputPer1M: 5, outputPer1M: 15 },
+      generation: { temperature: { min: 0, max: 2 }, reasoningEffort: [], systemPrompt: true },
+      policy: { allowPlatformCredential: true, allowUserCredential: true },
+    }));
+  }
+
+  async validateModelSelection(_auth: RequestAuth, selection: { provider: string; model: string; credentialId?: string; parameters?: { temperature?: number; maxTokens?: number; reasoningEffort?: "low" | "medium" | "high" } }): Promise<boolean> {
+    const key = `${selection.provider}:${selection.model}`;
+    const caps = this.catalog.get(key);
+    if (!caps) return true;
+    try {
+      assertSelectionAllowed(selection, { capabilities: caps }, {
+        allowPlatformCredential: caps.policy.allowPlatformCredential,
+        allowUserCredential: caps.policy.allowUserCredential,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
   async enqueueRun(auth: RequestAuth, projectId: string, input: { idempotencyKey: string; configuration?: Record<string, unknown> }): Promise<RunRecord | null> {
     if (projectId === "missing") return null;
@@ -189,6 +217,21 @@ describe("run command routes", () => {
       expect.objectContaining({ instruction: "[AskUser] {\"questionId\":\"event-8\",\"answers\":{\"希望多长？\":\"长篇\"}}" }),
       expect.objectContaining({ instruction: "[ModelSwitch] {\"role\":\"writer\",\"provider\":\"openai\",\"model\":\"gpt-5\"}" }),
     ]));
+    await app.close();
+  });
+
+  it("rejects model switch with unsupported reasoningEffort", async () => {
+    const { app } = await testApp();
+    const headers = { "x-user-id": "alice" };
+    const start = await app.inject({ method: "POST", url: "/api/projects/project-a/runs", headers, payload: { idempotencyKey: "capability-start" } });
+    const run = start.json().run as RunRecord;
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/projects/project-a/runs/${run.id}/model`,
+      headers,
+      payload: { role: "writer", provider: "openai", model: "gpt-5", parameters: { reasoningEffort: "high" } },
+    });
+    expect(response.statusCode).toBe(400);
     await app.close();
   });
 
