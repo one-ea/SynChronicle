@@ -59,4 +59,36 @@ describe("admin routes", () => {
 
     expect(secret).toEqual({ provider: "openai", apiKey: "", baseUrl: undefined });
   });
+
+  it("persists and returns normalized model capabilities", async () => {
+    const { app, repository } = await server("admin");
+    const created = { id: "m", provider: "openai", model: "gpt", status: "active", capabilities: { contextWindow: 128000, maxOutputTokens: 16384, pricing: { inputPer1M: 1, outputPer1M: 2 }, modalities: { text: true, vision: true, audio: false }, tools: { toolCalling: true, structuredOutput: false, jsonMode: false }, generation: { streaming: true, temperature: { min: 0, max: 2 }, reasoningEffort: ["low", "medium"], systemPrompt: true }, policy: { allowPlatformCredential: true, allowUserCredential: true, tags: [] } }, inputPrice: "1", outputPrice: "2", credentialReference: "env:OPENAI_API_KEY", metadata: {} };
+    repository.createModel.mockResolvedValueOnce(created as never);
+    repository.listModels.mockResolvedValueOnce([created] as never);
+
+    const headers = { origin: "https://app.example.test" };
+    const createResponse = await app.inject({
+      method: "POST", url: "/api/admin/models",
+      headers,
+      payload: { provider: "openai", model: "gpt", status: "active", inputPrice: 1, outputPrice: 2, credentialReference: "env:OPENAI_API_KEY", capabilities: { contextWindow: 128000, maxOutputTokens: 16384, generation: { reasoningEffort: ["low", "medium"] } } },
+    });
+    expect(createResponse.statusCode).toBe(201);
+    expect(createResponse.json().model).toHaveProperty("capabilities");
+
+    const listResponse = await app.inject({ method: "GET", url: "/api/admin/models" });
+    expect(listResponse.json().models[0]).toHaveProperty("capabilities");
+    expect(listResponse.json().models[0]).not.toHaveProperty("credentialReference");
+    await app.close();
+  });
+
+  it("rejects capabilities with negative context window", async () => {
+    const { app } = await server("admin");
+    const response = await app.inject({
+      method: "POST", url: "/api/admin/models",
+      headers: { origin: "https://app.example.test" },
+      payload: { provider: "openai", model: "gpt", status: "active", inputPrice: 1, outputPrice: 2, credentialReference: "env:OPENAI_API_KEY", capabilities: { contextWindow: -1, maxOutputTokens: 100 } },
+    });
+    expect(response.statusCode).toBe(400);
+    await app.close();
+  });
 });

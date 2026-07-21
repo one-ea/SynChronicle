@@ -58,3 +58,6 @@ Responsive redesign Task 4: complete (commits e643984..1520b27, review clean).
 Responsive redesign Task 5: complete (commits 1520b27..8bf0ea6, review clean; prior focus filtering and viewport isolation minors closed).
 Responsive redesign final review gaps: complete (commit 37d403f; review approved with no Critical/Important findings).
 Responsive editorial visual refresh: complete (commit 85e7050; 46 Workbench, 6 CSS contract, 4 A11y, and 16 responsive Playwright checks passed in isolated sequential verification).
+Task 1: complete (commits 71c99ee..13396dd, review clean)
+Task 2: complete (commits 13396dd..eac52e5, review clean)
+Task 3: complete (commits eac52e5..6a335f1, review clean)
