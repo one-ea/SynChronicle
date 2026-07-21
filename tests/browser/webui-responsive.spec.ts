@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { validateModelSetInput } from "../../src/web/providers/modelConfig.js";
+import { normalizePlatformModelCapabilities } from "../../src/models/capabilities.js";
 
 const project = {
   id: "7ef5fd40-38a7-43dd-856c-b2c074fcf611",
@@ -17,7 +18,7 @@ const modelSetInput = {
   agents: { writer: { provider: "openai", model: "gpt-5", parameters: { temperature: 0.4 } } },
 };
 
-const providerCatalog = [{ provider: "openai", models: ["gpt-5"], credentials: [] }];
+const providerCatalog = [{ provider: "openai", models: [{ model: "gpt-5", capabilities: { contextWindow: 128000, maxOutputTokens: 16384 } }], credentials: [] }];
 
 const modelConfiguration = {
   activeModelSetId: "set-1",
@@ -43,7 +44,10 @@ async function expectNoHorizontalOverflow(page: Page) {
 async function installProjectRoutes(page: Page, longContent = false) {
   expect(() => validateModelSetInput(modelSetInput, {
     credentials: [],
-    platformModels: providerCatalog.flatMap(({ provider, models }) => models.map((model) => ({ provider, model }))),
+    platformModels: providerCatalog.flatMap(({ provider, models }) => models.map(({ model, capabilities: caps }) => ({
+      provider, model,
+      capabilities: normalizePlatformModelCapabilities(caps ?? { contextWindow: 128000, maxOutputTokens: 16384 }),
+    }))),
   })).not.toThrow();
   await page.route("**/api/projects/", async (route) => {
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [project] }) });
