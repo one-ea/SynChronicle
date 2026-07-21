@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { assertSelectionAllowed, type PlatformModelCapabilities } from "../../models/capabilities.js";
 
 export const ParametersSchema = z.object({
   temperature: z.number().min(0).max(2).optional(),
@@ -22,22 +23,27 @@ export type ModelSetInput = z.infer<typeof ModelSetInputSchema>;
 export type ModelConfigurationSnapshot = ModelSetInput & { modelSetId: string; version: number };
 export interface ModelCatalog {
   credentials: Array<{ id: string; provider: string; label?: string }>;
-  platformModels: Array<{ provider: string; model: string }>;
+  platformModels: Array<{ provider: string; model: string; capabilities: PlatformModelCapabilities }>;
 }
 
 export function validateModelSetInput(input: unknown, catalog: ModelCatalog): ModelSetInput {
   const parsed = ModelSetInputSchema.parse(input);
   for (const selection of Object.values(parsed.agents)) {
+    const catalogEntry = catalog.platformModels.find(
+      (m) => m.provider === selection.provider && m.model === selection.model
+    );
+    if (!catalogEntry) throw new Error("model_unavailable: provider/model not in catalog");
+
     if (selection.credentialId) {
       const credential = catalog.credentials.find(({ id }) => id === selection.credentialId);
       if (!credential || credential.provider !== selection.provider) throw new Error("Invalid credential reference");
-      const providerModels = catalog.platformModels.filter(({ provider }) => provider === selection.provider);
-      if (providerModels.length && !providerModels.some(({ model }) => model === selection.model)) throw new Error("Invalid provider model");
-      continue;
     }
-    const knownProvider = catalog.platformModels.some(({ provider }) => provider === selection.provider);
-    if (!knownProvider) throw new Error("Provider is unavailable");
-    if (!catalog.platformModels.some(({ provider, model }) => provider === selection.provider && model === selection.model)) throw new Error("Invalid platform model");
+
+    assertSelectionAllowed(
+      { provider: selection.provider, model: selection.model, credentialId: selection.credentialId, parameters: selection.parameters },
+      catalogEntry,
+      { allowPlatformCredential: catalogEntry.capabilities.policy.allowPlatformCredential, allowUserCredential: catalogEntry.capabilities.policy.allowUserCredential },
+    );
   }
   return parsed;
 }
