@@ -22,7 +22,7 @@ export interface WorkbenchProject {
   modelConfiguration?: {
     activeModelSetId?: string;
     modelSets: Array<{ id: string; name: string; version: number; agents: Record<string, { provider: string; model: string; credentialId?: string; parameters?: Record<string, unknown> }> }>;
-    providers: Array<{ provider: string; models: string[]; credentials: Array<{ id: string; label: string }> }>;
+    providers: Array<{ provider: string; models: Array<{ model: string; capabilities?: { contextWindow?: number; maxOutputTokens?: number } }>; credentials: Array<{ id: string; label: string }> }>;
   };
 }
 

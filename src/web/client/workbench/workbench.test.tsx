@@ -24,7 +24,7 @@ const project: WorkbenchProject = {
   modelConfiguration: {
     activeModelSetId: "set-1",
     modelSets: [{ id: "set-1", name: "主力模型", version: 2, agents: { writer: { provider: "openai", model: "gpt-5", credentialId: "credential-1", parameters: { temperature: 0.4 } } } }],
-    providers: [{ provider: "openai", models: ["gpt-5"], credentials: [{ id: "credential-1", label: "OpenAI personal" }] }],
+    providers: [{ provider: "openai", models: [{ model: "gpt-5", capabilities: { contextWindow: 128000, maxOutputTokens: 16384 } }], credentials: [{ id: "credential-1", label: "OpenAI personal" }] }],
   },
 };
 
@@ -441,6 +441,18 @@ describe("WorkbenchPage", () => {
     rerender(<RunSidebar {...sidebarProps} />);
     expect(modelSet).toHaveValue("");
     expect(screen.getByRole("button", { name: "启动运行" })).toBeDisabled();
+  });
+
+  it("shows model capability hints after selecting a model with capabilities", async () => {
+    const user = setupUser();
+    render(<RunSidebar state={initialRunViewState} connection="idle" agents={[]} modelConfiguration={project.modelConfiguration} commandFeedback={null} diagnostics={null} abortWaiting={false} controlsDisabled={true} collapsed={false} onToggle={vi.fn()} onStart={vi.fn()} onCommand={vi.fn()} onAnswer={vi.fn()} onSwitchModel={vi.fn()} onDiagnose={vi.fn()} />);
+
+    await user.selectOptions(screen.getByLabelText("Provider"), "openai");
+    await user.selectOptions(screen.getByLabelText("模型"), "gpt-5");
+
+    expect(screen.getByText(/128[,.]?000/)).toBeVisible();
+    expect(screen.getByText(/16[,.]?384/)).toBeVisible();
+    expect(screen.getByText(/tokens/)).toBeVisible();
   });
 
   it("announces pending run creation and prevents duplicate submission", async () => {
