@@ -62,6 +62,7 @@ export const platformModels = pgTable(
     outputPrice: numeric("output_price", { precision: 18, scale: 8 }).notNull().default("0"),
     credentialReference: text("credential_reference").notNull(),
     metadata: jsonb("metadata").notNull().default({}),
+    capabilities: jsonb("capabilities").notNull().default({}),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

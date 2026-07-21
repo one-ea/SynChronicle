@@ -120,6 +120,13 @@
       "when": 1784192105835,
       "tag": "0016_lease_fencing",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1784649171017,
+      "tag": "0017_capabilities_column",
+      "breakpoints": true
     }
   ]
 }
