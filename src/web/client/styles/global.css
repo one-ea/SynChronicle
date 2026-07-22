@@ -212,7 +212,7 @@ input { background: var(--paper); border: var(--hairline); border-radius: var(--
   .activity-scroll { grid-row: 3; padding: var(--space-2); }
   .activity-heading { min-height: 88px; padding-block: 1rem; }
   .activity-heading h1 { font-size: 2.35rem; }
-  .manuscript-page { border-radius: 18px; min-height: 0; padding: 1.5rem; }
+  .manuscript-page { border-radius: var(--radius); min-height: 0; padding: 1.5rem; }
   .mobile-run-summary { align-items: center; background: var(--paper-raised); border: 0; border-bottom: 1px solid var(--rule); display: flex; gap: var(--space-1); min-height: 48px; min-width: 0; padding: 0.75rem var(--space-2); text-align: left; width: 100%; }
   .mobile-run-summary > span:first-child, .mobile-run-summary small { min-width: 0; }
   .mobile-run-summary small { flex: 1; }

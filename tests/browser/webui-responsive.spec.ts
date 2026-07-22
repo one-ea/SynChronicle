@@ -163,9 +163,9 @@ for (const width of [375, 768, 1024, 1200, 1440, 1920]) {
       await expect(page.getByRole("navigation", { name: "创作台区域" })).toBeVisible();
       await expect(page.getByRole("button", { name: "创作" })).toHaveAttribute("aria-current", "page");
       await expect(page.getByRole("button", { name: "打开章节目录" })).toBeHidden();
-      await expect(page.locator(".manuscript-page")).toHaveCSS("border-radius", "18px");
+      await expect(page.locator(".manuscript-page")).toHaveCSS("border-radius", "0px");
       await expect(page.locator(".mobile-composer")).toHaveCSS("z-index", "10");
-      await expect(page.getByRole("button", { name: "创作" })).toHaveCSS("border-radius", "999px");
+      await expect(page.getByRole("button", { name: "创作" })).toHaveCSS("border-radius", "0px");
       const composerBox = await page.locator(".prompt-input").boundingBox();
       const navigationBox = await page.getByRole("navigation", { name: "创作台区域" }).boundingBox();
       expect(composerBox).not.toBeNull();
