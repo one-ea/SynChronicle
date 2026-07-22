@@ -4,7 +4,7 @@
 
 **Goal:** Replace the repository README with a concise editorial product homepage and add a real WebUI workbench screenshot.
 
-**Architecture:** Keep the change documentation-only. Capture the existing demo WebUI with Playwright, rewrite `README.md` from verified repository facts, and validate commands, links, image metadata, package branding, build output, and Markdown whitespace before pushing.
+**Architecture:** Keep the change documentation-only. Capture the existing WebUI with Playwright using caller-provided preview settings, rewrite `README.md` from verified repository facts, and validate commands, links, image metadata, package branding, build output, and Markdown whitespace before pushing.
 
 **Tech Stack:** GitHub Markdown, Mermaid, Playwright, Node.js 24, pnpm 10, TypeScript, Fastify, React, PostgreSQL, Drizzle ORM
 
@@ -28,7 +28,7 @@
 - Create: `docs/assets/webui-workbench.png`
 
 **Interfaces:**
-- Consumes: running demo WebUI at the current preview URL, credentials `demo` / `demo`, Playwright Chromium
+- Consumes: `README_PREVIEW_URL`, `README_PREVIEW_USERNAME`, `README_PREVIEW_PASSWORD`, Playwright Chromium
 - Produces: a 1440px-wide PNG referenced by `README.md`
 
 - [ ] **Step 1: Verify the current preview responds**
@@ -36,10 +36,10 @@
 Run:
 
 ```bash
-curl --fail --silent --show-error --max-time 10 https://5173-d0d19cba6cc31e88.monkeycode-ai.online/login >/dev/null
+curl --fail --silent --show-error --max-time 10 "${README_PREVIEW_URL%/}/login" >/dev/null
 ```
 
-Expected: exit status 0.
+Expected: `README_PREVIEW_URL` is set and the command exits 0.
 
 - [ ] **Step 2: Verify the screenshot destination directory exists**
 
@@ -56,7 +56,7 @@ Expected: the `docs` directory is listed successfully. Create `docs/assets` with
 Run a bounded Playwright script from the repository root:
 
 ```bash
-node --input-type=module -e 'import { chromium } from "playwright"; const browser = await chromium.launch({ headless: true }); const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1 }); await page.goto("https://5173-d0d19cba6cc31e88.monkeycode-ai.online/login", { waitUntil: "networkidle" }); await page.getByLabel("用户名").fill("demo"); await page.getByLabel("密码").fill("demo"); await page.getByRole("button", { name: "登录", exact: true }).click(); await page.waitForLoadState("networkidle"); const firstProject = page.locator("a[href^=\"/projects/\"]").first(); if (await firstProject.count()) { await firstProject.click(); await page.waitForLoadState("networkidle"); } await page.screenshot({ path: "docs/assets/webui-workbench.png", fullPage: false }); await browser.close();'
+node --input-type=module -e 'import { chromium } from "playwright"; const { README_PREVIEW_URL: url, README_PREVIEW_USERNAME: username, README_PREVIEW_PASSWORD: password } = process.env; if (!url || !username || !password) throw new Error("README preview environment variables are required"); const browser = await chromium.launch({ headless: true }); const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1 }); await page.goto(`${url.replace(/\/$/, "")}/login`, { waitUntil: "networkidle" }); await page.getByLabel("用户名").fill(username); await page.getByLabel("密码").fill(password); await page.getByRole("button", { name: "登录", exact: true }).click(); await page.waitForLoadState("networkidle"); const firstProject = page.locator("a[href^=\"/projects/\"]").first(); if (await firstProject.count()) { await firstProject.click(); await page.waitForLoadState("networkidle"); } await page.screenshot({ path: "docs/assets/webui-workbench.png", fullPage: false }); await browser.close();'
 ```
 
 Expected: `docs/assets/webui-workbench.png` is created from the authenticated application.
@@ -110,7 +110,7 @@ Use `apply_patch` to rewrite `README.md` with these exact top-level sections in 
 ## License
 ```
 
-The hero must include a centered title block, one-sentence Chinese positioning, Node.js/npm/license badges, compact anchor navigation, and `docs/assets/webui-workbench.png` immediately after the hero.
+The hero must include a centered title block, one-sentence Chinese positioning, Node.js and license badges, compact anchor navigation, and `docs/assets/webui-workbench.png` immediately after the hero.
 
 - [ ] **Step 2: Add the product workflow diagram**
 
@@ -133,9 +133,13 @@ flowchart LR
 Include these verified command groups:
 
 ```bash
-npm install -g synchronicle
-synchronicle
-synchronicle --headless --prompt "写一本发生在海上空间站的悬疑长篇"
+git clone https://github.com/one-ea/SynChronicle.git
+cd SynChronicle
+corepack enable
+pnpm install --frozen-lockfile
+pnpm build
+node dist/cli/index.js
+node dist/cli/index.js --headless --prompt "写一本发生在海上空间站的悬疑长篇"
 ```
 
 ```bash
