@@ -1,4 +1,4 @@
-// @vitest-environment node
+// @vitest-environment jsdom
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -94,5 +94,27 @@ describe("responsive workbench CSS", () => {
 
   it("adds wide-desktop reading space inside the 1600px block", () => {
     expect(wideDesktop).toMatch(/\.activity-scroll\s*\{[^}]*padding-inline:\s*clamp\(4rem, 8vw, 9rem\)/);
+  });
+
+  it("defines Wired design tokens with correct values", () => {
+    const tokens = readFileSync(resolve(process.cwd(), "src/web/client/styles/tokens.css"), "utf8");
+    const styleEl = document.createElement("style");
+    styleEl.textContent = tokens;
+    document.head.appendChild(styleEl);
+
+    const style = getComputedStyle(document.documentElement);
+    expect(style.getPropertyValue("--ink").trim()).toBe("#000000");
+    expect(style.getPropertyValue("--paper").trim()).toBe("#ffffff");
+    expect(style.getPropertyValue("--rule").trim()).toBe("#e0e0e0");
+    expect(style.getPropertyValue("--link").trim()).toBe("#057dbc");
+    expect(style.getPropertyValue("--font-display")).toContain("Playfair Display");
+    expect(style.getPropertyValue("--font-body")).toContain("Inter");
+    expect(style.getPropertyValue("--font-editorial")).toContain("Lora");
+    expect(style.getPropertyValue("--radius").trim()).toBe("0px");
+    expect(style.getPropertyValue("--accent").trim()).toBe("#000000");
+    // Verify purple tokens are gone
+    expect(style.getPropertyValue("--purple").trim()).toBe("");
+    expect(style.getPropertyValue("--purple-dark").trim()).toBe("");
+    expect(style.getPropertyValue("--purple-pale").trim()).toBe("");
   });
 });
