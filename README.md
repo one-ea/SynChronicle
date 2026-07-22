@@ -2,6 +2,8 @@
 
 <div align="center">
 
+<strong>SynChronicle</strong>
+
 **多智能体 AI 长篇创作引擎，让规划、写作、评审与续写在同一条可恢复的工作流中持续推进。**
 
 [![Node.js](https://img.shields.io/badge/Node.js-24%2B-111111?logo=node.js&logoColor=white)](https://nodejs.org/)
@@ -194,7 +196,7 @@ pnpm test:browser
 - Web 平台提供来源校验、请求限流、安全响应头、管理接口 RBAC 与加密凭据存储。
 - 使用第三方模型服务时，确认其数据处理和保留策略符合你的要求。
 
-安全相关问题请通过仓库所有者提供的私密渠道报告，避免在公开 Issue 中披露凭据或可利用细节。
+安全相关问题请通过 [GitHub Security Advisory](https://github.com/one-ea/SynChronicle/security/advisories/new) 私密报告，避免在公开 Issue 中披露凭据或可利用细节。
 
 ## License
 
