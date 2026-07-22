@@ -66,7 +66,7 @@ describe("responsive workbench CSS", () => {
     expect(mobile).toMatch(/\.mobile-workbench-nav svg\s*\{[^}]*flex:\s*0 0 20px/);
     expect(mobile).toMatch(/\.mobile-composer\s*\{(?=[^}]*box-shadow:\s*var\(--studio-elevation-composer\))(?=[^}]*z-index:\s*10)/);
     expect(mobile).toMatch(/\.mobile-workbench-nav button\[aria-current="page"\]\s*\{(?=[^}]*border-radius:\s*var\(--radius\))(?=[^}]*margin:\s*6px)/);
-    expect(mobile).toMatch(/\.manuscript-page\s*\{[^}]*border-radius:\s*18px/);
+    expect(mobile).toMatch(/\.manuscript-page\s*\{[^}]*border-radius:\s*var\(--radius\)/);
   });
 
   it("defines the tablet block without crossing its media boundary", () => {
