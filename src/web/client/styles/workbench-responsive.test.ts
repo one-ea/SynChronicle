@@ -65,7 +65,7 @@ describe("responsive workbench CSS", () => {
     expect(mobile).toMatch(/\.mobile-workbench-nav\s*\{(?=[^}]*bottom:\s*env\(safe-area-inset-bottom\))(?=[^}]*height:\s*68px)/);
     expect(mobile).toMatch(/\.mobile-workbench-nav svg\s*\{[^}]*flex:\s*0 0 20px/);
     expect(mobile).toMatch(/\.mobile-composer\s*\{(?=[^}]*box-shadow:\s*var\(--studio-elevation-composer\))(?=[^}]*z-index:\s*10)/);
-    expect(mobile).toMatch(/\.mobile-workbench-nav button\[aria-current="page"\]\s*\{(?=[^}]*border-radius:\s*999px)(?=[^}]*margin:\s*6px)/);
+    expect(mobile).toMatch(/\.mobile-workbench-nav button\[aria-current="page"\]\s*\{(?=[^}]*border-radius:\s*var\(--radius\))(?=[^}]*margin:\s*6px)/);
     expect(mobile).toMatch(/\.manuscript-page\s*\{[^}]*border-radius:\s*18px/);
   });
 
