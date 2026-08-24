@@ -1,0 +1,21 @@
+{
+  "id": "writer_five_chapters",
+  "category": "longform",
+  "role": "writer",
+  "description": "连续 5 章写作：章节提交、章摘要、文体统计与上下文管理在长跑中的稳定性。",
+  "prompt": "写一部约 12 章、六万字左右的都市奇幻长篇，主角是深夜电台主播，节目里接到的求助电话全都指向二十年前的一场大火。",
+  "max_chapters": 5,
+  "target_prompts": ["writer.md"],
+  "rubric": "writer_chapter",
+  "expect": {
+    "phase": "writing",
+    "min_completed_chapters": 5,
+    "required_checkpoints": ["chapter:5:commit"],
+    "min_chapter_summaries": 5,
+    "no_pending": ["pending_steer", "pending_commit", "pending_rewrites"]
+  },
+  "gate": {
+    "max_severity": "warning",
+    "stylestat_regression": "warn"
+  }
+}

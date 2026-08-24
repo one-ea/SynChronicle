@@ -183,6 +183,8 @@ SynChronicle 遵循“LLM 驱动，Host 服务”的运行模型：
 
 深入设计文档：
 
+- [文档索引](docs/README.md)
+- [项目结构与约定](docs/project-structure.md)
 - [运行时架构](docs/architecture.md)
 - [上下文管理](docs/context-management.md)
 - [可观测性](docs/observability.md)
@@ -197,18 +199,17 @@ SynChronicle 遵循“LLM 驱动，Host 服务”的运行模型：
 ```bash
 git clone https://github.com/one-ea/SynChronicle.git
 cd SynChronicle
-corepack enable
-pnpm install --frozen-lockfile
-pnpm build
+corepack pnpm install --frozen-lockfile
+corepack pnpm build
 node dist/cli/index.js
 ```
 
 执行项目验证：
 
 ```bash
-pnpm typecheck
-pnpm test
-pnpm build
+corepack pnpm typecheck
+corepack pnpm test
+corepack pnpm build
 npm pack --dry-run
 sh -n scripts/install.sh
 ```

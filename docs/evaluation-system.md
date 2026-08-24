@@ -25,12 +25,12 @@
 
 | 评测器 | 项目已有能力 | 入口 | 产出 |
 |---|---|---|---|
-| **确定性事实诊断** | `internal/diag` 的一组工件规则 + 运行时规则 | `diag.Diagnose(store)` | `Report{Stats, Findings}`，Finding 带 Severity/Evidence |
-| **全书级文体回归** | `internal/stylestat` | `stylestat.Compute(input)` | 句式模式章均、跨章重复句、章末短句占比、标题混用 |
+| **确定性事实诊断** | `src/diag` 的一组工件规则 + 运行时规则 | `diagnose(store)` | `DiagReport{stats, findings}`，Finding 带 severity/evidence |
+| **全书级文体回归** | `src/stylestat` | `stylestat.compute(input)` | 句式模式章均、跨章重复句、章末短句占比、标题混用 |
 | **质量裁定（rubric）** | 版本化 rubric（初始派生自 `editor.md` 七维） | LLM Judge（固定标尺做 A/B） | consistency/character/pacing/continuity/foreshadow/hook/aesthetic |
-| **行为脱敏导出** | `internal/diag` 导出 | `diag.WriteExport(store, rep, rc)` | 行为骨架，供人工读样与归档 |
+| **行为脱敏导出** | `src/diag` 导出 | `redactMessage`/`renderExport`（`src/diag/index.ts`） | 行为骨架，供人工读样与归档 |
 
-`diag.Analyze(s *store.Store)` 接收一个 Store 就能产出完整 `Report`——**它本来就能离线跑在任何产出目录上**。`stylestat.Compute` 是纯函数。这意味着评测系统要做的不是重新实现"章节是否落盘、progress 是否推进、checkpoint 是否存在、有没有 pending 残留、流程有没有死循环"——这些 diag 全做了，而且每条规则都对应一个踩过的真实坑（`PhaseFlowMismatch`、`OrphanedSteer`、`OutlineExhausted`、`repeatedErrors`/`stuckStep` 对应 idleResume / 大纲耗尽 livelock / 工具调用当文字打印等历史故障）。
+`diagnose(store)` 接收一个 Store 就能产出完整 `DiagReport`——**它本来就能离线跑在任何产出目录上**。`stylestat.compute` 是纯函数。这意味着评测系统要做的不是重新实现"章节是否落盘、progress 是否推进、checkpoint 是否存在、有没有 pending 残留、流程有没有死循环"——这些 diag 全做了，而且每条规则都对应一个踩过的真实坑（`PhaseFlowMismatch`、`OutlineExhausted`、`RepeatedToolLoop` 对应 idleResume / 大纲耗尽 livelock / 工具调用当文字打印等历史故障）。
 
 > **评测系统的工作不是造检查，而是：批量驱动 + 把已有评测器跑在产出上 + 把 Finding/统计映射成门禁 + 聚合报告。**
 
@@ -40,15 +40,15 @@
 
 ### 2.1 评测器即诊断器，绝不重造确定性检查
 
-确定性检查只调用 `diag.Diagnose`，不在评测层重新解析 `progress.json` / `checkpoints.jsonl` / `sessions/*.jsonl`。理由是这个项目的 DRY 铁律：**"什么是合法状态"只能有一份定义。** 如果评测用 Python 重新解析一遍 checkpoint 判断 commit 是否缺失，就有了两份"commit 完成"的定义，运行时改了 diag 规则、评测不跟着改，门禁立刻失真。
+确定性检查只调用 `diagnose`（`src/diag/diagnose.ts`），不在评测层重新解析 `progress.json` / `checkpoints.jsonl` / `sessions/*.jsonl`。理由是这个项目的 DRY 铁律：**"什么是合法状态"只能有一份定义。** 如果评测用 Python 重新解析一遍 checkpoint 判断 commit 是否缺失，就有了两份"commit 完成"的定义，运行时改了 diag 规则、评测不跟着改，门禁立刻失真。
 
-→ 评测 harness 用 **Go**，in-process 调用 `diag` 与 `stylestat`，与运行时共享 `internal/domain` 与 `internal/store`。这是本设计与上一版最根本的区别。
+→ 评测 harness 用 **TypeScript**，in-process 调用 `diagnose` 与 `stylestat.compute`，与运行时共享 `src/domain` 与 `src/store`。这是本设计与上一版最根本的区别。
 
 ### 2.2 全书级文体回归是第一质量信号
 
 单章 LLM Judge 看每一章都"正常"，但瓶颈恰恰是跨章固化。所以质量回归的**确定性骨干是 `stylestat`，不是 LLM Judge**。
 
-**前提：`stylestat.Compute` 少于 5 章直接返回 nil**（`stylestat.go` `minChapters=5`，样本太小频率无意义）。因此文体回归**只在 ≥5 章的 Quality / Longform 层生效**，1 章的 Smoke 拿不到文体信号——这点决定了下文成本与默认策略。指标包括：
+**前提：`stylestat.compute` 少于 5 章直接返回 null**（`src/stylestat/index.ts` `minChapters=5`，样本太小频率无意义）。因此文体回归**只在 ≥5 章的 Quality / Longform 层生效**，1 章的 Smoke 拿不到文体信号——这点决定了下文成本与默认策略。指标包括：
 
 - variant 的句式模式章均次数 vs baseline（`patterns[].per_chapter`）
 - 章末短句收尾占比（`ending.short_ratio` 逼近 1 是病）
@@ -91,7 +91,7 @@ A/B 的硬约束：同需求、同配置、同模型/provider、同风格、隔�
 ```text
 [Cases]  evals/cases/*.json —— 事实层断言集，不是通用 dataset 行
    │
-[Runner]  internal/eval —— in-process 装配 host 驱动（按章数上限截停），bundle.Prompts 内存覆盖做 variant
+[Runner]  src/eval/run.ts —— in-process 装配 host 驱动（按章数上限截停），bundle.prompts 内存覆盖做 variant
    │       baseline run ┐
    │       variant  run ┘  各自隔离 output 目录
    ▼
@@ -114,27 +114,25 @@ A/B 的硬约束：同需求、同配置、同模型/provider、同风格、隔�
 
 依赖方向：`eval → host → agents → tools → store → domain`，横向复用 `diag` / `stylestat`。评测层**不反向依赖**运行时控制流，只读 Store 与只读评测器。
 
-> **当前实现覆盖确定性主线**：无 `--variant` 时为 `mode=single`；传 `--variant` 时为 `mode=ab`，同一 case 隔离运行 baseline 与 variant，并生成 delta。Collectors 已接 `diag.Diagnose`、case 契约、`stylestat.Compute`、`meta/usage.json`、session tool call 计数；Graders 已接确定性门禁、baseline/variant diag delta、cost/token/tool call delta、stylestat delta。Runner 直接 `host.New` 装配并自带章数上限截停，**不复用 `headless.Run`**（后者无章数上限、且会设交互式 ask_user handler）。LLM Judge 与 Human 仍是后续可选层，不参与当前确定性门禁。
+> **实现状态（TypeScript 代码库）**：评测 harness 已落地为 `src/eval/`（runner/collect/deltas/judge/report），CLI 子命令 `synchronicle eval` 直接装配 Host 运行。当前实现覆盖确定性主线 + Phase 3 LLM Judge + Phase 4 Longform/Recovery case：无 `--variant` 时为 `mode=single`；传 `--variant` 时为 `mode=ab`，同一 case 隔离运行 baseline 与 variant，并生成 delta。Collectors 已接 `diag.diagnose`、case 契约、`stylestat.compute`、`meta/usage.json`、session tool call 计数；Graders 已接确定性门禁、baseline/variant diag delta、cost/token/tool call delta、stylestat delta。Runner 直接 `Host.new` 装配并自带章数上限截停与单 case 超时，**不复用 `headless.run`**（后者无章数上限、且会设交互式 ask_user handler）。Judge 输出进报告但不参与确定性门禁。本文档 §4 的 Go 论证是设计来源；TS 实现以 `src/eval/` 为准，原则完全一致（一份事实定义、零拷贝 variant、评测只观察）。
 
 ---
 
-## 4. 为什么是 Go in-process，不是 shell + Python
+## 4. 为什么 in-process，不是 shell + Python
 
-| 维度 | shell 拷源码 + Python 解析（旧路） | Go in-process（本设计） |
+| 维度 | shell 拷源码 + Python 解析（旧路） | TS in-process（本设计） |
 |---|---|---|
-| 确定性检查 | Python 重新解析 JSON，与 diag 规则两份定义 | 直接 `diag.Diagnose(store)`，一份定义 |
-| variant 切换 | 拷整个源码树 + 重新 `go build` 两个二进制 | `bundle.OverridePrompt(...)` 内存覆盖后装配 host，零拷贝零重编译 |
-| 文体回归 | 需在 Python 重写 stylestat 的中文分句逻辑 | 直接 `stylestat.Compute` |
-| Judge rubric | 维度散落在 Python | 复用 `domain.DimensionScore`，与线上同源 |
-| 漂移风险 | 高：运行时改了事实模型，评测不跟 | 低：编译期就会暴露字段变更 |
+| 确定性检查 | Python 重新解析 JSON，与 diag 规则两份定义 | 直接 `diag.diagnose(store)`（`src/diag/diagnose.ts`），一份定义 |
+| variant 切换 | 拷整个源码树 + 重新构建两个二进制 | `overridePrompt(bundle, file, raw)`（`src/assets/load.ts`）内存覆盖后装配 Host，零拷贝零重编译 |
+| 文体回归 | 需在 Python 重写 stylestat 的中文分句逻辑 | 直接 `stylestat.compute`（`src/stylestat/index.ts`） |
+| Judge rubric | 维度散落在 Python | 复用 `evals/rubrics/*.json` 版本化快照 + 七维 `dimensionSchema`（`src/tools/tools.ts` 同源枚举） |
+| 漂移风险 | 高：运行时改了事实模型，评测不跟 | 低：与运行时共享 `src/domain` / `src/store` 的 Zod schema，字段变更在 typecheck 暴露 |
 
-旧 `prompt_ab.sh` 之所以要拷源码重编译，是因为 prompt 是嵌入二进制的（`go:embed`）。但 `assets.Bundle.Prompts` 是普通结构体，**runner 在内存里改一个字段就能做 variant**，根本不需要拷源码。这是用 Go 写 harness 顺带拿到的最大简化。
+旧 `prompt_ab.sh` 之所以要拷源码重编译，是因为旧 Go 原型里 prompt 是嵌入二进制的（`go:embed`）。但 `assets.Bundle.Prompts` 是普通对象，**runner 在内存里改一个字段就能做 variant**（`applyVariant` 浅克隆 + `overridePrompt`），根本不需要拷源码。这是 in-process harness 顺带拿到的最大简化。
 
-> **实现约束**：`assets.Load` 经 `loadPrompts` 给核心 prompt（coordinator/architect/writer/editor）统一追加了 `withSimulationGuidance` 后缀，而 `withSimulationGuidance`/`loadPrompts` 都是**未导出**的——`internal/eval` 无法直接调用。若 variant 只把裸文本塞进 `bundle.Prompts.Writer`，就丢了 baseline 有的仿写画像后缀，A/B 不等价。
->
-> 正确做法是**在 `assets` 包加一个导出的覆盖 helper**（如 `assets.OverridePrompt(b *Bundle, role, raw string)` 或导出 `assets.WithSimulationGuidance(raw, role) string`），内部走与 `Load` 完全相同的包装；eval 调它，而不是复制包装逻辑。这符合项目"缺能力去源头加，不在应用层写兜底补丁"的原则。
+> **实现约束（已在 `src/assets/load.ts` 解决）**：`loadAssets` 给核心 prompt（coordinator/architect/writer/editor）统一追加了 `withSimulationGuidance` 后缀。若 variant 只把裸文本塞进 `bundle.prompts`，就丢了 baseline 有的仿写画像后缀，A/B 不等价。因此覆盖必须走导出的 `overridePrompt(bundle, file, raw)` helper——内部做与 `loadAssets` 完全相同的包装；eval 调它（`src/eval/run.ts` `applyVariant`），而不是复制包装逻辑。这符合项目"缺能力去源头加，不在应用层写兜底补丁"的原则。
 
-> 上一版文档保留 `prompt_ab.sh` / `prompt_ab_report.py` 并"逐步抽取能力"。本设计放弃这条路：它们解决的问题（隔离运行 + 指标汇总）在 in-process Go harness 里是子集，强行复用反而背上 shell/Python/Go 三语言的接口胶水。**Go harness 是唯一主路**；当前 Go harness 已覆盖 baseline/variant 隔离运行、repeat 汇总与确定性 delta。旧脚本（`scripts/prompt_ab.sh`、`scripts/prompt_ab_report.py`）及其操作手册 `docs/prompt-ab.md` 已随本设计落地一并删除，不再保留。
+> 上一版文档保留 `prompt_ab.sh` / `prompt_ab_report.py` 并"逐步抽取能力"。本设计放弃这条路：它们解决的问题（隔离运行 + 指标汇总）在 in-process harness 里是子集，强行复用反而背上 shell/Python/TS 三语言的接口胶水。**in-process harness 是唯一主路**；当前实现（`src/eval/`）已覆盖 baseline/variant 隔离运行、repeat 汇总与确定性 delta。旧脚本（`scripts/prompt_ab.sh`、`scripts/prompt_ab_report.py`）及其操作手册 `docs/prompt-ab.md` 已随本设计落地一并删除，不再保留。
 
 ---
 
@@ -355,19 +353,22 @@ Artifacts:
 ## 10. 目录结构与命令
 
 ```text
-internal/eval/
-  case.go        Case manifest 结构 + 加载
-  eval.go        CLI 编排：single / A/B / repeat
-  runner.go      装配 host 驱动（按章数上限截停 + drain 到 Done），bundle.OverridePrompt 内存覆盖
-  collect.go     对产出目录跑 diag.Diagnose + stylestat.Compute + usage/tool_calls + 契约断言
-  grade.go       Finding→门禁映射 + baseline/variant delta + stylestat gate 决策
-  report.go      report.json + report.md
+src/eval/
+  index.ts       case manifest 结构 + 加载 + grade/aggregate
+  run.ts         CLI 编排：single / A/B / repeat；装配 host（章数截停 + 超时 + 恢复两阶段 + steer 注入）
+  collect.ts     对产出目录跑 diag.diagnose + stylestat.compute + usage/tool_calls + 契约断言
+  deltas.ts      baseline/variant 指标 delta + stylestat 回归 + 字数异常门禁
+  judge.ts       Phase 3 LLM Judge（版本化七维 rubric，失败不污染确定性门禁）
+  report.ts      report.json + report.md
+  *.test.ts      对应单测
 
-cmd/synchronicle  eval 子命令入口
+src/cli/eval.ts   eval 子命令入口（--cases/--variant/--repeat/--judge/--no-judge/--ci 等）
+
+src/diag/diagnose.ts  确定性事实诊断器（工件规则 + 运行时规则，评测与运行时共享同一份定义）
 
 evals/
-  cases/         smoke/ workflow/ quality/ longform/ recovery/ steering/
-  rubrics/       writer_chapter.json / architect_outline.json / editor_review.json
+  cases/         smoke/ longform/ recovery/ steering/
+  rubrics/       writer_chapter.json / architect_outline.json / editor_review.json（版本化七维）
   variants/      writer-anti-ai-tone/writer.md 等（每目录只放要替换的 prompt）
   reports/       历史报告归档
 ```
@@ -381,15 +382,15 @@ synchronicle eval --cases evals/cases/smoke \
   --out workspace/evals/writer-anti-ai-tone --ci
 ```
 
-**本期已实现的参数**：`--cases`（目录或单 manifest）、`--variant`（变体 prompt 目录；传入后自动跑 baseline+variant A/B）、`--repeat N`（每个 case 重复运行 N 次）、`--config`、`--out`、`--max-chapters N`（覆盖 case 默认）、`--timeout`（单 case 墙钟上限）、`--ci`（抑制逐事件输出；退出码非 0 即 hard fail，不带也生效）。
+**已实现的参数**：`--cases`（目录或单 manifest）、`--variant`（变体 prompt 目录；传入后自动跑 baseline+variant A/B）、`--repeat N`（每个 case 重复运行 N 次）、`--config`、`--out`、`--max-chapters N`（覆盖 case 默认）、`--timeout`（单 case 墙钟上限）、`--judge`/`--no-judge`（Phase 3 LLM Judge；`--judge` 需配合 `--variant`，默认当 case 声明 `rubric` 且处于 A/B 模式时自动开启）、`--ci`（抑制逐事件输出；退出码非 0 即 hard fail，不带也生效）。
 
-**规划中（尚未实现，勿在命令行使用，否则报 flag 未定义）**：`--judge`/`--no-judge`（Phase 3 LLM Judge）。重大 prompt 改动当前可先用确定性 A/B + repeat：
+重大 prompt 改动推荐：A/B + repeat + Judge 降随机性：
 
 ```bash
 # 重大 prompt 改动：A/B + repeat 降随机性
 synchronicle eval --cases evals/cases/quality \
   --variant evals/variants/writer-anti-ai-tone \
-  --repeat 3 --ci
+  --repeat 3 --judge --ci
 ```
 
 ---
@@ -400,7 +401,7 @@ synchronicle eval --cases evals/cases/quality \
 
 1. **不在评测层复制 diag 的通用诊断逻辑** —— 通用判断（pending 残留、phase/flow 一致、章节缺口、死循环）一律走 `diag`，事实判断只有一份定义。case 级契约断言（`expect.required_checkpoints` 等）允许直接读 `store`/checkpoint API，但只做**薄断言**——验证本 case 强相关的具体预期，绝不重写一遍 diag 已有的通用规则。
 2. **不重新实现确定性规则** —— diag 已有一组工件规则 + 运行时规则。缺规则就去 diag 加，评测层只消费。
-3. **不在 Python 里重写 stylestat 的中文文体逻辑** —— 直接调 Go 包。
+3. **不在 Python 里重写 stylestat 的中文文体逻辑** —— 直接调 `src/stylestat` 的 `compute`。
 4. **不让 LLM Judge 决定流程是否通过** —— 门禁只认确定性证据。
 5. **不让评测介入控制流** —— 丢弃 diag 的 Action/Planner，不自动修 prompt、不回滚、不续跑、不发布。
 6. **不断言精确工具调用序列** —— 只断言契约（commit 发生、checkpoint 存在），保护"LLM 驱动流程"的押注。
@@ -413,9 +414,9 @@ synchronicle eval --cases evals/cases/quality \
 
 ## 12. 分阶段落地
 
-### Phase 1 · Runner + 确定性门禁（MVP，先证假设）
+### Phase 1 · Runner + 确定性门禁（已实现）
 
-- `internal/eval`：Case 结构 + runner（in-process headless + bundle 覆盖）+ collect（调 `diag.Diagnose`）+ grade（Finding→门禁 + `expect` 契约）。
+- `src/eval`：Case 结构 + runner（in-process host + bundle 覆盖）+ collect（调 `diag.diagnose`）+ grade（Finding→门禁 + `expect` 契约）。
 - `evals/cases/smoke/` 放 3-4 个 case。
 - 报告先出 `report.json` + 最小 markdown。
 
@@ -425,22 +426,26 @@ synchronicle eval --cases evals/cases/quality \
 
 - `--variant` 自动跑 baseline 与 variant，输出隔离 artifacts。
 - `--repeat N` 汇总 pass rate、hard fail runs、warning runs、cost/tool_calls min/avg/max。
-- collect 加 `stylestat.Compute`，grade 加文体 delta。
+- collect 加 `stylestat.compute`，grade 加文体 delta（`src/eval/deltas.ts`）。
 - 报告展示句式章均 / 章末短句占比 / 跨章重复句 / 标题混用的 baseline-variant 对比。
 
 **验收**：用一个 ≥5 章的 case + 一个"句式 tic 加重"的 variant，能被文体回归标出 warning；章数不足的 case 明确显示 `insufficient_sample` 而非误判通过。
 
-### Phase 3 · LLM Judge
+### Phase 3 · LLM Judge（已实现）
 
-- `evals/rubrics/` + `judge.go`，七维 rubric A/B。
-- Judge 失败（非法 JSON）→ 报告记失败，不影响确定性结果。
+- `evals/rubrics/`（writer_chapter / architect_outline / editor_review，版本化七维快照）+ `src/eval/judge.ts`，七维 rubric A/B。
+- `--judge`/`--no-judge` 控制；Judge 失败（非法 JSON / 读取失败）→ 报告记失败，不影响确定性结果。
+- Judge 输入：用户需求 + 该章契约 + baseline/variant 同一章正文 + 最近摘要 + stylestat 切片。
 
 **验收**：Judge 输出进 json+md，且不污染确定性门禁。
 
-### Phase 4 · Longform & Recovery
+### Phase 4 · Longform & Recovery（已实现）
 
-- 3-5 章连续 / 弧末评审 / 用户干预 / pending_commit replay / 上下文压缩压力 case。
-- 复用 diag context+运行时规则。
+- `evals/cases/longform/`：`writer_five_chapters`（5 章连续）、`arc_end_review`（弧末评审 + 弧摘要 + 下一弧展开）、`context_compression`（9 章压缩压力）。
+- `evals/cases/recovery/`：`crash_resume`（跑到第 N 章截停 → Resume → 无 in_progress 残留、无重复 commit）、`draft_interrupt_resume`（预置中断草稿残留 → Resume 推进并清零）。
+- `evals/cases/steering/`：`steer_resume`（停机窗口注入干预意见 → Resume 继续推进）。
+- runner 支持恢复两阶段（截停 → 注入 seed/steer → resume）、`expect.seed`、`expect.steer`、`resume_to_chapters` 契约。
+- 复用 `diag.diagnose` 工件 + 运行时规则（含 `DuplicateCommit`/`InProgressResidue`/`PendingSteer`/`OutlineExhausted`/`CompassDrift`/`RepeatedToolLoop`）。
 
 **验收**：能发现重复时间线、pending 残留、弧末摘要缺失、工具循环。
 
@@ -469,7 +474,7 @@ synchronicle eval --cases evals/cases/quality \
 
 这套评测体系的价值不是自动判断文学质量，而是把 prompt 改动从"凭感觉"变成"有回归、有证据、有人工读样"。
 
-它与上一版设计的根本区别只有一句：**评测器已经在代码库里了。** `diag` 是确定性事实诊断器，`stylestat` 是全书文体回归器，`ReviewEntry` 七维是原生 rubric。评测系统要做的是一层薄薄的 Go harness——批量驱动、采集、把 Finding 与统计映射成门禁、聚合报告——而不是用另一种语言把这些事实判断重写一遍。
+它与上一版设计的根本区别只有一句：**评测器已经在代码库里了。** `diagnose` 是确定性事实诊断器，`stylestat.compute` 是全书文体回归器，七维 rubric 是原生标尺。评测系统要做的是一层薄薄的 TS harness——批量驱动、采集、把 Finding 与统计映射成门禁、聚合报告——而不是用另一种语言把这些事实判断重写一遍。
 
 一份事实定义，永不漂移。这正是这个项目从架构到评测一以贯之的纪律：**最小 harness、最强复用、确定性归代码、裁定归 LLM 与人。**
 

@@ -1,16 +1,19 @@
-.git
-.github
-.vscode
-.idea
-go.work
-go.work.sum
-.DS_Store
+# Files copied into the runtime image
+node_modules/
+dist/
+coverage/
+
+# Local-only data and secrets
 .env
-.synchronicle
-config
-workspace
-dist
-tasks
-refer
-output*
+.synchronicle/
+config/
+workspace/
+output/
 *.log
+
+# Repository metadata and editor files
+.git/
+.github/
+.vscode/
+.idea/
+.DS_Store

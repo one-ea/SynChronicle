@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "name": "writer_chapter",
+  "role": "writer",
+  "updated_at": "2026-07-13",
+  "dimensions": [
+    { "name": "consistency", "weight": 15, "criteria": "章内设定、人称、时间线与既定事实一致" },
+    { "name": "character", "weight": 20, "criteria": "角色言行符合设定档案并体现明确动机" },
+    { "name": "pacing", "weight": 15, "criteria": "节奏张弛有度，场景推进自然不拖沓" },
+    { "name": "continuity", "weight": 15, "criteria": "与大纲、前文伏笔及章节摘要保持连续" },
+    { "name": "foreshadow", "weight": 15, "criteria": "合理埋设伏笔并为后续章节提供牵引" },
+    { "name": "hook", "weight": 10, "criteria": "章末留有悬念或牵引力" },
+    { "name": "aesthetic", "weight": 10, "criteria": "语言质量、句式多样性与文风统一" }
+  ]
+}

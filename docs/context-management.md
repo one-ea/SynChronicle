@@ -1,6 +1,19 @@
 # 上下文管理说明
 
-本文档说明 SynChronicle 当前的上下文管理体系，包括：
+> **⚠️ 实现状态（TS 代码库为准）**：本文档主体是 **Go 原型时代**的上下文引擎设计（`agentcore/context` 的策略管线：ToolResultMicrocompact / LightTrim / StoreSummaryCompact / FullSummary / 熔断器 / handoff / writerRestorePack）。**TS 实现中这些策略尚未落地**，当前上下文管理是简化版：
+>
+> | 设计（本文档） | TS 现状 |
+> |---|---|
+> | 策略管线（压缩/恢复框架） | `src/agents/context.ts` ContextManager——仅按 `resolveContextWindow` 做窗口裁剪（44 行薄实现），无策略链 |
+> | `novel_context` 结构化装配 | `src/tools/tools.ts` novel_context——`working_memory` 已装配；`reference_pack` 按角色白名单注入；`episodic_memory.style_stats` 注入（≥5 章）；`selected_memory` 仍为空 |
+> | store-based 压缩 / restore pack | ⚠️ 未实现（`src/agents/ctxpack/` 仅提供 ContextPack 打包结构，无压缩逻辑） |
+> | `ContextProfile` / `MemoryPolicy` | ✅ schema 保留在 `src/domain/runtime.ts`（工具层暂未消费） |
+> | handoff / 恢复交接包 | ⚠️ 未实现（恢复走 `src/runtime/resume.ts` buildResumePrompt 短通告） |
+> | 上下文重写事件（projected/compacted） | ⚠️ 未实现（事件流有 context 类型，无压缩事件产出） |
+>
+> 本文档的**分层记忆思想**（短期/中期/长期/恢复）与设计目标仍有效；§5 起各策略细节属于设计愿景，落地前先对照上表。
+
+本文档说明 SynChronicle 的上下文管理体系，包括：
 
 - 为什么要做上下文管理
 - 上下文从哪里来
@@ -8,7 +21,7 @@
 - 每个策略的价值、触发条件与适用场景
 - 出问题时应该先看哪里
 
-目标不是介绍抽象概念，而是让后续维护者打开这一份文档，就能快速理解当前实现和排障入口。
+目标不是介绍抽象概念，而是让后续维护者打开这一份文档，就能快速理解设计意图与排障入口。
 
 ## 1. 设计目标
 
@@ -30,18 +43,18 @@
 
 ### 2.1 主要分层
 
-当前上下文管理分成四层：
+设计上分四层（TS 现状见顶部横幅）：
 
-1. `agentcore/context`
-   负责通用的上下文预算、策略管线、压缩/恢复框架。
+1. 通用上下文引擎（设计：`agentcore/context`；TS：`src/agents/context.ts` ContextManager）
+   负责通用的上下文预算、窗口裁剪、压缩/恢复框架。
 
-2. `internal/tools/novel_context`
-   负责把小说项目中的结构化数据装配成当前轮可用上下文。
+2. `novel_context` 工具（`src/tools/tools.ts`）
+   负责把小说项目中的结构化数据装配成当前轮可用上下文（`working_memory` + `reference_pack` 角色白名单 + `episodic_memory.style_stats`；`selected_memory` 未实现）。
 
-3. `internal/orchestrator/store_summary_*`
+3. store-based 快速压缩（设计：`store_summary_*`；TS：⚠️ 未实现）
    负责 Writer 专用的 store-based 快速压缩。
 
-4. `internal/orchestrator/writer_restore.go`
+4. 压缩后恢复包（设计：`writer_restore.go`；TS：⚠️ 未实现）
    负责在 `FullSummary` 之后追加一份压缩后恢复包，确保 Writer 能继续写。
 
 ### 2.2 数据流
@@ -64,77 +77,55 @@
 
 ### 3.1 通用上下文引擎
 
-- `../agentcore/context/strategy.go`
-- `../agentcore/context/engine.go`
-- `../agentcore/context/strategy_tool.go`
-- `../agentcore/context/strategy_trim.go`
-- `../agentcore/context/strategy_summary.go`
-- `../agentcore/context/message.go`
-- `../agentcore/context/summary_run.go`
+设计（Go 原型）：
 
-作用：
+- `agentcore/context/strategy.go` / `engine.go` / `strategy_tool.go` / `strategy_trim.go` / `strategy_summary.go` / `message.go` / `summary_run.go`
 
-- 定义 `Strategy` / `ForceCompactionStrategy`
-- 负责基于预算执行策略链
-- 负责 `ContextSummary` 的表示与 LLM 转换
-- 负责 `FullSummary` 的 LLM 摘要压缩
+TS 现状：`src/agents/context.ts`（ContextManager，仅窗口裁剪）；策略管线未实现。
 
 ### 3.2 项目侧接线
 
-- `internal/orchestrator/agents.go`
+设计（Go 原型）：`internal/orchestrator/agents.go`
 
-作用：
-
-- 组装 Writer / Coordinator 的 `ContextManager`
-- 给 Writer 注入额外的 `StoreSummaryCompact`
-- 给 Writer 配置小说定制的 `FullSummary` prompt
-- 给 Writer 配置 `writerRestorePack`
+TS 现状：`src/agents/build.ts` buildCoordinator（makeContext 按角色建 ContextManager；Writer 无额外压缩策略）。
 
 ### 3.3 项目侧压缩与恢复
 
-- `internal/orchestrator/store_summary_strategy.go`
-- `internal/orchestrator/store_summary_builder.go`
-- `internal/orchestrator/writer_restore.go`
+设计（Go 原型）：`internal/orchestrator/store_summary_strategy.go` / `store_summary_builder.go` / `writer_restore.go`
 
-作用：
-
-- 在 LLM 摘要之前，优先使用 store 数据做快速压缩
-- 统一构建 Writer 压缩与恢复所需的结构化上下文
-- 在 `FullSummary` 后追加一份纯内存 restore message
+TS 现状：⚠️ 未实现。`src/agents/ctxpack/index.ts` 仅提供 `ContextPack`/`pack*` 打包结构。
 
 ### 3.4 结构化上下文装配
 
-- `internal/tools/novel_context.go`
-- `internal/tools/novel_context_builders.go`
-- `internal/domain/runtime.go`
+TS 现状：
+
+- `src/tools/tools.ts`（novel_context 工具）
+- `src/domain/runtime.ts`（`ContextProfileSchema` / `MemoryPolicySchema`）
 
 作用：
 
-- 定义 `ContextProfile` / `MemoryPolicy`
+- 定义 `ContextProfile` / `MemoryPolicy`（schema 在，工具层暂未消费）
 - 决定加载多少章节摘要、多少时间线、是否启用分层摘要
-- 把 store 中的章节、角色、伏笔、时间线、审稿经验等装配出来
+- 把 store 中的章节、角色、伏笔、时间线、审稿经验等装配出来（TS 中信封已建、内容为空，待接线）
 
 ### 3.5 交接与恢复
 
-- `internal/orchestrator/handoff_policy.go`
-- `internal/orchestrator/recovery_engine.go`
+设计（Go 原型）：`internal/orchestrator/handoff_policy.go` / `recovery_engine.go`
 
-作用：
-
-- 在长篇/返工/审阅阶段优先依赖 handoff
-- 恢复时把结构化交接包拼进 prompt
+TS 现状：⚠️ 未实现。恢复走 `src/runtime/resume.ts` buildResumePrompt（短通告）。
 
 ### 3.6 可观测性
 
-- `internal/orchestrator/run.go`
-- `internal/orchestrator/runtime.go`
-- `internal/entry/tui/panels.go`
+TS 现状：
+
+- `src/runtime/observer.ts` / `src/runtime/event.ts`（context 事件类型）
+- `src/tui/events.tsx`（事件面板）
 
 作用：
 
-- 记录上下文重写事件
-- 输出策略名称、token 变化、消息保留量
-- 让 TUI 能看到当前上下文是 `projected` 还是 `compacted`
+- 记录上下文重写事件（设计；TS 暂无压缩事件产出）
+- 输出策略名称、token 变化、消息保留量（设计）
+- 让 TUI 能看到当前上下文是 `projected` 还是 `compacted`（设计）
 
 ## 4. ContextManager 是怎么组装的
 
@@ -188,6 +179,8 @@ Writer 和 Coordinator 都走 `newContextManager`，但配置不同。
 - 最后才退到 LLM 摘要
 
 ## 5. 每个策略的作用
+
+> ⚠️ 本节为 Go 原型的策略设计（TS 未实现，保留供未来实现参考）；策略顺序、触发条件与配置参数均为设计值。
 
 ### 5.1 ToolResultMicrocompact
 
@@ -415,45 +408,25 @@ Writer 与默认代码助手不同的地方：
 
 ## 7. novel_context 的作用
 
-实现位置：
+实现位置（TS）：`src/tools/tools.ts`（novel_context 工具，信封结构见 tools.ts `novelContextSchema`）
 
-- `internal/tools/novel_context.go`
-- `internal/tools/novel_context_builders.go`
+`novel_context` 不是压缩策略，它是运行时的"结构化上下文装配器"（设计意图）。
 
-`novel_context` 不是压缩策略，它是运行时的“结构化上下文装配器”。
+它把 store 中的数据分成几类（**TS 现状**：`working_memory` 已装配（user_rules + chapter_plan）；`reference_pack` 按角色白名单注入；`episodic_memory` 注入 `style_stats`（≥5 章）；`selected_memory` 未实现）：
 
-它把 store 中的数据分成几类：
-
-- `working_memory`
-  - 当前章节计划
-  - 当前章节大纲
-  - 最近章节摘要
-  - 时间线
-  - checkpoint
-  - previous tail
-
-- `episodic_memory`
-  - 角色状态
-  - 关系状态
-  - 最近状态变化
-  - 伏笔
-
-- `reference_pack`
-  - 更稳定的设定和参考数据
-
-- `selected_memory`
-  - 按当前任务挑选出来的少量重要记忆
+- `working_memory` — 当前章节计划、user_rules（✅ TS 已装配）
+- `episodic_memory` — 角色状态 / 关系状态 / 最近状态变化 / 伏笔（⚠️ TS 仅注入 `style_stats`，其余为空）
+- `reference_pack` — 更稳定的设定和参考数据（✅ TS 按角色白名单注入，见 `REFERENCE_BY_ROLE`）
+- `selected_memory` — 按当前任务挑选出来的少量重要记忆（⚠️ TS 为空）
 
 价值：
 
-- 它决定了每一轮真正“喂给模型”的结构化小说上下文
-- `StoreSummaryCompact` 不是调用它本身，但和它复用同类数据来源与装配思路
+- 它决定了每一轮真正"喂给模型"的结构化小说上下文
+- `StoreSummaryCompact` 不是调用它本身，但和它复用同类数据来源与装配思路（设计）
 
 ## 8. ContextProfile 与 MemoryPolicy
 
-实现位置：
-
-- `internal/domain/runtime.go`
+实现位置（TS）：`src/domain/runtime.ts`（`ContextProfileSchema` / `MemoryPolicySchema`——schema 已迁移，工具层暂未消费；下述加载窗口/分层规则为 Go 原型设计值）
 
 ### 8.1 ContextProfile
 
@@ -461,20 +434,11 @@ Writer 与默认代码助手不同的地方：
 
 - 按总章节数决定加载窗口大小
 
-当前规则：
+设计规则（Go 原型）：
 
-- `<= 15` 章
-  - 最近 `10` 章摘要
-  - 最近 `10` 章时间线
-
-- `<= 50` 章
-  - 最近 `5` 章摘要
-  - 最近 `8` 章时间线
-
-- `> 50` 章
-  - 最近 `3` 章摘要
-  - 最近 `5` 章时间线
-  - 启用分层摘要
+- `<= 15` 章：最近 `10` 章摘要 / 最近 `10` 章时间线
+- `<= 50` 章：最近 `5` 章摘要 / 最近 `8` 章时间线
+- `> 50` 章：最近 `3` 章摘要 / 最近 `5` 章时间线 / 启用分层摘要
 
 价值：
 
@@ -487,26 +451,21 @@ Writer 与默认代码助手不同的地方：
 
 - 把当前上下文使用策略显式写出来
 - 供 `novel_context` 输出
-- 供 handoff / reminder / 诊断逻辑使用
+- 供 handoff / reminder / 诊断逻辑使用（设计）
 
-关键字段：
+关键字段（schema 见 `src/domain/runtime.ts`）：
 
-- `SummaryWindow`
-- `TimelineWindow`
-- `LayeredSummaries`
-- `SummaryStrategy`
-- `HandoffPreferred`
-- `ReadOnlyThreshold`
+- `summary_window` / `timeline_window` / `layered_summaries` / `summary_strategy` / `handoff_preferred` / `read_only_threshold` 等
 
 价值：
 
-- 把“当前系统应该如何使用记忆”从隐式逻辑变成显式运行时策略
+- 把"当前系统应该如何使用记忆"从隐式逻辑变成显式运行时策略
 
 ## 9. handoff 的作用
 
-实现位置：
+> ⚠️ handoff 为 Go 原型设计（`internal/orchestrator/handoff_policy.go`），TS 未实现。
 
-- `internal/orchestrator/handoff_policy.go`
+实现位置（设计）：`internal/orchestrator/handoff_policy.go`
 
 当作品进入更长、更复杂、更依赖结构化工件的阶段时，系统会偏向 handoff。
 

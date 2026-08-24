@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "name": "editor_review",
+  "role": "editor",
+  "updated_at": "2026-07-13",
+  "dimensions": [
+    { "name": "consistency", "weight": 15, "criteria": "评审指出的问题与正文证据一致，无虚指" },
+    { "name": "character", "weight": 20, "criteria": "角色一致性判断准确，动机问题识别到位" },
+    { "name": "pacing", "weight": 15, "criteria": "节奏问题定位具体，影响范围判断合理" },
+    { "name": "continuity", "weight": 15, "criteria": "连续性（时间线/伏笔/设定）检查覆盖到位" },
+    { "name": "foreshadow", "weight": 15, "criteria": "伏笔埋设与回收的评估有前瞻性" },
+    { "name": "hook", "weight": 10, "criteria": "章末牵引力评估准确" },
+    { "name": "aesthetic", "weight": 10, "criteria": "文风问题点评具体可执行，不空泛" }
+  ]
+}

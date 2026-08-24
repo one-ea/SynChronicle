@@ -1,0 +1,22 @@
+{
+  "id": "arc_end_review",
+  "category": "longform",
+  "role": "editor",
+  "description": "弧末评审闭环：长篇分层规划下，弧边界触发 Editor 评审与弧摘要，下一弧正常展开。",
+  "prompt": "写一部约二十章的修真长篇，主角是外门药园杂役，第一卷三章完成入门试炼，第二卷五章卷入宗门秘库之争。",
+  "max_chapters": 7,
+  "target_prompts": ["architect-long.md", "writer.md", "editor.md"],
+  "expect": {
+    "phase": "writing",
+    "min_completed_chapters": 6,
+    "required_checkpoints": ["chapter:6:commit"],
+    "min_chapter_summaries": 6,
+    "min_arc_summaries": 1,
+    "min_reviews": 1,
+    "no_pending": ["pending_steer", "pending_commit"]
+  },
+  "gate": {
+    "max_severity": "warning",
+    "stylestat_regression": "warn"
+  }
+}

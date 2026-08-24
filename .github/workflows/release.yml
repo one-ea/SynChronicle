@@ -15,7 +15,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:
@@ -29,16 +28,16 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: corepack pnpm install --frozen-lockfile
 
       - name: Typecheck
-        run: pnpm typecheck
+        run: corepack pnpm typecheck
 
       - name: Test
-        run: pnpm test
+        run: corepack pnpm test
 
       - name: Build
-        run: pnpm build
+        run: corepack pnpm build
 
       - name: Publish to npm
         run: npm publish --provenance --access public

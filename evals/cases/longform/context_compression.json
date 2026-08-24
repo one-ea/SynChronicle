@@ -1,0 +1,20 @@
+{
+  "id": "context_compression",
+  "category": "longform",
+  "role": "writer",
+  "description": "上下文压缩压力：连续 9 章写作，章摘要逐章落盘，跨章内容持续可用。",
+  "prompt": "写一部约三十章的年代长篇，主角是国营工厂的宣传干事，改革开放浪潮里记录工友们的聚散离合。",
+  "max_chapters": 9,
+  "target_prompts": ["writer.md"],
+  "expect": {
+    "phase": "writing",
+    "min_completed_chapters": 9,
+    "required_checkpoints": ["chapter:9:commit"],
+    "min_chapter_summaries": 9,
+    "no_pending": ["pending_steer", "pending_commit", "pending_rewrites"]
+  },
+  "gate": {
+    "max_severity": "warning",
+    "stylestat_regression": "warn"
+  }
+}

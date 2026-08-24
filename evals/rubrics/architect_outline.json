@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "name": "architect_outline",
+  "role": "architect",
+  "updated_at": "2026-07-13",
+  "dimensions": [
+    { "name": "consistency", "weight": 15, "criteria": "大纲与前提、角色、世界规则保持一致" },
+    { "name": "character", "weight": 20, "criteria": "角色弧线清晰，动机与成长路径可信" },
+    { "name": "pacing", "weight": 15, "criteria": "卷弧节奏分布合理，高潮与铺垫错落" },
+    { "name": "continuity", "weight": 15, "criteria": "伏笔埋设与回收计划完整，跨卷线索连续" },
+    { "name": "foreshadow", "weight": 15, "criteria": "长线悬念、伏笔与终局方向呼应" },
+    { "name": "hook", "weight": 10, "criteria": "每章每弧留有牵引力，卷末钩子成立" },
+    { "name": "aesthetic", "weight": 10, "criteria": "设定表达精炼，避免信息堆砌与模板化" }
+  ]
+}

@@ -1,5 +1,7 @@
 # 提示词缓存设计：litellm / agentcore / SynChronicle 三层协同
 
+> **⚠️ 实现状态（TS 代码库为准）**：本文是 Go 原型时代（litellm 网关 + agentcore 框架）的提示词缓存设计讲解。**TS 实现已落地滚动断点**：Anthropic 系在每次生成的最后一条 user 消息注入 `cache_control: ephemeral`（`src/agents/agent.ts` `withCacheBreakpoint`，恒 1 个断点，浅拷贝不污染 history）；OpenAI 官方自动前缀缓存无需显式参数。**尚未落地**：system 地板断点（需把 system 移入 messages[0]）、`promptCacheBase` 缓存身份（`src/agents/build.ts`）、断裂检测 `noteCacheBreak`。`meta/usage.json` 已按缓存命中口径记录 `cache_read`/`cache_breaks`（`src/runtime/usage.ts`）。本文的**前缀稳定三纪律、闩锁红线、断裂检测口径**是后续补全缓存层时的约束。Codebot 等外部读者的"三个仓库"语境不再适用本仓库。
+
 > 本文是一份讲解材料：介绍我们如何在三个协作仓库中设计端到端的 LLM 提示词缓存
 > （prompt caching），包含设计原理、真实排查案例与可对照的源码位置。
 >
@@ -139,7 +141,7 @@ append-only，直到下次越过阈值。
 OpenAI 系的 `prompt_cache_key` 解决的是**路由问题**：字节相同的请求若被负载均衡到
 不同实例，照样 miss。key 的设计目标是"同一条缓存血统的请求，永远带同一个 key"。
 
-我们的三级身份（SynChronicle `internal/agents/build.go`）：
+我们的三级身份（TS 对应：`src/agents/build.ts`，未接线）：
 
 ```go
 // promptCacheBase 从书目录派生稳定短哈希，作为提示词缓存身份前缀：同一本书
@@ -355,7 +357,7 @@ func isOfficialBaseURL(baseURL string) bool {
 缓存是"看不见的功能"——坏了不报错，只是变贵。所以要有观测（借鉴 Claude Code 的
 promptCacheBreakDetection，做了轻量版）。
 
-判定口径（SynChronicle `internal/host/usage.go`）：
+判定口径（TS 对应：`src/runtime/usage.ts`，未实现）：
 
 ```go
 // 同一会话（role+task）内：前缀未缩短，而命中量较上次下降 >5% 且降幅 ≥2000 tokens
@@ -457,6 +459,6 @@ agentcore.NewAgent(
 | TTL 解析（"ephemeral:1h"） | agentcore `llm/litellm.go` `cacheControlFromMetadata` |
 | 能力门控 | agentcore `llm/litellm.go` `applyCallConfig` |
 | 官方端点判定 + opt-in | litellm `provider/openai/capabilities.go` / `provider.go Config` |
-| 缓存身份（一书一基） | SynChronicle `internal/agents/build.go` `promptCacheBase` |
-| 断裂检测 | SynChronicle `internal/host/usage.go` `noteCacheBreak` |
+|  缓存身份（一书一基） | SynChronicle（TS 未落地；对应 `src/agents/build.ts`） |
+| 断裂检测 | SynChronicle（TS 未落地；对应 `src/runtime/usage.ts`） |
 | 架构定位 | SynChronicle `docs/architecture.md` §6.6 |

@@ -1,12 +1,14 @@
 # README and License Refresh Implementation Plan
 
+> **⚠️ 历史文档**：本文是 Go 原型时代的实施计划（GoReleaser / `go test` / `cmd/synchronicle` 均属当时）。当前 TS 代码库中，README/许可证契约由 `src/brand/`（`brand.test.ts`）承担，发布走 npm（`package.json` files 字段 + GitHub Actions release.yml）。本计划仅作历史记录，执行步骤不再适用。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 用全新的产品首页型 README 替换现有长文档，删除历史视觉资源，并统一 Apache-2.0 版权与发布包信息。
 
 **Architecture:** README 只承担项目定位、上手、运行和安全说明，高级内容链接到现有 `docs/`。许可证保持标准 Apache-2.0 正文，通过独立 `NOTICE` 声明 SynChronicle 与 one-ea 版权，品牌契约测试锁定文档和发布包一致性。
 
-**Tech Stack:** Markdown、Apache License 2.0、GoReleaser v2、Go 品牌契约测试
+**Tech Stack（当时）：** Markdown、Apache License 2.0、GoReleaser v2、Go 品牌契约测试
 
 ## Global Constraints
 

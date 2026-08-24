@@ -163,8 +163,8 @@ tail -50 output/{novel}/meta/sessions/agents/writer-*.jsonl
 
 1. 在本文档 §2 加一行速查
 2. 如果工件需要专项观测（不是简单的"存在/不存在"判断），加 §X 专题段
-3. 如果想要自动诊断，在 `internal/diag/snapshot.go::Load` 中加载，并在 `internal/diag/rules_*.go` 加规则
+3. 如果想要自动诊断，在 `src/diag/diagnose.ts` 的 `diagnose(store)` 中加载，并按现有规则模式加规则
 
 **不要：**
-- 不要把 `internal/diag/` 里所有规则照抄到本文档（那是规则参考，不是观测手册）
+- 不要把 `src/diag/diagnose.ts` 里所有规则照抄到本文档（那是规则参考，不是观测手册）
 - 不要为每个机制都写诊断规则——阈值靠拍脑袋会错，先观察再补
