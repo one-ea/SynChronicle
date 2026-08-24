@@ -1,5 +1,6 @@
 import type { RuntimeEvent } from "../domain/index.js";
 import type { ExportOptions } from "../runtime/exp/index.js";
+import { RUN_END } from "../runtime/stream.js";
 
 export interface TuiSnapshot {
   runtimeState: string;
@@ -18,7 +19,7 @@ export interface TuiSnapshot {
 
 export interface TuiHost {
   events(): AsyncIterable<RuntimeEvent>;
-  stream(): AsyncIterable<string>;
+  stream(includeBoundaries?: boolean): AsyncIterable<string>;
   snapshot(): TuiSnapshot;
   startPrepared(prompt: string): Promise<void>;
   continue(prompt: string): Promise<void>;
@@ -45,7 +46,11 @@ export type TuiAction =
 export function reduceTuiState(state: TuiState, action: TuiAction): TuiState {
   switch (action.type) {
     case "event": return { ...state, snapshot: withReflection(state.snapshot, action.event), events: [...state.events.slice(-499), action.event], error: action.event.type === "error" ? action.event.message : state.error };
-    case "stream": return { ...state, stream: (state.stream + action.delta).slice(-64_000) };
+    case "stream": {
+      if (action.delta === RUN_END) return { ...state, stream: state.stream ? `${state.stream}\n` : state.stream };
+      if (action.delta === "\u0000clear") return { ...state, stream: state.stream ? `${state.stream}\n\n` : state.stream };
+      return { ...state, stream: (state.stream + action.delta).slice(-64_000) };
+    }
     case "snapshot": return { ...state, snapshot: { ...action.snapshot, reflection: action.snapshot.reflection ?? state.snapshot.reflection } };
     case "error": return { ...state, error: action.error };
   }

@@ -10,5 +10,4 @@ export default defineConfig({
   target: "es2024",
   sourcemap: true,
   splitting: false,
-  metafile: true,
 });

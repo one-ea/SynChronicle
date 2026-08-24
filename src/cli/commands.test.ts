@@ -15,6 +15,18 @@ describe("CLI commands", () => {
     expect(stderr).toHaveBeenCalledWith(expect.stringContaining("缺少 --cases"));
   });
 
+  it("parses --judge / --no-judge and rejects conflicting use", async () => {
+    const stderr = vi.fn();
+    expect(await evalCommand(["--cases", "cases", "--judge", "--no-judge"], { writeStderr: stderr })).toBe(2);
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining("不能同时使用"));
+
+    const run = vi.fn().mockResolvedValue(0 as const);
+    expect(await evalCommand(["--cases", "cases", "--judge", "--ci"], { load: () => [], run })).toBe(0);
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ judge: true, ci: true }));
+    expect(await evalCommand(["--cases", "cases", "--no-judge"], { load: () => [], run })).toBe(0);
+    expect(run).toHaveBeenLastCalledWith(expect.objectContaining({ judge: false }));
+  });
+
   it("uses injected npm registry and installer", async () => {
     const install = vi.fn().mockResolvedValue(undefined);
     const messages: string[] = [];

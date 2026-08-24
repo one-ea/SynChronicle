@@ -4,6 +4,8 @@
 - Status: Approved
 - Scope: README、视觉资源、Apache-2.0 版权信息、NOTICE、发布包
 
+> **⚠️ 实现状态**：本设计已落地，但文档中的验证/构建命令是 Go 原型遗留（`go test ./internal/brand`、`go build ./cmd/synchronicle`）。当前 TS 代码库对应：品牌契约测试 = `pnpm test`（`src/brand/brand.test.ts`），构建 = `pnpm build`（tsup → `dist/cli/index.js`），发布 = npm（GitHub Actions `.github/workflows/release.yml`）。
+
 ## 目标
 
 为 SynChronicle 建立一份全新的产品首页型 README，并统一仓库、发布包和 GitHub 展示中的 Apache License 2.0 信息。

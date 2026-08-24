@@ -1,0 +1,20 @@
+{
+  "id": "draft_interrupt_resume",
+  "category": "recovery",
+  "role": "writer",
+  "description": "中断草稿恢复：预置进行中章节残留（模拟草稿未提交即崩溃），Resume 后继续推进并清零残留。",
+  "prompt": "写一部约八章的仙侠长篇，主角是灵田看守，靠一株会说话的灵草卷入宗门密辛。",
+  "max_chapters": 4,
+  "target_prompts": ["writer.md"],
+  "expect": {
+    "phase": "writing",
+    "min_completed_chapters": 2,
+    "resume_to_chapters": 2,
+    "seed": { "in_progress_chapter": 1, "pending_commit": true },
+    "required_checkpoints": ["chapter:2:commit"],
+    "no_pending": ["in_progress", "pending_commit"]
+  },
+  "gate": {
+    "max_severity": "info"
+  }
+}

@@ -5,6 +5,8 @@ import type { Bundle } from "../domain/index.js";
 import type { ModelSet } from "../providers/index.js";
 import { StoreScope, type Store, type StagingSession } from "../store/index.js";
 import { createToolRegistry, type AskUserHandler } from "../tools/registry.js";
+import { normalizeRule, type Candidate, type RuleGenerator } from "../rules/index.js";
+import { generateText } from "ai";
 import type { Agent } from "./agent.js";
 import type { AgentExecutor, GenerateResult } from "./agent.js";
 import { createArchitect } from "./architect.js";
@@ -76,6 +78,20 @@ export interface BuiltCoordinator {
   applyThinking(role: string, level: string): void;
 }
 
+
+/** 用默认角色模型包装 LLM 规则归一化（prompt 内 JSON 指令 + 侧解析兜底，见 src/rules）。 */
+export function makeRuleNormalizer(models: ModelSet): (text: string) => Promise<Candidate> {
+  const model = models.forRole("writer");
+  const generate: RuleGenerator = async (messages) => {
+    const result = await generateText({
+      model,
+      messages: messages.map(m => ({ role: m.role as "system" | "user" | "assistant", content: m.content })),
+    });
+    return result.text;
+  };
+  return (text) => normalizeRule("runtime_user", text, generate);
+}
+
 function prompt(bundle: Bundle, name: string): string {
   return bundle.prompts?.[name] ?? bundle.prompts?.[`${name}.md`] ?? "";
 }
@@ -96,7 +112,8 @@ export function buildCoordinator(
     ? { enabled: true, max_rounds: 3, pass_threshold: 85, review_retry_limit: 2 }
     : { enabled: true, max_rounds: 3, pass_threshold: 85, review_retry_limit: 2, ...cfg.reflection };
   const storeScope = new StoreScope(store);
-  const registry = createToolRegistry({ store: storeScope.store, askUser });
+  let createdAgents: BuiltCoordinator["agents"] | undefined;
+  const registry = createToolRegistry({ store: storeScope.store, askUser, references: bundle.references, normalize: makeRuleNormalizer(models), subagents: () => createdAgents ?? {} });
   const makeContext = (role: string) => {
     const selection = models.currentSelection(role === "architect_short" || role === "architect_long" ? "architect" : role);
     return new ContextManager({ window: resolveContextWindow(cfg, selection.model).window });
@@ -158,6 +175,9 @@ export function buildCoordinator(
   };
   const coordinatorCtxMgr = makeContext("coordinator");
   const coordinator = createCoordinator(models.forRoleWithFailover("coordinator"), prompt(bundle, "coordinator"), registry, { context: coordinatorCtxMgr, ...usage });
+  // 子代理 CheckpointDeltaGuard 挂在 subagent 工具边界（src/tools/tools.ts）：任务完成但无新 checkpoint
+  // 时返回结构化警告，由 Coordinator 核对重派。Agent 级 stopGuard 与反思执行（候选每轮 stop）不兼容，
+  // 故不作为默认装配（能力保留在 Agent，见 src/agents/agent.ts 与 stopguard.test.ts）。
   const architectModel = models.forRoleWithFailover("architect");
   const architectShort = createArchitect("architect_short", architectModel, prompt(bundle, "architect-short"), registry, { context: makeContext("architect_short"), executor: makeExecutor("architect_short", "architect"), ...usage });
   const architectLong = createArchitect("architect_long", architectModel, prompt(bundle, "architect-long"), registry, { context: makeContext("architect_long"), executor: makeExecutor("architect_long", "architect"), ...usage });
@@ -166,6 +186,7 @@ export function buildCoordinator(
   const writer = createWriter(models.forRoleWithFailover("writer"), writerSystem, registry, { context: makeContext("writer"), maxSteps: 30, executor: makeExecutor("writer", "writer"), ...usage });
   const editor = createEditor(models.forRoleWithFailover("editor"), prompt(bundle, "editor"), registry, { context: makeContext("editor"), executor: makeExecutor("editor", "editor"), ...usage });
   const agents = { coordinator, architect_short: architectShort, architect_long: architectLong, writer, editor };
+  createdAgents = agents;
   return {
     coordinator,
     agents,

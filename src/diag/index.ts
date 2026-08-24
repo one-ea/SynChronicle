@@ -1,3 +1,4 @@
+export * from "./diagnose.js";
 const structural = /^[A-Za-z0-9_.:/-]+$/;
 const hash = (s: string) => { let h = 2166136261; for (const ch of Buffer.from(s)) h = Math.imul(h ^ ch, 16777619); return (h >>> 0).toString(16).padStart(8, "0"); };
 export function projectValue(value: unknown): string { if (typeof value === "string") { let decoded = value; if (value.startsWith('"')) { try { const parsed: unknown = JSON.parse(value); if (typeof parsed === "string") decoded = parsed; } catch { /* already decoded */ } } return decoded.length <= 32 && structural.test(decoded) ? JSON.stringify(decoded) : `<redacted len=${[...decoded].length} sha=${hash(decoded)}>`; } if (Array.isArray(value)) return `<redacted array len=${JSON.stringify(value).length}>`; if (value && typeof value === "object") return `<redacted object len=${JSON.stringify(value).length}>`; return String(value); }

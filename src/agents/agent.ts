@@ -23,7 +23,29 @@ export interface AgentOptions {
   maxSteps?: number;
   onUsage?: (name: string, usage: unknown, model?: { provider: string; model: string }) => void;
   executor?: AgentExecutor;
+  /**
+   * CheckpointDeltaGuard（对应 docs/architecture.md §6.4 设计愿景，TS 落地版）：
+   * 本轮结束（finishReason=stop）时必须产生新的 checkpoint，否则注入 reminder 重试。
+   * probe 返回当前 checkpoint 序号（如 checkpoints.all().length）；requireProgress 返回
+   * false 可放行（默认 true）。连续 maxBlocked 次拦不住则放弃（按原型语义终止）。
+   */
+  stopGuard?: {
+    probe: () => Promise<number>;
+    requireProgress?: () => Promise<boolean>;
+    maxBlocked?: number;
+    reminder?: (attempt: number) => string;
+  };
 }
+
+/** 停止守护拦截信号：generateText 内部抛出，由 generateDirect 捕获后追加 reminder 重试。 */
+export class StopBlockedError extends Error {
+  constructor() {
+    super("stop blocked: no new checkpoint in this step");
+    this.name = "StopBlockedError";
+  }
+}
+
+const DEFAULT_REMINDER = "进度尚未推进：本轮结束前必须写入新的 checkpoint（plan/draft/commit/review/arc_summary 等）。请继续执行未完成的步骤，不要直接结束。";
 
 export class Agent {
   readonly name: string;
@@ -34,11 +56,15 @@ export class Agent {
   private readonly maxSteps: number;
   private readonly onUsage?: AgentOptions["onUsage"];
   private readonly executor?: AgentExecutor;
+  private readonly stopGuard?: AgentOptions["stopGuard"];
+  private readonly maxBlocked: number;
+  private guardedMarked = false;
+  private guardedBefore = 0;
   private lastReflection: { executionId?: string; status: "running" | "completed" | "failed"; qualityRisk?: unknown; finalReview?: unknown; rounds?: number } | null = null;
   private history: ModelMessage[] = [];
   private executionQueue: Promise<void> = Promise.resolve();
 
-  constructor({ name, model, system, tools = {}, context = new ContextManager({ window: 200000 }), maxSteps = 20, onUsage, executor }: AgentOptions) {
+  constructor({ name, model, system, tools = {}, context = new ContextManager({ window: 200000 }), maxSteps = 20, onUsage, executor, stopGuard }: AgentOptions) {
     this.name = name;
     this.model = model;
     this.system = system;
@@ -46,10 +72,17 @@ export class Agent {
     this.maxSteps = maxSteps;
     this.onUsage = onUsage;
     this.executor = executor;
+    this.stopGuard = stopGuard;
+    this.maxBlocked = Math.max(1, stopGuard?.maxBlocked ?? 3);
     this.tools = Object.fromEntries(Object.entries(tools).map(([toolName, definition]) => [toolName, tool({
       description: definition.description,
       inputSchema: definition.inputSchema,
-      execute: async (input) => definition.execute(input),
+      execute: async (input) => {
+        if (stopGuard) this.guardedBefore = await stopGuard.probe();
+        const output = await definition.execute(input);
+        if (stopGuard && (await stopGuard.probe()) > this.guardedBefore) this.guardedMarked = true;
+        return output;
+      },
     })]));
   }
 
@@ -105,11 +138,48 @@ export class Agent {
   private async generateDirect(prompt: string, signal?: AbortSignal) {
     const messages = await this.prepare(prompt);
     signal?.throwIfAborted();
-    const result = await generateText({ model: this.model, system: this.system, messages, tools: this.tools, stopWhen: stepCountIs(this.maxSteps), ...(signal ? { abortSignal: signal } : {}) });
-    signal?.throwIfAborted();
-    this.history.push({ role: "assistant", content: result.text });
-    this.onUsage?.(this.name, result.usage, usageModelIdentity(result.usage) ?? modelIdentity(this.model));
-    return result;
+    if (!this.stopGuard) {
+      const result = await generateText({ model: this.model, system: this.system, messages: withCacheBreakpoint(messages, this.model), tools: this.tools, stopWhen: stepCountIs(this.maxSteps), ...(signal ? { abortSignal: signal } : {}) });
+      signal?.throwIfAborted();
+      this.history.push({ role: "assistant", content: result.text });
+      this.onUsage?.(this.name, result.usage, usageModelIdentity(result.usage) ?? modelIdentity(this.model));
+      return result;
+    }
+    return this.generateGuarded(messages, signal);
+  }
+
+  /** 停止守护循环：模型想停但本轮无新 checkpoint → 注入 reminder 重试，拦不住 maxBlocked 次放弃。 */
+  private async generateGuarded(messages: ModelMessage[], signal?: AbortSignal) {
+    const guard = this.stopGuard!;
+    const working: ModelMessage[] = [...messages];
+    for (let attempt = 1; ; attempt += 1) {
+      signal?.throwIfAborted();
+      this.guardedMarked = false;
+      let blocked = false;
+      const result = await generateText({
+        model: this.model,
+        system: this.system,
+        messages: withCacheBreakpoint(working, this.model),
+        tools: this.tools,
+        stopWhen: stepCountIs(this.maxSteps),
+        onStepFinish: async (step) => {
+          if (step.finishReason === "stop" && !this.guardedMarked && (await guard.requireProgress?.() ?? true)) {
+            blocked = true;
+          }
+        },
+        ...(signal ? { abortSignal: signal } : {}),
+      });
+      signal?.throwIfAborted();
+      if (blocked) {
+        if (attempt >= this.maxBlocked) throw new StopBlockedError();
+        const reminder = guard.reminder?.(attempt) ?? DEFAULT_REMINDER;
+        working.push({ role: "user", content: `[进度守护] ${reminder}（第 ${attempt} 次提醒）` });
+        continue;
+      }
+      this.history.push({ role: "assistant", content: result.text });
+      this.onUsage?.(this.name, result.usage, usageModelIdentity(result.usage) ?? modelIdentity(this.model));
+      return result;
+    }
   }
 
   stream(prompt: string, signal?: AbortSignal) {
@@ -122,7 +192,7 @@ export class Agent {
       return { textStream, completed };
     }
     const prepared = this.prepare(prompt);
-    const resultPromise = prepared.then((messages) => { signal?.throwIfAborted(); return streamText({ model: this.model, system: this.system, messages, tools: this.tools, stopWhen: stepCountIs(this.maxSteps), ...(signal ? { abortSignal: signal } : {}) }); });
+    const resultPromise = prepared.then((messages) => { signal?.throwIfAborted(); return streamText({ model: this.model, system: this.system, messages: withCacheBreakpoint(messages, this.model), tools: this.tools, stopWhen: stepCountIs(this.maxSteps), ...(signal ? { abortSignal: signal } : {}) }); });
     const textStream = (async function* () {
       const result = await resultPromise;
       yield* result.textStream;
@@ -146,6 +216,20 @@ export class Agent {
 
 function modelIdentity(model: LanguageModelInstance): { provider: string; model: string } | undefined {
   return model.provider && model.modelId ? { provider: model.provider, model: model.modelId } : undefined;
+}
+
+/**
+ * 提示词缓存滚动断点（缺口修复，对应 docs/architecture.md §6.6）：
+ * Anthropic 系在最后一条 user 消息落 `cache_control: ephemeral` 断点（上一轮写、这一轮读），
+ * 恒 1 个断点在预算内。system 地板断点（跨会话复用）需把 system 移入 messages[0]，暂未做。
+ * OpenAI 官方自动前缀缓存无需显式参数。
+ * 浅拷贝仅替换末条消息的 providerOptions，不污染 history（闩锁红线：缓存键会话内冻结）。
+ */
+function withCacheBreakpoint(messages: readonly ModelMessage[], model: LanguageModelInstance): ModelMessage[] {
+  if (model.provider !== "anthropic") return messages as ModelMessage[];
+  const last = messages.at(-1);
+  if (!last || last.role !== "user" || typeof last.content !== "string") return messages as ModelMessage[];
+  return [...messages.slice(0, -1), { ...last, providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } } }];
 }
 
 export function createAgent(options: AgentOptions): Agent {

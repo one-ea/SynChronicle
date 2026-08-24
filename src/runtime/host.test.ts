@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -214,6 +214,21 @@ describe("Host", () => {
     expect(value.snapshot().runtimeState).toBe("paused");
   });
 
+  it("imports explicit Arabic and Chinese chapter numbers in order", async () => {
+    const inputDir = await mkdtemp(join(tmpdir(), "runtime-host-import-numbered-"));
+    const source = join(inputDir, "source.txt");
+    await writeFile(source, "# 第 2 章 雨夜\n正文二\n第 三 章 回声\n正文三");
+    const { value, dir: outputDir } = await host();
+    await expect(value.importText(source)).resolves.toEqual({ chapters: 2 });
+
+    expect(await readFile(join(outputDir, "chapters", "02.md"), "utf8")).toContain("正文二");
+    expect(await readFile(join(outputDir, "chapters", "03.md"), "utf8")).toContain("正文三");
+    await expect(value.store.progress.load()).resolves.toMatchObject({ current_chapter: 4, total_chapters: 3, completed_chapters: [2, 3] });
+    await expect(value.store.checkpoints.latestByStep({ kind: "chapter", chapter: 2 }, "commit")).resolves.not.toBeNull();
+    await expect(value.store.checkpoints.latestByStep({ kind: "chapter", chapter: 3 }, "commit")).resolves.not.toBeNull();
+
+  });
+
   it("imports text, exports txt/epub, and runs simulation", async () => {
     const { value, dir } = await host();
     const source = join(dir, "source.txt");
@@ -226,5 +241,33 @@ describe("Host", () => {
     expect(epub.path).toMatch(/\.epub$/);
     expect((await readFile(epub.path)).includes(Buffer.from("META-INF/container.xml"))).toBe(true);
     await expect(value.simulate({ sources: [source] })).resolves.toMatchObject({ sources: 1 });
+  });
+});
+
+describe("Host inject", () => {
+  it("delivers injected interventions with the [用户干预] prefix on the next run", async () => {
+    const { value, runtimeAgent } = await host();
+    await value.inject("配角动机要更清晰");
+    await value.inject("第二句干预");
+    await value.continue("继续写作");
+    expect(runtimeAgent.run).toHaveBeenCalledWith(
+      expect.stringContaining("[用户干预] 配角动机要更清晰"),
+      expect.any(AbortSignal),
+    );
+    expect(runtimeAgent.run).toHaveBeenCalledWith(
+      expect.stringContaining("[用户干预] 第二句干预"),
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("consumes the injection queue so it is not delivered twice", async () => {
+    const { value, runtimeAgent } = await host();
+    await value.inject("只送一次");
+    await value.continue("继续");
+    await value.continue("继续");
+    const first = (runtimeAgent.run as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string;
+    const second = (runtimeAgent.run as ReturnType<typeof vi.fn>).mock.calls[1]?.[0] as string;
+    expect(first).toContain("[用户干预] 只送一次");
+    expect(second).not.toContain("只送一次");
   });
 });

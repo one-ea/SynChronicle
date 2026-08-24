@@ -1,8 +1,10 @@
 # 重构提案：Hybrid Coordinator — Host 路由 × LLM 裁定
 
-> 状态：**已采纳并落地**（2026-04-20）
+> **⚠️ 历史文档**：本文是 **Go 原型时代**的重构设计稿（2026-04-20，已采纳并落地于当时的 Go 代码库；文中 `internal/*.go`、`router.go`、`StopGuard` 等均为当时实现）。**当前 TS 代码库**（`src/`）只落地了其中与架构原则相关的部分：Flow Router 纯函数在 `src/runtime/flow/router.ts`（`route` + `formatMessage`），resume 简化在 `src/runtime/resume.ts`；`dispatcher.go`/StopGuard/子代理 Guard 未落地（见 `docs/architecture.md` 顶部实现状态表）。本文保留为设计决策记录，**勿按字面寻找对应代码**。
+
+> 状态：**已采纳并落地**（2026-04-20，Go 原型）
 > 调研时间：2026-04-20
-> 对应现行文档：`docs/architecture.md` §2 / §3 / §7 / §8 / §13 已同步更新
+> 对应现行文档：`docs/architecture.md` §2 / §3 / §7 / §8（TS 实现状态见该文档顶部横幅）
 >
 > **本文档是第二稿。**第一稿激进方案（完全删除 Coordinator）的问题详见附录 A，保留该节避免重走弯路。
 >

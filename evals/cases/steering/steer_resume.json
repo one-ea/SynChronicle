@@ -1,0 +1,20 @@
+{
+  "id": "steer_resume",
+  "category": "steering",
+  "role": "coordinator",
+  "description": "停机窗口干预：第一阶段跑 2 章后注入停机干预意见（pending_steer），Resume 后系统继续推进不中断。",
+  "prompt": "写一部约十章的悬疑长篇，海滨小镇接连有人失踪，新任巡警发现所有失踪者都买过同一家书店的书。",
+  "max_chapters": 4,
+  "target_prompts": ["writer.md"],
+  "expect": {
+    "phase": "writing",
+    "min_completed_chapters": 3,
+    "resume_to_chapters": 3,
+    "steer": { "after_chapters": 2, "message": "配角动机要更清晰：每个配角都要有独立且可信的行动理由" },
+    "required_checkpoints": ["chapter:3:commit"],
+    "no_pending": ["in_progress", "pending_commit"]
+  },
+  "gate": {
+    "max_severity": "warning"
+  }
+}

@@ -135,3 +135,97 @@ describe("read and interaction tools", () => {
     await expect(tool.execute!({ questions: [{ question: "篇幅？", header: "篇幅", options: [{ label: "长篇", description: "长线" }, { label: "短篇", description: "单卷" }], multiSelect: false }] }, {} as never)).resolves.toBe("用户回答：[篇幅] 长篇");
   });
 });
+
+describe("context envelope gaps", () => {
+  it("injects reference_pack by role whitelist", async () => {
+    const references = {
+      antiAiTone: "反 AI 腔",
+      consistency: "一致性",
+      qualityChecklist: "质量清单",
+      longformPlanning: "长篇规划",
+      outlineTemplate: "大纲模板",
+      plotStructures: "情节结构",
+      arcTemplates: "弧模板",
+      styleReference: "风格参考",
+    };
+    const tools = createToolRegistry({ store, references });
+    const writer = await tools.novel_context.execute!({ chapter: 1, consumer: "writer" }, {} as never) as { reference_pack: Record<string, string> };
+    expect(writer.reference_pack).toEqual({ antiAiTone: "反 AI 腔", consistency: "一致性", qualityChecklist: "质量清单" });
+    const architect = await tools.novel_context.execute!({ consumer: "architect" }, {} as never) as { reference_pack: Record<string, string> };
+    expect(architect.reference_pack).toEqual({ longformPlanning: "长篇规划", outlineTemplate: "大纲模板", plotStructures: "情节结构", arcTemplates: "弧模板", styleReference: "风格参考" });
+    const coordinator = await tools.novel_context.execute!({ consumer: "coordinator" }, {} as never) as { reference_pack: Record<string, string> };
+    expect(coordinator.reference_pack).toEqual({});
+  });
+
+  it("injects episodic_memory.style_stats for writer once 5 chapters exist", async () => {
+    const tools = createToolRegistry({ store });
+    await store.outline.saveOutline([1, 2, 3, 4, 5].map(chapter => ({ chapter, title: `第${chapter}章`, core_event: `事件${chapter}`, hook: `钩子${chapter}`, scenes: [] })));
+    for (let chapter = 1; chapter <= 5; chapter += 1) {
+      await store.drafts.saveFinalChapter(chapter, `# 第 ${chapter} 章\n\n夜色像一匹绸缎铺开，他沉默了许久。`);
+    }
+    await store.progress.save({ novel_name: "B", phase: "writing", current_chapter: 6, total_chapters: 5, completed_chapters: [1, 2, 3, 4, 5], total_word_count: 500, flow: "writing" });
+    const writer = await tools.novel_context.execute!({ chapter: 6, consumer: "writer" }, {} as never) as { episodic_memory: { style_stats?: { patterns: unknown[] } } };
+    expect(writer.episodic_memory.style_stats?.patterns.length).toBeGreaterThan(0);
+  });
+
+  it("omits style_stats below 5 chapters", async () => {
+    const tools = createToolRegistry({ store });
+    await store.drafts.saveFinalChapter(1, "正文一");
+    await store.progress.save({ novel_name: "B", phase: "writing", current_chapter: 2, total_chapters: 1, completed_chapters: [1], total_word_count: 100, flow: "writing" });
+    const writer = await tools.novel_context.execute!({ chapter: 2, consumer: "writer" }, {} as never) as { episodic_memory: Record<string, unknown> };
+    expect(writer.episodic_memory).toEqual({});
+  });
+});
+
+describe("user rules wiring", () => {
+  it("normalizes runtime rules into a snapshot when a normalizer is wired", async () => {
+    const normalize = vi.fn(async (text: string) => ({ source: "runtime_user", structured: { genre: "玄幻" }, preferences: text, uncertain: [], degraded: false }));
+    const tools = createToolRegistry({ store, normalize });
+    const result = await tools.save_user_rules.execute!({ text: "对话占比要高" }, {} as never) as { status: string; in_effect: { structured: { genre: string } } };
+    expect(result.status).toBe("ready");
+    expect(result.in_effect.structured.genre).toBe("玄幻");
+    expect(normalize).toHaveBeenCalledWith("对话占比要高");
+    const persisted = await store.userRules.load() as { status: string; sources: string[] };
+    expect(persisted.sources).toContain("runtime_user");
+  });
+
+  it("degrades to raw preferences without a normalizer and merges previous snapshot", async () => {
+    await store.userRules.save({ status: "degraded", preferences: "旧规则：少用成语" });
+    const tools = createToolRegistry({ store });
+    const result = await tools.save_user_rules.execute!({ text: "新规则：多用短句" }, {} as never) as { status: string; in_effect: { preferences: string } };
+    expect(result.status).toBe("degraded");
+    expect(result.in_effect.preferences).toContain("旧规则：少用成语");
+    expect(result.in_effect.preferences).toContain("新规则：多用短句");
+  });
+});
+
+describe("subagent tool", () => {
+  it("invokes the subagent and appends the flow instruction at the tool boundary", async () => {
+    const writer = { generate: vi.fn(async () => ({ text: "第一章完成" })) };
+    const tools = createToolRegistry({ store, subagents: () => ({ writer: writer as never }) });
+    await store.progress.save({ novel_name: "B", phase: "writing", current_chapter: 2, total_chapters: 10, completed_chapters: [1], total_word_count: 1000, flow: "writing" });
+    const result = await tools.subagent.execute!({ agent: "writer", task: "写第 2 章" }, {} as never) as string;
+    expect(writer.generate).toHaveBeenCalledWith("写第 2 章");
+    expect(result).toContain("第一章完成");
+    expect(result).toContain("[Host 下达指令]");
+    expect(result).toContain("写第 2 章");
+  });
+
+  it("returns a plain result when the flow has no next instruction", async () => {
+    const writer = { generate: vi.fn(async () => { await store.checkpoints.append({ kind: "chapter", chapter: 11 }, "plan"); return { text: "完成" }; }) };
+    const tools = createToolRegistry({ store, subagents: () => ({ writer: writer as never }) });
+    await store.progress.save({ novel_name: "B", phase: "complete", current_chapter: 10, total_chapters: 10, completed_chapters: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], total_word_count: 10000, flow: "writing" });
+    const result = await tools.subagent.execute!({ agent: "writer", task: "写第 11 章" }, {} as never) as string;
+    expect(result).toBe("完成");
+  });
+
+  it("flags a completed subagent task that produced no new checkpoint", async () => {
+    const writer = { generate: vi.fn(async () => ({ text: "什么都没写" })) };
+    const tools = createToolRegistry({ store, subagents: () => ({ writer: writer as never }) });
+    await store.progress.save({ novel_name: "B", phase: "writing", current_chapter: 2, total_chapters: 10, completed_chapters: [1], total_word_count: 1000, flow: "writing" });
+    const result = await tools.subagent.execute!({ agent: "writer", task: "写第 2 章" }, {} as never) as string;
+    expect(result).toContain("什么都没写");
+    expect(result).toContain("[CheckpointDeltaGuard]");
+    expect(result).toContain("未产生任何新的 checkpoint");
+  });
+});

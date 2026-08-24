@@ -1,0 +1,19 @@
+{
+  "id": "crash_resume",
+  "category": "recovery",
+  "role": "writer",
+  "description": "崩溃恢复：第一阶段跑到第 2 章后截停（模拟中断），Resume 后完成第 3 章，无进行中残留、无重复 commit。",
+  "prompt": "写一部约十章的武侠长篇，主角是镖局账房先生，被一卷账册卷入前朝宝藏之争。",
+  "max_chapters": 5,
+  "target_prompts": ["writer.md"],
+  "expect": {
+    "phase": "writing",
+    "min_completed_chapters": 3,
+    "resume_to_chapters": 3,
+    "required_checkpoints": ["chapter:3:commit"],
+    "no_pending": ["in_progress", "pending_steer", "pending_commit"]
+  },
+  "gate": {
+    "max_severity": "info"
+  }
+}

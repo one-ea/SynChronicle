@@ -9,7 +9,7 @@
         ↓
 LLM 语义归一化（按来源）
         ↓
-Go 确定性合并（按优先级）  ←  系统默认规则（代码内置，直接进合并，不经 LLM）
+确定性合并（按优先级）  ←  系统默认规则（代码内置，直接进合并，不经 LLM）
         ↓
 output/novel/meta/user_rules.json
         ↓
@@ -18,27 +18,27 @@ novel_context 注入
 Architect / Writer / Editor / commit 检查共用
 ```
 
-## 实现状态（2026-06-28，已落地 + 经 review 修缺）
+## 实现状态（TS 代码库现状）
 
-本设计已实现，24 包 `go build` / `go vet` / `go test` 全绿。一轮 code review 后修掉 4 个缺口（均已修复）：①启动 prompt 规则只接在死方法 `Host.Start` 上、真实入口走 `StartPrepared` 而漏建快照——已把原始 prompt 经 `Plan.RawPrompt` 透传到 quick/cocreate 两条入口，统一调 `Host.PrepareUserRules`；②快照落盘失败被吞——`PrepareUserRules` 改为落盘失败即返 error 中止开书（resume 路径保持 best-effort，避免给老书引入新失败模式）；③rules 文件读取错误静默跳过——`raw.go` 对非"不存在"错误（权限等）打日志；④README 仍教旧 YAML/front matter 且链向已删文件——已重写。
+本文档源自 Go 原型时代的设计。TS 实现（`src/rules/index.ts`）已把核心逻辑落地：`rawFileSources`（读 `~/.synchronicle/rules/*.md` / `./.synchronicle/rules/*.md`）、`normalizeRule`（system prompt 约定 JSON 形状 + 侧解析/sanitize 兜底，失败重试 3 次后降级为 raw preferences）、`buildSnapshot`（确定性合并）、`systemDefaults()`（机械基线，已从 `assets/rules/default.md` 迁入代码，YAML 路径不再存在）、`check`/`lint`（commit 检查）。
 
-落地与本文档基本一致，两处实现选择与字面表述不同，记录于此：
+两处实现选择与设计表述的差异（与 Go 时代一致，记录于此）：
 
-1. **归一化不是"provider schema 约束的调用"，而是"prompt 内 JSON 指令 + Go 侧校验"。**
-   原因：litellm 的结构化输出依赖各 provider（OpenAI/Gemini 支持 JSONSchema，Anthropic 不支持），
-   为跨 provider 一致，归一化用 system prompt 约定 JSON 形状 + Go 解析/类型校验/值域 sanitize 兜底，
-   不向模型下发 JSONSchema。下文出现的"schema 约束"均指此口径（Go 侧 schema 校验，非 provider 端约束）。
+1. **归一化不是"provider schema 约束的调用"，而是"prompt 内 JSON 指令 + 侧校验"。**
+   原因：跨 provider 一致性的考虑（部分 provider 不支持 JSONSchema），归一化用 system prompt 约定 JSON 形状 + 解析/类型校验/值域 sanitize 兜底，不向模型下发 JSONSchema。
 2. **单个字段值非法时降级到"该字段缺失"，而非降级整个来源。**
    如 `chapter_words` 出现 `min>max`，sanitize 把该字段丢弃（视为未声明）、保留该来源其余合法字段；
    只有"整条归一化失败"（网络/模型/非法 JSON/解析失败）才把整个来源降级为 raw preferences、
-   置 `status=degraded`。这样一个坏字段不会连累同来源的其它有效规则。技术错误进日志，
-   有限重试 1 次后降级（`normalizeMaxAttempts=2`）。
+   置 `status=degraded`。
 
-代码落点：`internal/rules`（纯数据 + 确定性合并：snapshot.go / raw.go / types.go）、`internal/userrules`
-（LLM 归一化 + 编排 + 落盘：normalize.go / service.go）、`internal/store/user_rules.go`（快照存储）、
-`internal/tools/save_user_rules.go`（运行中工具壳）、`assets/prompts/coordinator.md`（三类分流）。
-系统默认机械基线已从 `assets/rules/default.md` 迁入代码内置 `rules.SystemDefaults()`，YAML 解析路径与
-yaml.v3 依赖已删除。**未验**：真实 LLM 开书 / 运行中 `save_user_rules` 全链路（normalizer 离线原型已验 10/10）。
+代码落点：`src/rules/index.ts`（纯数据 + 确定性合并 + 归一化）、`src/store/misc.ts` userRules（快照存储，`meta/user_rules.json`）、
+`src/tools/tools.ts` save_user_rules（运行中工具壳，已接归一化）、`src/runtime/prepareUserRules.ts`（启动路径快照，幂等）、
+`assets/prompts/coordinator.md`（三类分流）。
+
+**接线状态（已修复）**：
+- `save_user_rules` 已接 `normalizeRule`（LLM 归一化，失败降级 degraded），与既有快照合并后落盘（旧 `{status, preferences}` 直存格式自动兼容迁移）；
+- 启动路径已接：`Host.new` 装配时 `prepareUserRules` 扫描 `~/.synchronicle/rules/*.md` / `./.synchronicle/rules/*.md` 归一化为快照（幂等：已有快照跳过）；
+- 仍未做（设计遗留）：启动 prompt 本身的规则提炼（只处理 rules 文件与运行中要求）；`commit_chapter` 未调用 `check`/`lint` 做机械检查（`lint` 在 `src/rules/index.ts` 就绪）。
 
 ## 为什么
 
