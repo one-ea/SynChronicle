@@ -16,7 +16,7 @@ SynChronicle 面向需要持续推进长篇故事的创作者与开发者。它�
 - Editor 从结构、一致性、节奏和审美维度审阅正文。
 - 每个关键工具步骤写入 checkpoint，进程中断后可恢复。
 - 卷、弧、章三级摘要支持数百章作品的上下文管理。
-- TUI 展示运行进度，并接受创作过程中的用户干预。
+- WebUI 展示运行进度，并接受创作过程中的用户干预。
 - OpenRouter、Anthropic、Gemini、OpenAI 及兼容接口可按配置切换。
 
 ## 多智能体工作流
@@ -34,7 +34,7 @@ Coordinator
 Store: 正文、元数据、摘要、状态与 checkpoints
 ```
 
-Host 负责启动、恢复、事件观察和干预注入。Coordinator 负责决策，三个子智能体通过持久化工件协作。
+Web 服务负责启动、恢复、事件观察和干预注入。Coordinator 负责决策，三个子智能体通过持久化工件协作。
 
 Writer 的标准章节循环为：加载上下文、回读前文、规划章节、写入草稿、一致性检查、提交终稿。弧或卷到达边界后，Editor 评审，Architect 再展开下一阶段。
 
@@ -66,7 +66,7 @@ synchronicle --version
 
 ## 最小配置
 
-首次运行会引导创建 `~/.synchronicle/config.json`。也可以手动创建以下 JSONC 配置：
+WebUI 启动后会读取 `~/.synchronicle/config.json`、项目级 `./.synchronicle/config.json` 或 `--config` 指定的配置文件。首次使用可以直接在页面的“本地配置”面板保存，也可以手动创建以下 JSONC 配置：
 
 ```jsonc
 {
@@ -114,12 +114,19 @@ Architect、Writer 和 Editor 默认采用反思执行：每轮由原 Agent 生�
 
 ## 启动与常用命令
 
-在计划存放作品的目录中启动交互式 TUI：
+在计划存放作品的目录中启动本地 WebUI：
 
 ```bash
 mkdir my-novel
 cd my-novel
 synchronicle
+# 浏览器打开 http://127.0.0.1:3000
+```
+
+指定 WebUI 端口：
+
+```bash
+synchronicle --port 4317
 ```
 
 携带一句需求启动无界面创作：
@@ -175,7 +182,7 @@ output/novel/
 
 SynChronicle 遵循“LLM 驱动，Host 服务”的运行模型：
 
-- `src/cli` 提供 CLI、TUI 和 headless 入口分发。
+- `src/cli` 提供 CLI、WebUI 和 headless 入口分发。
 - `src/runtime` 管理启动、恢复、事件与运行生命周期。
 - `src/agents` 构建 Coordinator、Architect、Writer 和 Editor。
 - `src/tools` 提供原子化创作工具及 checkpoint 边界。

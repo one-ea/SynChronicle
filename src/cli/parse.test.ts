@@ -4,8 +4,12 @@ import { parseCLIOptions } from "./parse.js";
 describe("parseCLIOptions", () => {
   it("parses startup flags", () => {
     expect(parseCLIOptions(["--config", "x.json", "--headless", "--prompt", "write"])).toEqual({
-      command: "start", configPath: "x.json", headless: true, prompt: "write", promptFile: "", args: [],
+      command: "start", configPath: "x.json", headless: true, web: true, port: 3000, prompt: "write", promptFile: "", args: [],
     });
+  });
+
+  it("defaults to the WebUI and accepts a custom port", () => {
+    expect(parseCLIOptions(["--port", "4317"])).toMatchObject({ command: "start", headless: false, web: true, port: 4317 });
   });
 
   it.each([["--version"], ["-v"], ["version"]])("parses version alias %j", (...argv) => {

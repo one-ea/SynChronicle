@@ -10,7 +10,7 @@ export const WindBackReason = z.enum(["review", "rewrite", "polish", "steer"]);
 export type WindBackReason = z.infer<typeof WindBackReason>;
 export const DraftTier = z.enum(["chapter", "scene"]);
 export type DraftTier = z.infer<typeof DraftTier>;
-export const Transport = z.enum(["headless", "tui"]);
+export const Transport = z.enum(["headless", "web"]);
 export type Transport = z.infer<typeof Transport>;
 
 export const ProgressSchema = z.object({

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { ProgressSchema, Phase, FlowState, PlanningTier, RunMetaSchema, MemoryPolicySchema, ContextProfileSchema, PausePointSchema } from "./runtime.js";
+import { ProgressSchema, Phase, FlowState, PlanningTier, Transport, RunMetaSchema, MemoryPolicySchema, ContextProfileSchema, PausePointSchema } from "./runtime.js";
 describe("runtime enums", () => {
-  it("accepts valid values", () => { for (const value of ["init", "premise", "outline", "writing", "complete"]) expect(Phase.safeParse(value).success).toBe(true); for (const value of ["writing", "reviewing", "rewriting", "polishing", "steering"]) expect(FlowState.safeParse(value).success).toBe(true); for (const value of ["short", "mid", "long"]) expect(PlanningTier.safeParse(value).success).toBe(true); });
+  it("accepts valid values", () => { for (const value of ["init", "premise", "outline", "writing", "complete"]) expect(Phase.safeParse(value).success).toBe(true); for (const value of ["writing", "reviewing", "rewriting", "polishing", "steering"]) expect(FlowState.safeParse(value).success).toBe(true); for (const value of ["short", "mid", "long"]) expect(PlanningTier.safeParse(value).success).toBe(true); expect(Transport.safeParse("web").success).toBe(true); expect(Transport.safeParse("tui").success).toBe(false); });
 });
 describe("runtime persistence schemas", () => {
   const progress = { novel_name: "Test", phase: "writing", current_chapter: 3, total_chapters: 10, completed_chapters: [1, 2], total_word_count: 5000, chapter_word_counts: { "1": 2500 }, flow: "writing" };

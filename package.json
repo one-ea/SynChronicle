@@ -20,6 +20,8 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
+    "start": "node dist/cli/index.js",
+    "start:web": "node dist/cli/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
@@ -31,7 +33,7 @@
     "llm",
     "multi-agent",
     "cli",
-    "tui"
+    "webui"
   ],
   "license": "Apache-2.0",
   "author": "one-ea",
