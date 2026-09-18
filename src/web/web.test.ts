@@ -158,4 +158,24 @@ describe("WebUI", () => {
       await handle.close();
     }
   });
+
+  it("serves diag report with pacing findings from a seeded store", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "synchronicle-web-diag-"));
+    const output = join(directory, "novel");
+    await mkdir(join(output, "meta"), { recursive: true });
+    await writeFile(join(output, "meta", "progress.json"), JSON.stringify({ novel_name: "测试", phase: "writing", current_chapter: 8, total_chapters: 12, completed_chapters: [1, 2, 3, 4, 5, 6, 7], total_word_count: 100, strand_history: ["感情", "支线", "主线", "主线", "主线", "主线", "主线", "主线"], flow: "writing", pending_rewrites: [] }));
+    const configPath = join(directory, "config.json");
+    await writeFile(configPath, JSON.stringify({ provider: "ollama", model: "qwen3:14b", providers: { ollama: { base_url: "http://localhost:11434/v1" } }, output_dir: output }));
+    const handle = await startWebServer({ port: 0, configPath });
+    try {
+      const data = await (async () => JSON.parse(await (await fetch(`http://127.0.0.1:${handle.port}/api/diag`)).text()))();
+      expect(data.configured).toBe(true);
+      const pacing = data.report.findings.filter((finding: { rule: string }) => finding.rule.startsWith("PacingStall"));
+      expect(pacing.length).toBeGreaterThan(0);
+      expect(pacing[0].evidence).toContain("连续");
+    } finally {
+      await handle.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
 });

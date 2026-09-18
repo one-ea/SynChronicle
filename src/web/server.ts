@@ -8,6 +8,7 @@ import { renderReadApp } from "./read.js";
 import { Store } from "../store/index.js";
 import { FileIO } from "../store/io.js";
 import { detectAitone } from "../stylestat/aitone.js";
+import { diagnose } from "../diag/index.js";
 import type { ResolvedConfig } from "../config/schemas.js";
 
 export interface WebServerOptions { port?: number; host?: string; configPath?: string; }
@@ -46,12 +47,20 @@ async function route(request: IncomingMessage, response: ServerResponse, context
   if (request.method === "POST" && url.pathname === "/api/resume") return handleResume(response, context);
   if (request.method === "POST" && url.pathname === "/api/inject") return handleInject(request, response, context);
   if (request.method === "GET" && url.pathname === "/api/book") return handleBook(response, context);
+  if (request.method === "GET" && url.pathname === "/api/diag") return handleDiag(response, context);
   if (request.method === "GET" && /^\/api\/chapters\/\d+$/.test(url.pathname)) return handleChapter(response, context, Number(url.pathname.split("/").pop()));
   if (request.method === "GET" && url.pathname === "/api/stream") return handleStream(request, response, context);
   sendJson(response, 404, { error: "Not found" });
 }
 
 type ChapterStatus = "completed" | "in-progress" | "pending" | "rewrite";
+
+async function handleDiag(response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.store) return sendJson(response, 200, { configured: false, report: null });
+  try {
+    sendJson(response, 200, { configured: true, report: await diagnose(context.store) });
+  } catch (error) { sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) }); }
+}
 
 async function handleBook(response: ServerResponse, context: RuntimeContext): Promise<void> {
   if (!context.store) return sendJson(response, 200, { configured: false, book: null });

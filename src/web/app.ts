@@ -302,7 +302,11 @@ export function renderWebApp(): string {
               <div class="panel-head"><h3>事件时间线</h3><span id="tl-count">0 条</span></div>
               <div id="timeline" class="feed tall" role="log" aria-live="polite"><div class="empty">暂无事件。</div></div>
             </div>
-            <div class="card"><div class="empty">诊断面板将在后续任务开放。</div></div>
+            <div class="card">
+              <div class="panel-head"><h3>运行诊断</h3><span id="diag-count"></span></div>
+              <div style="display:flex;gap:8px;margin-bottom:6px"><button id="diag-run" class="btn btn-tonal" type="button" style="min-height:34px">运行诊断</button></div>
+              <div class="rowlines" id="diag-findings"><div class="empty">点击「运行诊断」检查工件完整性与节奏红线。</div></div>
+            </div>
           </div>
         </section>
         <section class="page" data-page="settings" aria-label="配置" hidden>
@@ -365,6 +369,29 @@ export function renderWebApp(): string {
       $('steer-button').addEventListener('click', async () => { const value = $('steer-input').value.trim(); if (!value) { showNotice('先写下要调整的方向。'); return; } try { await post('/api/inject', { text: value }); $('steer-input').value = ''; showNotice('干预已加入下一次运行。', 'success'); await refresh(); } catch (error) { showNotice(error.message || '干预发送失败'); } });
       $('resume').addEventListener('click', async () => { try { await post('/api/resume'); showNotice('正在恢复上一轮创作。', 'success'); await refresh(); } catch (error) { showNotice(error.message || '恢复失败'); } });
       $('new-run').addEventListener('click', () => { $('prompt').focus(); $('prompt').value = ''; showNotice('写下新的 brief，即可开始下一轮。', 'success'); });
+      const severityLabels = { critical: '严重', warning: '警告', info: '提示' };
+      $('diag-run').addEventListener('click', async () => {
+        const box = $('diag-findings');
+        box.replaceChildren();
+        const loading = document.createElement('div'); loading.className = 'empty'; loading.textContent = '诊断中…'; box.append(loading);
+        try {
+          const data = await (await fetch('/api/diag')).json();
+          box.replaceChildren();
+          if (!data.configured || !data.report) { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '尚未配置模型，无法诊断。'; box.append(empty); return; }
+          const findings = data.report.findings ?? [];
+          $('diag-count').textContent = findings.length + ' 条';
+          if (!findings.length) { const ok = document.createElement('div'); ok.className = 'empty'; ok.textContent = '未发现结构问题，节奏红线全部达标。'; box.append(ok); return; }
+          for (const finding of findings) {
+            const row = document.createElement('div'); row.className = 'rowline'; row.style.alignItems = 'flex-start';
+            const left = document.createElement('div'); left.style.display = 'grid'; left.style.gap = '2px';
+            const head = document.createElement('span'); head.textContent = finding.title;
+            const note = document.createElement('small'); note.style.color = 'var(--muted)'; note.style.fontSize = '11.5px'; note.textContent = finding.evidence;
+            left.append(head, note);
+            const pill = document.createElement('span'); pill.className = 'pill ' + (finding.severity === 'critical' ? 'bad' : finding.severity === 'warning' ? 'warn' : 'muted'); pill.textContent = severityLabels[finding.severity] || finding.severity;
+            row.append(left, pill); box.append(row);
+          }
+        } catch { box.replaceChildren(); const error = document.createElement('div'); error.className = 'empty'; error.textContent = '诊断失败，请稍后重试。'; box.append(error); }
+      });
       refresh();
       loadBookSummary();
     </script>
