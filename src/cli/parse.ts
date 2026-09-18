@@ -2,10 +2,12 @@ export type CLIOptions =
   | { command: "eval"; argv: string[] }
   | { command: "version" }
   | { command: "update"; updateVersion: string }
+  | { command: "mcp"; configPath: string }
   | { command: "start"; configPath: string; headless: boolean; web: boolean; port: number; prompt: string; promptFile: string; args: string[] };
 
 export function parseCLIOptions(argv: string[]): CLIOptions {
   if (argv[0] === "eval") return { command: "eval", argv: argv.slice(1) };
+  if (argv[0] === "mcp") return parseMcp(argv.slice(1));
   let configPath = "", prompt = "", promptFile = "", updateVersion = "";
   let port = 3000, web = true, webFlag = false;
   let headless = false, version = false, update = false;
@@ -35,6 +37,16 @@ export function parseCLIOptions(argv: string[]): CLIOptions {
   if (version) return { command: "version" };
   if (update) return { command: "update", updateVersion };
   return { command: "start", configPath, headless, web, port, prompt, promptFile, args };
+}
+
+function parseMcp(argv: string[]): CLIOptions {
+  let configPath = "";
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i]!;
+    if (arg === "--config") configPath = requiredValue(argv, ++i, "--config");
+    else throw new Error(`mcp 不接受参数 ${arg}（仅支持 --config）`);
+  }
+  return { command: "mcp", configPath };
 }
 
 function requiredValue(argv: string[], index: number, flag: string): string {

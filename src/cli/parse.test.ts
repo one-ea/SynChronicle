@@ -21,6 +21,12 @@ describe("parseCLIOptions", () => {
     expect(parseCLIOptions(["eval", "--cases", "cases"])).toEqual({ command: "eval", argv: ["--cases", "cases"] });
   });
 
+  it("parses the mcp subcommand with an optional config path", () => {
+    expect(parseCLIOptions(["mcp"])).toEqual({ command: "mcp", configPath: "" });
+    expect(parseCLIOptions(["mcp", "--config", "x.json"])).toEqual({ command: "mcp", configPath: "x.json" });
+    expect(() => parseCLIOptions(["mcp", "--headless"])).toThrow(/仅支持 --config/);
+  });
+
   it.each([
     [["--prompt", "x", "--prompt-file", "p"], /不能同时使用/],
     [["--prompt", "x"], /仅能在 --headless/],
