@@ -16,7 +16,13 @@ import type { ResolvedConfig } from "../config/schemas.js";
 const PROTOCOL_VERSION = "2025-06-18";
 const SERVER_INFO = { name: "synchronicle", version: "2.0.0" };
 
-interface HostLike { startPrepared(prompt: string): Promise<void>; continue(prompt: string): Promise<void>; snapshot(): { runtimeState: string }; }
+interface HostLike {
+  startPrepared(prompt: string): Promise<void>;
+  continue(prompt: string): Promise<void>;
+  resume?(): Promise<unknown>;
+  steer?(options: { prompt: string; targetChapter?: number }): Promise<{ aborted: boolean; targetChapter: number }>;
+  snapshot(): { runtimeState: string };
+}
 
 export interface McpMessage { jsonrpc: "2.0"; id?: number | string; method?: string; params?: Record<string, unknown> }
 export interface McpToolSpec { name: string; description: string; inputSchema: Record<string, unknown> }
@@ -87,6 +93,7 @@ const TOOLS: McpToolSpec[] = [
   { name: "synchronicle_diag", description: "运行只读诊断：工件完整性检查 + 节奏红线（PacingStall）等 findings", inputSchema: { type: "object", properties: {}, additionalProperties: false } },
   { name: "synchronicle_run", description: "发起或继续创作（异步启动，立即返回；运行中注入用 synchronicle_inject）", inputSchema: { type: "object", properties: { prompt: { type: "string", description: "创作 brief 或继续指令" } }, required: ["prompt"], additionalProperties: false } },
   { name: "synchronicle_inject", description: "注入运行干预意见（在下一次 run 开头以 [用户干预] 前缀送达）", inputSchema: { type: "object", properties: { text: { type: "string", description: "干预内容" } }, required: ["text"], additionalProperties: false } },
+  { name: "synchronicle_steer", description: "即时偏航重定向：打断当前章节生成，回滚未提交状态并携带纠偏指令立即重新续写", inputSchema: { type: "object", properties: { prompt: { type: "string", description: "偏航纠正指令" }, chapter: { type: "integer", description: "目标章节号（可选，默认当前未完成章节）" } }, required: ["prompt"], additionalProperties: false } },
 ];
 
 interface InvokeDeps { loadContext(): Promise<ToolContext>; ensureHost(): Promise<HostLike>; now(): Date }
@@ -141,6 +148,20 @@ async function invoke(name: string, args: Record<string, unknown>, deps: InvokeD
     const state = host.snapshot().runtimeState;
     void (state === "running" ? Promise.reject(new Error("引擎运行中，请先用 synchronicle_inject 注入干预")) : state === "completed" || state === "paused" ? host.continue(prompt) : host.startPrepared(prompt)).catch(() => undefined);
     return text(JSON.stringify({ started: true, previousState: state, note: "异步启动；用 synchronicle_status 轮询进度" }, null, 2));
+  }
+  if (name === "synchronicle_steer") {
+    const prompt = typeof args.prompt === "string" ? args.prompt.trim() : "";
+    if (!prompt) throw new Error("prompt 不能为空");
+    const targetChapter = typeof args.chapter === "number" ? args.chapter : undefined;
+    const ctx = await deps.loadContext();
+    if (!ctx.config) throw new Error("尚未配置模型，请先通过 Web 控制台或配置文件准备配置");
+    const host = await deps.ensureHost();
+    if (!host.steer) throw new Error("当前 Host 实例不支持 steer 操作");
+    const result = await host.steer({ prompt, targetChapter });
+    if (typeof host.resume === "function") {
+      void host.resume().catch(() => undefined);
+    }
+    return text(JSON.stringify({ success: true, ...result }, null, 2));
   }
   const injectText = typeof args.text === "string" ? args.text.trim() : "";
   if (!injectText) throw new Error("text 不能为空");

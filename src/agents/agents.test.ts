@@ -10,7 +10,7 @@ import { Store } from "../store/index.js";
 import { normalizeUsage, UsageTracker } from "../runtime/usage.js";
 import { buildCoordinator, commitReflectionCandidate, coordinateReflectionRecovery, recoverReflectionCommit } from "./build.js";
 import { ContextManager } from "./context.js";
-import { createAgent } from "./agent.js";
+import { createAgent, withCacheBreakpoint } from "./agent.js";
 import { packArchitect, packCoordinator, packEditor, packWriter } from "./ctxpack/index.js";
 
 function generated(text: string) {
@@ -496,5 +496,26 @@ describe("buildCoordinator", () => {
     expect(tracker.snapshot().overall.cost_usd).toBeCloseTo(0.25);
     expect(tracker.snapshot().per_agent.writer?.cost_usd).toBeCloseTo(0.25);
     expect(tracker.snapshot().per_model?.["openai/gpt-5-mini"]?.cost_usd).toBeCloseTo(0.25);
+  });
+
+  it("applies dual ephemeral cache breakpoints for anthropic models", () => {
+    const model = { provider: "anthropic", modelId: "claude-3-7-sonnet" } as any;
+    const messages = [
+      { role: "system", content: "你是一个小说家。" },
+      { role: "user", content: "写第一章" },
+      { role: "assistant", content: "第一章正文" },
+      { role: "user", content: "写第二章" },
+    ] as any;
+    const withBreakpoints = withCacheBreakpoint(messages, model);
+    expect(withBreakpoints[0]?.providerOptions?.anthropic?.cacheControl).toEqual({ type: "ephemeral" });
+    expect(withBreakpoints[3]?.providerOptions?.anthropic?.cacheControl).toEqual({ type: "ephemeral" });
+    expect(withBreakpoints[1]?.providerOptions?.anthropic?.cacheControl).toBeUndefined();
+
+    // 原始数组不被篡改
+    expect(messages[0]?.providerOptions).toBeUndefined();
+
+    // 非 anthropic 模型不添加任何选项
+    const nonAnthropic = withCacheBreakpoint(messages, { provider: "openai", modelId: "gpt-4o" } as any);
+    expect(nonAnthropic).toBe(messages);
   });
 });

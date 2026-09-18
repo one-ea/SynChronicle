@@ -12,12 +12,13 @@ import { detectAitone } from "../stylestat/aitone.js";
 import { diagnose } from "../diag/index.js";
 import type { ResolvedConfig } from "../config/schemas.js";
 
-export interface WebServerOptions { port?: number; host?: string; configPath?: string; }
+export interface WebServerOptions { port?: number; host?: string; configPath?: string; hostInstance?: Host; }
 export interface WebServerHandle { port: number; close(): Promise<void>; }
 interface RuntimeContext { host?: Host; store?: Store; config?: ResolvedConfig; configured: boolean; configPath: string; error?: string; }
 
 export async function startWebServer(options: WebServerOptions = {}): Promise<WebServerHandle> {
   const context = await loadRuntime(options.configPath);
+  if (options.hostInstance) context.host = options.hostInstance;
   const server = createServer((request, response) => void route(request, response, context));
   const port = await listen(server, options.port ?? 3000, options.host ?? "127.0.0.1");
   return { port, close: () => close(server, context.host) };
@@ -46,6 +47,7 @@ async function route(request: IncomingMessage, response: ServerResponse, context
   if (request.method === "POST" && url.pathname === "/api/run") return handleRun(request, response, context);
   if (request.method === "POST" && url.pathname === "/api/continue") return handleContinue(request, response, context);
   if (request.method === "POST" && url.pathname === "/api/resume") return handleResume(response, context);
+  if (request.method === "POST" && url.pathname === "/api/steer") return handleSteer(request, response, context);
   if (request.method === "POST" && url.pathname === "/api/inject") return handleInject(request, response, context);
   if (request.method === "GET" && url.pathname === "/api/book") return handleBook(response, context);
   if (request.method === "GET" && url.pathname === "/api/diag") return handleDiag(response, context);
@@ -332,6 +334,20 @@ async function handleResume(response: ServerResponse, context: RuntimeContext): 
   } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
 }
 
+async function handleSteer(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
+  try {
+    const payload = await readJson(request);
+    const prompt = textField(payload.prompt, "引导提示词");
+    const targetChapter = typeof payload.chapter === "number" ? payload.chapter : undefined;
+    const host = await ensureHost(context);
+    const result = await host.steer({ prompt, targetChapter });
+    void host.resume().catch(() => undefined);
+    sendJson(response, 200, { success: true, ...result });
+  } catch (error) {
+    sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
 async function ensureHost(context: RuntimeContext): Promise<Host> {
   if (context.host) return context.host;
   if (!context.config) throw new Error("尚未配置模型，请先准备配置文件");
@@ -349,4 +365,4 @@ function optionalText(value: unknown): string { return typeof value === "string"
 function send(response: ServerResponse, statusCode: number, body: string, contentType: string): void { response.writeHead(statusCode, { "content-type": contentType, "cache-control": "no-store" }); response.end(body); }
 function sendJson(response: ServerResponse, statusCode: number, body: unknown): void { send(response, statusCode, JSON.stringify(body), "application/json; charset=utf-8"); }
 function listen(server: Server, port: number, host: string): Promise<number> { return new Promise((resolve, reject) => { server.once("error", reject); server.listen(port, host, () => { server.off("error", reject); const address = server.address(); resolve(typeof address === "object" && address ? address.port : port); }); }); }
-async function close(server: Server, host?: Host): Promise<void> { await host?.close().catch(() => undefined); await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }
+async function close(server: Server, host?: Host): Promise<void> { if (typeof host?.close === "function") await host.close().catch(() => undefined); await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }

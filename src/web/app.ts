@@ -239,7 +239,8 @@ export function renderWebApp(): string {
                   <div class="tf"><textarea id="prompt" aria-label="创作需求" placeholder=" " disabled></textarea><label for="prompt">你想写什么？</label></div>
                   <div class="actions" style="margin-top:14px"><small>支持 Ctrl / Cmd + Enter 提交。</small><button id="run" class="btn btn-filled" type="button" disabled>开始创作</button></div>
                   <div id="steering-panel" class="steering" style="margin-top:18px">
-                    <div class="steer-row"><div class="tf"><input id="steer-input" placeholder=" " /><label for="steer-input">运行中干预</label></div><button id="steer-button" class="btn btn-tonal" type="button">发送干预</button></div>
+                    <div class="steer-row"><div class="tf"><input id="steer-input" placeholder=" " /><label for="steer-input">注入干预（下轮生效）</label></div><button id="steer-button" class="btn btn-tonal" type="button">发送干预</button></div>
+                    <div class="steer-row" style="margin-top:10px"><div class="tf"><input id="steer-realtime-input" placeholder=" " /><label for="steer-realtime-input">偏航即时重定向 (Steer: 打断当前章并重写)</label></div><button id="steer-realtime-button" class="btn btn-filled" type="button" style="background:var(--heat-100,#fa5d19);color:#fff">打断重写</button></div>
                   </div>
                 </section>
               </div>
@@ -402,6 +403,19 @@ export function renderWebApp(): string {
       $('run').addEventListener('click', async () => { const value = $('prompt').value.trim(); if (!value) { showNotice('先写下一句创作 brief。'); return; } try { await post(['completed', 'paused'].includes(currentState) ? '/api/continue' : '/api/run', { prompt: value }); $('prompt').value = ''; $('live-text').textContent = ''; showNotice('创作已启动。', 'success'); await refresh(); } catch (error) { showNotice(error.message || '启动失败'); } });
       $('prompt').addEventListener('keydown', (event) => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); $('run').click(); } });
       $('steer-button').addEventListener('click', async () => { const value = $('steer-input').value.trim(); if (!value) { showNotice('先写下要调整的方向。'); return; } try { await post('/api/inject', { text: value }); $('steer-input').value = ''; showNotice('干预已加入下一次运行。', 'success'); await refresh(); } catch (error) { showNotice(error.message || '干预发送失败'); } });
+      $('steer-realtime-button').addEventListener('click', async () => {
+        const value = $('steer-realtime-input').value.trim();
+        if (!value) { showNotice('请写下偏航纠正指令。'); return; }
+        if (!confirm('确定打断当前生成并根据该指令重新生成吗？')) return;
+        try {
+          const res = await post('/api/steer', { prompt: value });
+          $('steer-realtime-input').value = '';
+          showNotice('已发起重定向：目标第 ' + res.targetChapter + ' 章已重新续写。', 'success');
+          await refresh();
+        } catch (error) {
+          showNotice(error.message || '重定向失败');
+        }
+      });
       $('resume').addEventListener('click', async () => { try { await post('/api/resume'); showNotice('正在恢复上一轮创作。', 'success'); await refresh(); } catch (error) { showNotice(error.message || '恢复失败'); } });
       $('new-run').addEventListener('click', () => { $('prompt').focus(); $('prompt').value = ''; showNotice('写下新的 brief，即可开始下一轮。', 'success'); });
       const severityLabels = { critical: '严重', warning: '警告', info: '提示' };

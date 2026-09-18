@@ -30,7 +30,7 @@ describe("mcp handler", () => {
     expect(await handler({ jsonrpc: "2.0", method: "notifications/initialized" })).toBeUndefined();
     expect(((await handler(request(2, "ping"))) as { result: object }).result).toEqual({});
     const tools = (await handler(request(3, "tools/list"))) as { result: { tools: Array<{ name: string }> } };
-    expect(tools.result.tools.map((tool) => tool.name).sort()).toEqual(["synchronicle_book", "synchronicle_chapter", "synchronicle_diag", "synchronicle_inject", "synchronicle_run", "synchronicle_status"]);
+    expect(tools.result.tools.map((tool) => tool.name).sort()).toEqual(["synchronicle_book", "synchronicle_chapter", "synchronicle_diag", "synchronicle_inject", "synchronicle_run", "synchronicle_status", "synchronicle_steer"].sort());
     const unknown = (await handler(request(4, "no/such/method"))) as { error: { code: number } };
     expect(unknown.error.code).toBe(-32601);
   });
@@ -76,7 +76,15 @@ describe("mcp handler", () => {
     const configPath = await seed(directory);
     const calls: string[] = [];
     try {
-      const handler = createMcpHandler({ configPath, host: { startPrepared: async (prompt) => { calls.push(`start:${prompt}`); }, continue: async (prompt) => { calls.push(`continue:${prompt}`); }, snapshot: () => ({ runtimeState: "idle" }) } });
+      const handler = createMcpHandler({
+        configPath,
+        host: {
+          startPrepared: async (prompt) => { calls.push(`start:${prompt}`); },
+          continue: async (prompt) => { calls.push(`continue:${prompt}`); },
+          steer: async (options) => { calls.push(`steer:${options.prompt}`); return { aborted: false, targetChapter: options.targetChapter ?? 1 }; },
+          snapshot: () => ({ runtimeState: "idle" }),
+        },
+      });
       const inject = toolText(await handler(request(1, "tools/call", { name: "synchronicle_inject", arguments: { text: "节奏放慢一点" } })));
       expect(inject).toContain("已注入");
       const raw = JSON.parse((await readFile(join(directory, "novel", "meta", "injections.jsonl"), "utf8")).trim());
@@ -85,6 +93,10 @@ describe("mcp handler", () => {
       const run = toolText(await handler(request(2, "tools/call", { name: "synchronicle_run", arguments: { prompt: "写第二章" } })));
       expect(run).toContain('"started": true');
       expect(calls).toEqual(["start:写第二章"]);
+
+      const steer = toolText(await handler(request(3, "tools/call", { name: "synchronicle_steer", arguments: { prompt: "重写这章，加入悬念" } })));
+      expect(steer).toContain('"success": true');
+      expect(calls).toEqual(["start:写第二章", "steer:重写这章，加入悬念"]);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

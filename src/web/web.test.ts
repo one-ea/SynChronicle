@@ -280,4 +280,44 @@ describe("WebUI", () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+
+  it("handles steer redirection via POST /api/steer", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "synchronicle-web-steer-"));
+    const output = join(directory, "novel");
+    await mkdir(join(output, "meta"), { recursive: true });
+    await writeFile(join(output, "meta", "progress.json"), JSON.stringify({ novel_name: "引导测试", phase: "writing", current_chapter: 4, total_chapters: 10, completed_chapters: [1, 2, 3], in_progress_chapter: 4, total_word_count: 50, flow: "writing", pending_rewrites: [] }));
+    const configPath = join(directory, "config.json");
+    await writeFile(configPath, JSON.stringify({ provider: "ollama", model: "qwen3:14b", providers: { ollama: { base_url: "http://localhost:11434/v1" } }, output_dir: output }));
+    let steerPayload: { prompt: string; targetChapter?: number } | undefined;
+    const handle = await startWebServer({
+      port: 0,
+      configPath,
+      hostInstance: {
+        steer: async (options: { prompt: string; targetChapter?: number }) => {
+          steerPayload = options;
+          await writeFile(join(output, "meta", "injections.jsonl"), `{"text":"[Steer 引导指令: 第 ${options.targetChapter ?? 4} 章] ${options.prompt}"}\n`);
+          return { aborted: false, targetChapter: options.targetChapter ?? 4 };
+        },
+        resume: async () => ({ label: "恢复" }),
+      } as any,
+    });
+    try {
+      const res = await fetch(`http://127.0.0.1:${handle.port}/api/steer`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ prompt: "加快推进，出现反转", chapter: 4 }),
+      });
+      expect(res.status).toBe(200);
+      const data = JSON.parse(await res.text());
+      expect(data.success).toBe(true);
+      expect(data.targetChapter).toBe(4);
+      expect(steerPayload).toEqual({ prompt: "加快推进，出现反转", targetChapter: 4 });
+
+      const injections = await readFile(join(output, "meta", "injections.jsonl"), "utf8");
+      expect(injections).toContain("[Steer 引导指令: 第 4 章] 加快推进，出现反转");
+    } finally {
+      await handle.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
 });

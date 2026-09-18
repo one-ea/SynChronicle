@@ -54,6 +54,42 @@ export class Host {
     });
     this.emit(systemEvent(`注入干预：${value.slice(0, 40)}`));
   }
+  /**
+   * 运行中 Steer 重定向（打断当前生成、回滚至指定或当前未完成章节、注入偏航指引并重启续写）。
+   */
+  async steer(options: { prompt: string; targetChapter?: number }): Promise<{ aborted: boolean; targetChapter: number }> {
+    const text = options.prompt.trim();
+    if (!text) throw new Error("steer prompt is empty");
+
+    let wasRunning = false;
+    if (this.state === "running") {
+      wasRunning = true;
+      this.abort("用户发起 Steer 偏航纠正");
+      // 等待上一次 run 循环因 abort 释放
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    const progress = await this.store.progress.load();
+    if (!progress) throw new Error("尚未初始化创作进度，无法执行 Steer 回滚");
+    // 目标章节：优先指定，否则当前未完成章节，否则最近推进章节
+    const chapter = options.targetChapter ?? ((progress.in_progress_chapter ?? 0) > 0 ? progress.in_progress_chapter! : progress.current_chapter);
+    if (!chapter || chapter <= 0) throw new Error("无可回退的目标章节");
+
+    // 回滚：清理该章节正在进行中但未提交的草稿与暂存
+    await this.store.signals.clearPendingCommit();
+    await this.store.progress.save({
+      ...progress,
+      in_progress_chapter: chapter,
+      current_chapter: chapter,
+      flow: "writing",
+    });
+
+    // 注入引导词（下一次 run/resume 读取）
+    await this.inject(`[Steer 引导指令: 第 ${chapter} 章] ${text}`);
+
+    return { aborted: wasRunning, targetChapter: chapter };
+  }
+
   async resume(): Promise<{ label: string | null; error?: Error }> { const data = buildResumePrompt(await this.store.progress.load(), await this.store.runMeta.load()); this.recoveryLabel = data.label; if (!data.label) return { label: null }; try { await this.run(data.prompt, data.label); await this.store.clearHandledSteer(); return { label: data.label }; } catch (error) { return { label: data.label, error: error instanceof Error ? error : new Error(String(error)) }; } }
   async continue(prompt: string): Promise<void> { if (!prompt.trim()) throw new Error("continue prompt is empty"); await this.run(prompt, "继续创作"); }
   abort(reason: string, level = "info"): void { if (this.state === "closed") return; this.runController?.abort(new Error(reason)); this.agent.abort(reason); this.state = "paused"; this.emit({ ...systemEvent(reason, level), payload: { level } }); }

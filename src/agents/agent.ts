@@ -219,17 +219,29 @@ function modelIdentity(model: LanguageModelInstance): { provider: string; model:
 }
 
 /**
- * 提示词缓存滚动断点（缺口修复，对应 docs/architecture.md §6.6）：
- * Anthropic 系在最后一条 user 消息落 `cache_control: ephemeral` 断点（上一轮写、这一轮读），
- * 恒 1 个断点在预算内。system 地板断点（跨会话复用）需把 system 移入 messages[0]，暂未做。
- * OpenAI 官方自动前缀缓存无需显式参数。
- * 浅拷贝仅替换末条消息的 providerOptions，不污染 history（闩锁红线：缓存键会话内冻结）。
+ * 提示词缓存策略（对应 docs/architecture.md §6.6 与长篇成本控制）：
+ * 1. Anthropic 系：支持最多 4 个 cache_control 断点。我们在首条消息（静态前缀/System）
+ *    和末尾 user 消息各落 1 个 `cache_control: { type: "ephemeral" }` 断点，
+ *    实现“基础世界观/角色表跨会话复用 + 滚动上下文轮次递增缓存”。
+ * 2. 浅拷贝不污染原始 history，保障会话与持久化纯净。
  */
-function withCacheBreakpoint(messages: readonly ModelMessage[], model: LanguageModelInstance): ModelMessage[] {
-  if (model.provider !== "anthropic") return messages as ModelMessage[];
-  const last = messages.at(-1);
-  if (!last || last.role !== "user" || typeof last.content !== "string") return messages as ModelMessage[];
-  return [...messages.slice(0, -1), { ...last, providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } } }];
+export function withCacheBreakpoint(messages: readonly ModelMessage[], model: LanguageModelInstance): ModelMessage[] {
+  if (model.provider !== "anthropic" || messages.length === 0) return messages as ModelMessage[];
+  const result = [...messages];
+  // 1. 首条消息静态断点（跨轮复用）
+  const first = result[0];
+  if (first && typeof first.content === "string") {
+    result[0] = { ...first, providerOptions: { ...first.providerOptions, anthropic: { cacheControl: { type: "ephemeral" } } } };
+  }
+  // 2. 末条 user 消息滚动断点（本轮读上一轮写）
+  const lastIndex = result.length - 1;
+  if (lastIndex > 0) {
+    const last = result[lastIndex];
+    if (last && last.role === "user" && typeof last.content === "string") {
+      result[lastIndex] = { ...last, providerOptions: { ...last.providerOptions, anthropic: { cacheControl: { type: "ephemeral" } } } };
+    }
+  }
+  return result;
 }
 
 export function createAgent(options: AgentOptions): Agent {
