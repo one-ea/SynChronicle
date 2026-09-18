@@ -329,7 +329,9 @@ async function handleResume(response: ServerResponse, context: RuntimeContext): 
   if (!context.configured) return sendJson(response, 503, { error: context.error || "尚未配置模型，请先准备配置文件" });
   try {
     const host = await ensureHost(context);
-    void host.resume().catch(() => undefined);
+    void host.resume().catch((err) => {
+      context.host?.abort?.(`续写启动异常: ${err instanceof Error ? err.message : String(err)}`, "warn");
+    });
     sendJson(response, 202, { started: true });
   } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
 }
@@ -341,7 +343,10 @@ async function handleSteer(request: IncomingMessage, response: ServerResponse, c
     const targetChapter = typeof payload.chapter === "number" ? payload.chapter : undefined;
     const host = await ensureHost(context);
     const result = await host.steer({ prompt, targetChapter });
-    void host.resume().catch(() => undefined);
+    void host.resume().catch((err) => {
+      // 离线/缺少真实 key 时仅记录错误事件，不使 Node 进程崩溃
+      context.host?.abort?.(`续写启动异常: ${err instanceof Error ? err.message : String(err)}`, "warn");
+    });
     sendJson(response, 200, { success: true, ...result });
   } catch (error) {
     sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) });

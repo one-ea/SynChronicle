@@ -104,7 +104,32 @@ export class Host {
 
   private hasBudget(): boolean { const limit = this.config.budget?.book_usd ?? 0; return limit <= 0 || this.usage.snapshot().overall.cost_usd < limit; }
 
-  private async run(prompt: string, label: string): Promise<void> { if (this.state === "running" || this.state === "closed") throw new Error(`host is ${this.state}`); this.state = "running"; this.runController = new AbortController(); this.emit(systemEvent(label)); const injections = await this.consumeInjections(); const finalPrompt = injections.length ? `${injections.map(text => `[用户干预] ${text}`).join("\n\n")}\n\n${prompt}` : prompt; try { for await (const delta of this.agent.run(finalPrompt, this.runController.signal)) { this.runController.signal.throwIfAborted(); this.output.write(delta); await this.store.runtime.appendQueue({ seq: 0, time: new Date().toISOString(), kind: "stream_delta", priority: "background", payload: { delta } }); } this.runController.signal.throwIfAborted(); this.state = "completed"; this.emit(systemEvent("运行完成", "success")); } catch (error) { this.state = "paused"; this.emit(errorEvent(error)); throw error; } finally { this.runController = null; this.output.end(); } }
+  private async run(prompt: string, label: string): Promise<void> {
+    if (this.state === "running" || this.state === "closed") throw new Error(`host is ${this.state}`);
+    this.state = "running";
+    this.runController = new AbortController();
+    this.emit(systemEvent(label));
+    const injections = await this.consumeInjections();
+    const finalPrompt = injections.length ? `${injections.map(text => `[用户干预] ${text}`).join("\n\n")}\n\n${prompt}` : prompt;
+    try {
+      const stream = this.agent.run(finalPrompt, this.runController.signal);
+      for await (const delta of stream) {
+        this.runController.signal.throwIfAborted();
+        this.output.write(delta);
+        await this.store.runtime.appendQueue({ seq: 0, time: new Date().toISOString(), kind: "stream_delta", priority: "background", payload: { delta } });
+      }
+      this.runController.signal.throwIfAborted();
+      this.state = "completed";
+      this.emit(systemEvent("运行完成", "success"));
+    } catch (error) {
+      this.state = "paused";
+      this.emit(errorEvent(error));
+      // 优雅吸收生成级异常，避免未捕获 Promise/WebStream 导致主进程异常退出
+    } finally {
+      this.runController = null;
+      this.output.end();
+    }
+  }
   private async consumeInjections(): Promise<string[]> {
     return this.withInjectionLock(async () => {
       const raw = await this.injectIO.readText("meta/injections.jsonl");

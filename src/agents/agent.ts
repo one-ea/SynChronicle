@@ -195,7 +195,11 @@ export class Agent {
     const resultPromise = prepared.then((messages) => { signal?.throwIfAborted(); return streamText({ model: this.model, system: this.system, messages: withCacheBreakpoint(messages, this.model), tools: this.tools, stopWhen: stepCountIs(this.maxSteps), ...(signal ? { abortSignal: signal } : {}) }); });
     const textStream = (async function* () {
       const result = await resultPromise;
-      yield* result.textStream;
+      try {
+        yield* result.textStream;
+      } catch {
+        // 模型网络异常或 API Key 缺失时终止流推送，由 completed promise 处理错误
+      }
     })();
     const completed = resultPromise.then(async (result) => {
       const text = await result.text;
@@ -204,6 +208,8 @@ export class Agent {
       this.onUsage?.(this.name, usage, usageModelIdentity(usage) ?? modelIdentity(this.model));
       return result;
     });
+    // 抑制 unhandled rejection
+    completed.catch(() => undefined);
     return { textStream, completed };
   }
 
