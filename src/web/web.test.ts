@@ -190,6 +190,66 @@ describe("WebUI", () => {
     }
   });
 
+  it("exports completed chapters and imports a local manuscript", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "synchronicle-web-io-"));
+    const output = join(directory, "novel");
+    for (const dir of ["meta", "chapters"]) await mkdir(join(output, dir), { recursive: true });
+    await writeFile(join(output, "meta", "progress.json"), JSON.stringify({ novel_name: "导出书", phase: "writing", current_chapter: 2, total_chapters: 2, completed_chapters: [1], total_word_count: 4, chapter_word_counts: { "1": 4 }, in_progress_chapter: 0, flow: "writing", pending_rewrites: [] }));
+    await writeFile(join(output, "chapters", "01.md"), "第一章正文");
+    const configPath = join(directory, "config.json");
+    await writeFile(configPath, JSON.stringify({ provider: "ollama", model: "qwen3:14b", providers: { ollama: { base_url: "http://localhost:11434/v1" } }, output_dir: output }));
+    const source = join(directory, "source.txt");
+    await writeFile(source, "第 1 章 导入章名\n\n这是导入的正文内容。\n");
+    const handle = await startWebServer({ port: 0, configPath });
+    try {
+      const json = async (path: string): Promise<any> => JSON.parse(await (await fetch(`http://127.0.0.1:${handle.port}${path}`)).text());
+      const exported = await json("/api/status").then(async () => JSON.parse(await (await fetch(`http://127.0.0.1:${handle.port}/api/export`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ format: "txt" }) })).text()));
+      expect(exported.chapters).toBe(1);
+      expect(await readFile(exported.path, "utf8")).toContain("第一章正文");
+
+      const imported = JSON.parse(await (await fetch(`http://127.0.0.1:${handle.port}/api/import`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: source }) })).text());
+      expect(imported.chapters).toBe(1);
+      expect(await readFile(join(output, "chapters", "01.md"), "utf8")).toContain("这是导入的正文内容");
+
+      const badFormat = await fetch(`http://127.0.0.1:${handle.port}/api/export`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ format: "pdf" }) });
+      expect(badFormat.status).toBe(400);
+    } finally {
+      await handle.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("masks settings on read and merges core fields on write", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "synchronicle-web-settings-"));
+    const configPath = join(directory, "config.json");
+    await writeFile(configPath, JSON.stringify({ provider: "ollama", model: "qwen3:14b", providers: { ollama: { base_url: "http://localhost:11434/v1", api_key: "secret-key" } }, output_dir: join(directory, "novel") }));
+    const handle = await startWebServer({ port: 0, configPath });
+    try {
+      const json = async (path: string): Promise<any> => JSON.parse(await (await fetch(`http://127.0.0.1:${handle.port}${path}`)).text());
+      const initial = await json("/api/settings");
+      expect(initial.configured).toBe(true);
+      expect(initial.settings.provider).toBe("ollama");
+      expect(initial.settings.providers.ollama.hasApiKey).toBe(true);
+      expect(JSON.stringify(initial)).not.toContain("secret-key");
+
+      const saved = JSON.parse(await (await fetch(`http://127.0.0.1:${handle.port}/api/settings`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "qwen3:32b", roles: { writer: { provider: "ollama", model: "qwen3:32b" } } }),
+      })).text());
+      expect(saved.saved).toBe(true);
+      expect(saved.settings.model).toBe("qwen3:32b");
+      expect(saved.settings.roles.writer.model).toBe("qwen3:32b");
+
+      const persisted = JSON.parse(await readFile(configPath, "utf8"));
+      expect(persisted.model).toBe("qwen3:32b");
+      expect(persisted.provider).toBe("ollama");
+      expect(persisted.providers.ollama.api_key).toBe("secret-key");
+    } finally {
+      await handle.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("serves the read front without a model configuration", async () => {
     const handle = await startWebServer({ port: 0, configPath: "/tmp/synchronicle-test-missing-config.json" });
     try {

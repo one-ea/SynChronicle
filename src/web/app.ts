@@ -260,6 +260,18 @@ export function renderWebApp(): string {
                   <div class="actions"><small>保存后即可开始创作。</small><button class="btn btn-tonal" type="submit">保存配置</button></div>
                 </form>
               </div>
+              <div class="card">
+                <h3 class="section-title">导入与导出</h3>
+                <div class="form-grid">
+                  <div class="seg" role="radiogroup" aria-label="导出格式">
+                    <label><input type="radio" name="export-format" value="txt" checked /><span>TXT</span></label>
+                    <label><input type="radio" name="export-format" value="epub" /><span>EPUB</span></label>
+                  </div>
+                  <div class="actions"><small>导出全部已完成章节到作品目录。</small><button id="export-run" class="btn btn-tonal" type="button">导出全书</button></div>
+                  <div class="tf"><input id="import-path" placeholder=" " /><label for="import-path">导入文件路径（本机绝对路径）</label></div>
+                  <div class="actions"><small>按「第 N 章」标记切分并反推入库。</small><button id="import-run" class="btn btn-tonal" type="button">从文件导入</button></div>
+                </div>
+              </div>
             </section>
             <aside class="stack">
               <div class="card">
@@ -314,8 +326,27 @@ export function renderWebApp(): string {
           </div>
         </section>
         <section class="page" data-page="settings" aria-label="配置" hidden>
-          <div class="page-head"><div><h1>配置</h1><p class="meta">模型与运行参数管理。</p></div></div>
-          <div class="card"><p class="section-title" style="margin-bottom:8px">配置管理</p><div class="empty">完整配置编辑将在后续任务开放。当前可通过概览页的「连接引擎」表单修改基础模型配置。</div></div>
+          <div class="page-head"><div><h1>配置</h1><p class="meta">模型与运行参数管理（密钥仅显示是否已设置）。</p></div></div>
+          <div class="grid">
+            <div class="card">
+              <h3 class="section-title">核心配置</h3>
+              <form id="settings-form" class="form-grid">
+                <div class="form-row">
+                  <div><div class="tf"><input id="set-provider" placeholder=" " /><label for="set-provider">默认服务商</label></div><small class="helper">如 ollama / openrouter / openai</small></div>
+                  <div><div class="tf"><input id="set-model" placeholder=" " /><label for="set-model">默认模型</label></div><small class="helper">如 qwen3:14b</small></div>
+                </div>
+                <h4 style="margin:6px 0 0;font-size:13px">角色模型（留空保持现状）</h4>
+                <div id="roles-rows" class="form-grid"></div>
+                <div class="actions"><small>保存前会做完整校验，失败保持原值。</small><button class="btn btn-tonal" type="submit">保存配置</button></div>
+              </form>
+            </div>
+            <aside class="stack">
+              <div class="card">
+                <div class="panel-head"><h3>当前生效</h3><span id="settings-state">未加载</span></div>
+                <div class="rowlines" id="settings-view"><div class="empty">加载中…</div></div>
+              </div>
+            </aside>
+          </div>
         </section>
       </main>
     </div>
@@ -401,6 +432,74 @@ export function renderWebApp(): string {
         } catch { /* 保持现有内容 */ }
       }
       loadReflection();
+      const ROLE_NAMES = { coordinator: '调度', architect: '规划师', writer: '写手', editor: '编辑', reviewer: '评审' };
+      async function loadSettings() {
+        const view = $('settings-view');
+        try {
+          const data = await (await fetch('/api/settings')).json();
+          view.replaceChildren();
+          if (!data.configured || !data.settings) { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = data.error || '尚未配置模型。'; view.append(empty); $('settings-state').textContent = '未配置'; return; }
+          const settings = data.settings;
+          $('set-provider').value = settings.provider || '';
+          $('set-model').value = settings.model || '';
+          const rows = $('roles-rows');
+          rows.replaceChildren();
+          for (const [role, label] of Object.entries(ROLE_NAMES)) {
+            const current = (settings.roles || {})[role] || {};
+            const row = document.createElement('div'); row.className = 'form-row';
+            const providerField = document.createElement('div'); providerField.className = 'tf';
+            const providerInput = document.createElement('input'); providerInput.id = 'role-' + role + '-provider'; providerInput.placeholder = ' ';
+            if (current.provider) providerInput.value = current.provider;
+            const providerLabel = document.createElement('label'); providerLabel.htmlFor = providerInput.id; providerLabel.textContent = label + ' 服务商';
+            providerField.append(providerInput, providerLabel);
+            const modelField = document.createElement('div'); modelField.className = 'tf';
+            const modelInput = document.createElement('input'); modelInput.id = 'role-' + role + '-model'; modelInput.placeholder = ' ';
+            if (current.model) modelInput.value = current.model;
+            const modelLabel = document.createElement('label'); modelLabel.htmlFor = modelInput.id; modelLabel.textContent = label + ' 模型';
+            modelField.append(modelInput, modelLabel);
+            row.append(providerField, modelField);
+            rows.append(row);
+          }
+          const line = (label, value, tone) => { const row = document.createElement('div'); row.className = 'rowline'; const name = document.createElement('span'); name.textContent = label; const right = document.createElement(tone === 'pill' ? 'span' : 'b'); if (tone === 'pill') right.className = 'pill muted'; else right.style.fontWeight = '600'; right.textContent = value; row.append(name, right); return row; };
+          view.append(line('默认模型', (settings.provider || '—') + ' / ' + (settings.model || '—')));
+          view.append(line('创作风格', settings.style || 'default'));
+          view.append(line('输出目录', settings.outputDir || 'output/novel'));
+          for (const [name, info] of Object.entries(settings.providers || {})) view.append(line('接口 ' + name, (info.hasApiKey ? '已设密钥' : '免密钥') + (info.baseUrl ? ' · ' + info.baseUrl : ''), 'pill'));
+          $('settings-state').textContent = '已加载';
+        } catch { view.replaceChildren(); const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '加载失败。'; view.append(empty); }
+      }
+      document.querySelectorAll('[data-view="settings"]').forEach((button) => button.addEventListener('click', () => void loadSettings()));
+      $('settings-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const roles = {};
+        for (const role of Object.keys(ROLE_NAMES)) {
+          const provider = $('role-' + role + '-provider')?.value.trim();
+          const model = $('role-' + role + '-model')?.value.trim();
+          if (provider && model) roles[role] = { provider, model };
+        }
+        try {
+          await post('/api/settings', { provider: $('set-provider').value.trim(), model: $('set-model').value.trim(), roles });
+          showNotice('配置已保存。', 'success');
+          await loadSettings();
+          await refresh();
+        } catch (error) { showNotice(error.message || '保存失败'); }
+      });
+      $('export-run').addEventListener('click', async () => {
+        const format = ((document.querySelector('input[name="export-format"]:checked') || {}).value) || 'txt';
+        try {
+          const result = await post('/api/export', { format });
+          showNotice('已导出 ' + result.chapters + ' 章到 ' + result.path, 'success');
+        } catch (error) { showNotice(error.message || '导出失败'); }
+      });
+      $('import-run').addEventListener('click', async () => {
+        const path = $('import-path').value.trim();
+        if (!path) { showNotice('先填写导入文件的绝对路径。'); return; }
+        try {
+          const result = await post('/api/import', { path });
+          showNotice('已导入 ' + result.chapters + ' 章，阅读器与大纲要重新加载。', 'success');
+          void loadBookSummary();
+        } catch (error) { showNotice(error.message || '导入失败'); }
+      });
       $('diag-run').addEventListener('click', async () => {
         const box = $('diag-findings');
         box.replaceChildren();

@@ -154,7 +154,54 @@ synchronicle --version
 synchronicle update
 ```
 
+启动 MCP server（供 Claude Desktop / OpenCode 等 MCP 宿主接入）：
+
+```bash
+synchronicle mcp
+synchronicle mcp --config ./config.json
+```
+
+MCP 宿主配置示例：
+
+```json
+{
+  "mcpServers": {
+    "synchronicle": {
+      "command": "synchronicle",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+提供六个工具：`synchronicle_status` / `_book` / `_chapter` / `_diag` / `_run` / `_inject`。
+
 每本小说绑定启动目录。回到同一目录再次运行时，系统会读取最近 checkpoint 并继续推进。
+
+## 控制台与阅读前台
+
+启动后打开 `http://127.0.0.1:3000`（后台控制台），包含四个视图：
+
+- **创作概览**：brief 输入、配置面板、本书内容摘要卡（章节进度药丸）、流式正文面板、事件流
+- **章节与大纲**：卷弧章三层大纲树 + 章节正文阅读器 + Editor 评审维度分数条 + AI 味得分徽标
+- **运行记录**：事件时间线 + 运行诊断（节奏红线 PacingStall / 伏笔 ForeshadowStall 等 findings）+ 反思候选采纳
+- **配置**：脱敏展示 + 核心字段（provider/model/roles）可编辑
+
+打开 `http://127.0.0.1:3000/read`（阅读前台）：药丸导航 + 书名 hero + 章节目录 + 翻页阅读。
+
+后台与前台共享 Light / Dark / System 三态主题切换。
+
+## 质量能力
+
+| 能力 | 说明 |
+|---|---|
+| BM25 相关章节检索 | writer 上下文自动注入历史相关章节摘要（排除最近摘要窗口） |
+| 可选嵌入检索 | 配置 `embedding` 块后升级为余弦相似度检索，失败自动回落 BM25 |
+| 反 AI 味检测 | 六类疲劳词表，0-100 得分，阅读器徽标展示命中词（警示不拦截） |
+| 文风护栏注入 | writer 每章拿到 style_guard 规避清单，editor 拿到 aitone 命中明细供举证 |
+| 节奏红线 | 主线连续 >5 章 / 叙事线缺席 >10 章 / 主线断档 >15 章 → diag warning |
+| 伏笔到期提醒 | compass.open_threads 断档 >10 章 → diag warning |
+| 反思闭环 | 独立 Reviewer 最多三轮评审，阈值 85 分，候选暂存可对比采纳 |
 
 ## 作品输出
 
@@ -182,7 +229,8 @@ output/novel/
 
 SynChronicle 遵循“LLM 驱动，Host 服务”的运行模型：
 
-- `src/cli` 提供 CLI、WebUI 和 headless 入口分发。
+- `src/cli` 提供 CLI、WebUI、headless 和 MCP server 入口分发。
+- `src/mcp` 零依赖 stdio MCP server（六工具：status/book/chapter/diag/run/inject）。
 - `src/runtime` 管理启动、恢复、事件与运行生命周期。
 - `src/agents` 构建 Coordinator、Architect、Writer 和 Editor。
 - `src/tools` 提供原子化创作工具及 checkpoint 边界。

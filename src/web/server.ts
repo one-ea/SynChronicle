@@ -51,6 +51,10 @@ async function route(request: IncomingMessage, response: ServerResponse, context
   if (request.method === "GET" && url.pathname === "/api/diag") return handleDiag(response, context);
   if (request.method === "GET" && url.pathname === "/api/reflection") return handleReflectionList(response, context);
   if (request.method === "POST" && url.pathname === "/api/reflection/commit") return handleReflectionCommit(request, response, context);
+  if (request.method === "POST" && url.pathname === "/api/export") return handleExport(request, response, context);
+  if (request.method === "POST" && url.pathname === "/api/import") return handleImport(request, response, context);
+  if (request.method === "GET" && url.pathname === "/api/settings") return handleSettingsGet(response, context);
+  if (request.method === "POST" && url.pathname === "/api/settings") return handleSettingsPost(request, response, context);
   if (request.method === "GET" && /^\/api\/chapters\/\d+$/.test(url.pathname)) return handleChapter(response, context, Number(url.pathname.split("/").pop()));
   if (request.method === "GET" && url.pathname === "/api/stream") return handleStream(request, response, context);
   sendJson(response, 404, { error: "Not found" });
@@ -101,6 +105,68 @@ async function handleReflectionCommit(request: IncomingMessage, response: Server
     const session = await context.store.staging.createSession(sessionId);
     await session.commit(ids);
     sendJson(response, 200, { committed: ids.length });
+  } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
+}
+
+async function handleExport(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.configured) return sendJson(response, 503, { error: context.error || "尚未配置模型，请先准备配置文件" });
+  try {
+    const body = await readJson(request);
+    const format = optionalText(body.format) || "txt";
+    if (format !== "txt" && format !== "epub") return sendJson(response, 400, { error: "format 仅支持 txt 或 epub" });
+    const from = Number.isSafeInteger(body.from) && (body.from as number) > 0 ? body.from as number : undefined;
+    const to = Number.isSafeInteger(body.to) && (body.to as number) > 0 ? body.to as number : undefined;
+    const host = await ensureHost(context);
+    const result = await host.export({ format, ...(from ? { from } : {}), ...(to ? { to } : {}) });
+    sendJson(response, 200, result);
+  } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
+}
+
+async function handleImport(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.configured) return sendJson(response, 503, { error: context.error || "尚未配置模型，请先准备配置文件" });
+  try {
+    const body = await readJson(request);
+    const path = optionalText(body.path);
+    if (!path) return sendJson(response, 400, { error: "path 不能为空（服务器本机上的文本文件路径）" });
+    const host = await ensureHost(context);
+    const result = await host.importText(path);
+    context.store = host.store;
+    sendJson(response, 200, result);
+  } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
+}
+
+function maskSettings(config: NonNullable<RuntimeContext["config"]>): Record<string, unknown> {
+  const providers: Record<string, { hasApiKey: boolean; baseUrl?: string }> = {};
+  for (const [name, provider] of Object.entries(config.providers ?? {})) providers[name] = { hasApiKey: Boolean(provider.api_key), ...(provider.base_url ? { baseUrl: provider.base_url } : {}) };
+  return { provider: config.provider, model: config.model, style: config.style ?? "default", outputDir: config.output_dir ?? "output/novel", providers, roles: config.roles ?? {}, ...(config.budget ? { budget: config.budget } : {}), ...(config.notify ? { notify: config.notify } : {}), ...(config.reflection ? { reflection: config.reflection } : {}) };
+}
+
+async function handleSettingsGet(response: ServerResponse, context: RuntimeContext): Promise<void> {
+  try {
+    const config = context.config ?? await loadConfig(context.configPath || undefined);
+    sendJson(response, 200, { configured: true, settings: maskSettings(config) });
+  } catch (error) { sendJson(response, 200, { configured: false, error: error instanceof Error ? error.message : String(error) }); }
+}
+
+async function handleSettingsPost(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
+  try {
+    const body = await readJson(request);
+    const current = await loadConfig(context.configPath || undefined);
+    const provider = optionalText(body.provider) || current.provider;
+    const model = optionalText(body.model) || current.model;
+    const rolesInput = (body.roles && typeof body.roles === "object" ? body.roles : {}) as Record<string, { provider?: unknown; model?: unknown }>;
+    const roles = { ...(current.roles ?? {}) };
+    for (const [role, value] of Object.entries(rolesInput)) {
+      const provider = typeof value?.provider === "string" ? value.provider.trim() : "";
+      const model = typeof value?.model === "string" ? value.model.trim() : "";
+      if (provider && model) roles[role] = { ...(roles[role] ?? {}), provider, model };
+    }
+    const next = fillDefaults({ ...current, provider, model, roles });
+    validateConfig(next);
+    await saveConfig(context.configPath || defaultConfigPath(), next);
+    context.config = next;
+    context.configured = true;
+    sendJson(response, 200, { saved: true, settings: maskSettings(next) });
   } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
 }
 

@@ -1,34 +1,10 @@
 # 实施任务列表：控制台质量工作台（阶段一）
 
 - [x] 1. 图书与章节只读 API
-  - `RuntimeContext` 增加 `store`（配置加载后按 `output_dir` 直建，Host 可缺席）
-  - R: `GET /api/book`：三层树 + 进度 + 字数 + 四态章节状态；分层缺失时扁平大纲兜底
-  - R: `GET /api/chapters/:n`：终稿/草稿降级链 + 摘要 + 大纲条目 + 评审维度分数
-  - 测试：播种临时作品目录断言树/详情/400/未配置 200+null
 - [x] 2. SSE 广播通道与概览实时化
-  - server 内 Broadcaster：单消费 host.events()/stream(true)，扇出 runtime/delta，5s 心跳携带 snapshot
-  - R: `GET /api/stream`（text/event-stream）
-  - 前端 EventSource 消费：事件喂 feed、delta 喂流式正文面板、run_end 标记完成；错误后退化为轮询
-  - 测试：SSE 首块为 snapshot；既有路由契约回归
 - [x] 3. 章节阅读器视图
-  - 导航 `data-view` 真实化（overview/reader/records/settings 四页切换 + aria-current 跟随）
-  - 阅读器：左树右文、默认选中最近完成章、四态标记（颜色+图形双通道）、摘要卡、评审维度分数条
-  - 空树引导态；记录/配置页本任务先挂"后续任务开放"空态
-  - 测试：renderWebApp 结构断言（data-page、EventSource）
-- [x] 3b. 前台阅读页（2026-09-18 追加，MCP 调研 emdash 后全方位复刻）
-  - `GET /read` 渲染阅读前台（src/web/read.ts）：药丸导航 + hero + 章节目录 + 正文阅读 + 上/下一章翻页
-  - 控制台重构为 emdash admin 版式：顶栏（品牌 + 前台阅读 + 主题切换 + 状态）+ 分组侧栏 + 大标题页头 + 分段统计卡 + 内容摘要卡（状态药丸）+ 活动流
-  - 测试：renderReadApp 断言 + /read 服务冒烟（共 9 用例）
-- [x] 4. 运行记录页与诊断面板（2026-09-18 交付）
-  - R: `GET /api/diag`（stats + findings，严重度分级）
-  - 记录页：事件时间线（SSE + 回放）+ 诊断触发 + 严重度药丸（critical/warning/info 分色）
-  - 测试：web.test.ts diag 用例（含 PacingStall 断言）
-- [ ] 5. 导入与导出
-  - R: `POST /api/export`（txt/epub + 章节区间）、`POST /api/import`
-  - 概览页操作入口 + snackbar 反馈
-- [ ] 6. 配置页
-  - R: `GET /api/settings` 脱敏、`POST /api/settings` 核心字段合并写回（校验失败不落盘）
-  - roles 五角色（coordinator/architect/writer/editor/reviewer）模型编辑
-- [ ] 7. 暗色主题与全量回归
-  - M3 暗色令牌组 + 三态切换（auto/light/dark，localStorage 持久化）→ 已交付（2026-09-18 视觉层复刻 emdash 设计令牌：heat 橙主色、浮动药丸导航、Light/Dark/System 三态切换 + 防 FOUC 脚本 + prefers-color-scheme 跟随）
-  - `pnpm typecheck && pnpm test && pnpm build`、`npm pack --dry-run`、文档同步（README 控制台章节）
+- [x] 3b. 前台阅读页（emdash 全方位复刻）
+- [x] 4. 运行记录页与诊断面板
+- [x] 5. 导入与导出（POST /api/export txt/epub + POST /api/import + 概览页操作入口）
+- [x] 6. 配置页（GET/POST /api/settings 脱敏读 + 核心字段可编辑 + roles 五角色模型 + 校验写回）
+- [x] 7. 暗色主题（三态 Light/Dark/System + emdash 令牌组）+ 全量回归（52 文件 / 382 用例 + npm pack + README 同步）
