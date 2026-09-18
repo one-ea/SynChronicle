@@ -16,3 +16,5 @@ export * from "./cocreate.js";
 export * from "./decide.js";
 export * from "./command.js";
 export * from "./alias.js";
+export * from "./entity.js";
+export * from "./foreshadow.js";

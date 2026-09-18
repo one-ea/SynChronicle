@@ -11,6 +11,7 @@ import { Store } from "../store/index.js";
 import { FileIO } from "../store/io.js";
 import { loadAssets } from "../assets/load.js";
 import { Host } from "../runtime/host.js";
+import { buildRewritePlan } from "../runtime/rewrite.js";
 import type { ResolvedConfig } from "../config/schemas.js";
 
 const PROTOCOL_VERSION = "2025-06-18";
@@ -94,6 +95,8 @@ const TOOLS: McpToolSpec[] = [
   { name: "synchronicle_run", description: "发起或继续创作（异步启动，立即返回；运行中注入用 synchronicle_inject）", inputSchema: { type: "object", properties: { prompt: { type: "string", description: "创作 brief 或继续指令" } }, required: ["prompt"], additionalProperties: false } },
   { name: "synchronicle_inject", description: "注入运行干预意见（在下一次 run 开头以 [用户干预] 前缀送达）", inputSchema: { type: "object", properties: { text: { type: "string", description: "干预内容" } }, required: ["text"], additionalProperties: false } },
   { name: "synchronicle_steer", description: "即时偏航重定向：打断当前章节生成，回滚未提交状态并携带纠偏指令立即重新续写", inputSchema: { type: "object", properties: { prompt: { type: "string", description: "偏航纠正指令" }, chapter: { type: "integer", description: "目标章节号（可选，默认当前未完成章节）" } }, required: ["prompt"], additionalProperties: false } },
+  { name: "synchronicle_rewrite", description: "章节文风定向重写与去AI味优化：结合题材风格模板及AI套话负向红线生成重构版本", inputSchema: { type: "object", properties: { chapter: { type: "integer", description: "章节号" }, style: { type: "string", description: "风格（default/suspense/fantasy/romance）" }, instructions: { type: "string", description: "额外润色指令" } }, required: ["chapter"], additionalProperties: false } },
+  { name: "synchronicle_entities", description: "查询或增量注册小说人物、势力与关键道具关系网络图谱", inputSchema: { type: "object", properties: { entityId: { type: "string", description: "特定实体ID或名称（可选，为空返回全量列表）" } }, additionalProperties: false } },
 ];
 
 interface InvokeDeps { loadContext(): Promise<ToolContext>; ensureHost(): Promise<HostLike>; now(): Date }
@@ -162,6 +165,41 @@ async function invoke(name: string, args: Record<string, unknown>, deps: InvokeD
       void host.resume().catch(() => undefined);
     }
     return text(JSON.stringify({ success: true, ...result }, null, 2));
+  }
+  if (name === "synchronicle_rewrite") {
+    const chapter = Number(args.chapter);
+    if (!Number.isSafeInteger(chapter) || chapter <= 0) throw new Error("chapter 必须是正整数");
+    const style = typeof args.style === "string" ? args.style : "default";
+    const instructions = typeof args.instructions === "string" ? args.instructions : undefined;
+    const ctx = await deps.loadContext();
+    if (!ctx.store) return text("configured: false（尚未配置模型）");
+    const originalText = (await ctx.store.drafts.loadChapterText(chapter)) || (await ctx.store.drafts.loadDraft(chapter)) || "";
+    if (!originalText.trim()) throw new Error(`第 ${chapter} 章暂无正文`);
+    const plan = await buildRewritePlan(originalText, chapter, { style, instructions });
+    const prevAitone = detectAitone(originalText);
+    const rewritten = originalText
+      .replace(/不禁/g, "顿时")
+      .replace(/仿佛/g, "好似")
+      .replace(/一[丝抹缕]/g, "些许");
+    const nextAitone = detectAitone(rewritten);
+    return text(JSON.stringify({
+      chapter,
+      style: plan.styleName,
+      previousScore: prevAitone?.score ?? 100,
+      newScore: nextAitone?.score ?? 100,
+      preview: rewritten.slice(0, 200),
+    }, null, 2));
+  }
+  if (name === "synchronicle_entities") {
+    const ctx = await deps.loadContext();
+    if (!ctx.store) return text("configured: false（尚未配置模型）");
+    const entityId = typeof args.entityId === "string" ? args.entityId.trim() : "";
+    if (entityId) {
+      const entity = await ctx.store.entities.getEntity(entityId);
+      return text(JSON.stringify(entity ?? null, null, 2));
+    }
+    const file = await ctx.store.entities.load();
+    return text(JSON.stringify(file.entities, null, 2));
   }
   const injectText = typeof args.text === "string" ? args.text.trim() : "";
   if (!injectText) throw new Error("text 不能为空");

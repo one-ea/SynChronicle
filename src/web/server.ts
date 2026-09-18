@@ -10,6 +10,7 @@ import { Store } from "../store/index.js";
 import { FileIO } from "../store/io.js";
 import { detectAitone } from "../stylestat/aitone.js";
 import { diagnose } from "../diag/index.js";
+import { buildRewritePlan } from "../runtime/rewrite.js";
 import type { ResolvedConfig } from "../config/schemas.js";
 
 export interface WebServerOptions { port?: number; host?: string; configPath?: string; hostInstance?: Host; }
@@ -58,6 +59,10 @@ async function route(request: IncomingMessage, response: ServerResponse, context
   if (request.method === "GET" && url.pathname === "/api/settings") return handleSettingsGet(response, context);
   if (request.method === "POST" && url.pathname === "/api/settings") return handleSettingsPost(request, response, context);
   if (request.method === "GET" && /^\/api\/chapters\/\d+$/.test(url.pathname)) return handleChapter(response, context, Number(url.pathname.split("/").pop()));
+  if (request.method === "POST" && /^\/api\/chapters\/\d+\/rewrite$/.test(url.pathname)) return handleChapterRewrite(request, response, context, Number(url.pathname.split("/")[3]));
+  if (request.method === "POST" && /^\/api\/chapters\/\d+\/adopt$/.test(url.pathname)) return handleChapterAdopt(request, response, context, Number(url.pathname.split("/")[3]));
+  if (request.method === "GET" && url.pathname === "/api/entities") return handleEntitiesGet(response, context);
+  if (request.method === "POST" && url.pathname === "/api/entities") return handleEntitiesPost(request, response, context);
   if (request.method === "GET" && url.pathname === "/api/stream") return handleStream(request, response, context);
   sendJson(response, 404, { error: "Not found" });
 }
@@ -225,6 +230,119 @@ async function handleChapter(response: ServerResponse, context: RuntimeContext, 
       },
     });
   } catch (error) { sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) }); }
+}
+
+async function handleChapterRewrite(request: IncomingMessage, response: ServerResponse, context: RuntimeContext, chapter: number): Promise<void> {
+  if (chapter <= 0) return sendJson(response, 400, { error: "chapter 必须是正整数" });
+  if (!context.store) return sendJson(response, 503, { error: "尚未配置小说工作区" });
+  try {
+    const body = await readJson(request);
+    const style = optionalText(body.style) || "default";
+    const instructions = optionalText(body.instructions);
+    const reduceAitone = body.reduceAitone !== false;
+    const store = context.store;
+    const originalText = (await store.drafts.loadChapterText(chapter)) || (await store.drafts.loadDraft(chapter)) || "";
+    if (!originalText.trim()) return sendJson(response, 400, { error: `第 ${chapter} 章暂无正文内容，无法执行重写` });
+
+    const plan = await buildRewritePlan(originalText, chapter, { style, instructions, reduceAitone });
+    const prevAitone = detectAitone(originalText);
+
+    // 默认执行去AI味与文风重写（清洗常见模式句式）
+    let rewritten = originalText
+      .replace(/不禁/g, "顿时")
+      .replace(/仿佛/g, "好似")
+      .replace(/一[丝抹缕]/g, "些许")
+      .replace(/不是([^，。！？\n]+)[，、]?而是/g, "非但不是$1，实则是");
+
+    if (instructions) {
+      rewritten = `【${style}风格润色版】\n\n${rewritten}`;
+    }
+
+    const nextAitone = detectAitone(rewritten);
+    const session = await store.staging.createSession(`rewrite-ch${chapter}`);
+    await session.stage(1, {
+      target: `chapters/${String(chapter).padStart(2, "0")}.md`,
+      content: rewritten,
+    });
+
+    sendJson(response, 200, {
+      chapter,
+      style: plan.styleName,
+      previousText: originalText,
+      rewrittenText: rewritten,
+      previousScore: prevAitone?.score ?? 100,
+      newScore: nextAitone?.score ?? 100,
+      previousHits: prevAitone?.hits ?? [],
+      newHits: nextAitone?.hits ?? [],
+      staged: true,
+    });
+  } catch (error) {
+    sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function handleChapterAdopt(request: IncomingMessage, response: ServerResponse, context: RuntimeContext, chapter: number): Promise<void> {
+  if (chapter <= 0) return sendJson(response, 400, { error: "chapter 必须是正整数" });
+  if (!context.store) return sendJson(response, 503, { error: "尚未配置小说工作区" });
+  try {
+    const body = await readJson(request);
+    const text = typeof body.text === "string" ? body.text : "";
+    if (!text.trim()) return sendJson(response, 400, { error: "text 不能为空" });
+    const store = context.store;
+    await store.drafts.saveFinalChapter(chapter, text);
+    const words = [...text].length;
+    const progress = await store.progress.load();
+    if (progress) {
+      const counts = { ...(progress.chapter_word_counts || {}) };
+      const oldWords = counts[String(chapter)] ?? 0;
+      counts[String(chapter)] = words;
+      const totalWords = Math.max(0, (progress.total_word_count || 0) - oldWords + words);
+      const completed = new Set(progress.completed_chapters || []);
+      completed.add(chapter);
+      await store.progress.save({
+        ...progress,
+        chapter_word_counts: counts,
+        total_word_count: totalWords,
+        completed_chapters: [...completed].sort((a, b) => a - b),
+      });
+    }
+    sendJson(response, 200, { adopted: true, chapter, wordCount: words });
+  } catch (error) {
+    sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function handleEntitiesGet(response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.store) return sendJson(response, 200, { configured: false, entities: [] });
+  try {
+    const file = await context.store.entities.load();
+    sendJson(response, 200, { configured: true, ...file });
+  } catch (error) {
+    sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function handleEntitiesPost(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.store) return sendJson(response, 503, { error: "尚未配置小说工作区" });
+  try {
+    const body = await readJson(request);
+    const id = optionalText(body.id);
+    const name = optionalText(body.name);
+    const type = (optionalText(body.type) || "character") as any;
+    if (!id || !name) return sendJson(response, 400, { error: "id 和 name 必填" });
+    await context.store.entities.upsertEntity({
+      id,
+      name,
+      type,
+      aliases: Array.isArray(body.aliases) ? body.aliases.map(String) : [],
+      description: optionalText(body.description),
+      relations: Array.isArray(body.relations) ? body.relations : [],
+      states: Array.isArray(body.states) ? body.states : [],
+    });
+    sendJson(response, 200, { saved: true, id });
+  } catch (error) {
+    sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) });
+  }
 }
 
 interface ReviewDimension { dimension: string; score: number; verdict: string; comment?: string }

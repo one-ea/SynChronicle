@@ -77,7 +77,7 @@ describe("config schemas and validation", () => {
     expect(ConfigSchema.parse(cfg).providers["codex-proxy"]).toMatchObject({ api: "responses", type: "openai" });
   });
 
-  it.each(["ollama", "bedrock"])("allows %s without api_key", (provider) => {
+  it.each(["bedrock"])("allows %s without api_key", (provider) => {
     expect(() => validateConfig({ provider, model: "m", providers: { [provider]: {} } })).not.toThrow();
   });
 

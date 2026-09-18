@@ -10,7 +10,7 @@
   "reasoning_effort": "medium",
 
   // Provider 凭证库。key 自定义，用作上面 provider 字段引用的目标。
-  // 已知 provider（openai/anthropic/gemini/openrouter/deepseek/qwen/glm/grok/mimo/ollama/bedrock）
+  // 已知 provider（openai/anthropic/gemini/openrouter/deepseek/qwen/glm/grok/mimo/bedrock）
   // 可省略 type；自定义代理必须显式声明 type 指明 API 协议。
   "providers": {
     "openrouter": {
@@ -20,7 +20,7 @@
       "models": ["google/gemini-3.0-flash", "google/gemini-3.1-pro"],
       // 可选。透传给该 provider 每次请求的额外参数（采样参数如 temperature/top_p/
       // min_p，或厂商特有键如 nvidia 开 think 的 chat_template_kwargs），逐字并入请求体。
-      // 仅对 OpenAI 兼容类 provider 生效（openrouter/deepseek/qwen/glm/grok/ollama…）；
+      // 仅对 OpenAI 兼容类 provider 生效（openrouter/deepseek/qwen/glm/grok…）；
       // type:"openai" 会按官方参数白名单过滤。值由用户自负其责。
       "extra_body": { "temperature": 0.8, "min_p": 0.05 },
       // 可选。provider 级配置，透传给 HTTP 客户端层（不是请求体），用于需要
@@ -33,12 +33,6 @@
     "anthropic": {
       "api_key": "sk-ant-xxx",
       "models": ["claude-sonnet-4", "claude-opus-4"]
-    },
-    "ollama": {
-      // ollama / bedrock / 显式 type 的自定义代理可以省略 api_key
-      // base_url 需带 /v1（ollama 的 OpenAI 兼容端点在 /v1 下）
-      "base_url": "http://localhost:11434/v1",
-      "models": ["qwen3:14b"]
     },
     "claude-code-proxy": {
       // 自定义 Anthropic 代理。如果上游限制只能由 Claude Code 客户端访问，

@@ -16,7 +16,7 @@ describe("WebUI", () => {
     expect(html).toContain("/api/run");
     expect(html).toContain("data-testid=\"config-form\"");
     expect(html).toContain('role="progressbar"');
-    expect(html).toContain('name="provider"');
+    expect(html).toContain('name="protocol-type"');
     expect(html).toContain("--heat-100");
     expect(html).toContain("--btn-radius");
     expect(html).toContain('data-theme="system"');
@@ -64,7 +64,7 @@ describe("WebUI", () => {
     }
   });
 
-  it("saves a local provider configuration through the WebUI", async () => {
+  it("saves a custom provider configuration through the WebUI", async () => {
     const directory = await mkdtemp(join(tmpdir(), "synchronicle-web-config-"));
     const configPath = join(directory, "config.json");
     const handle = await startWebServer({ port: 0, configPath });
@@ -72,7 +72,7 @@ describe("WebUI", () => {
       const saved = await fetch(`http://127.0.0.1:${handle.port}/api/config`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ provider: "ollama", model: "qwen3:14b", baseUrl: "http://localhost:11434/v1" }),
+        body: JSON.stringify({ provider: "custom", type: "openai", model: "custom-model", baseUrl: "https://my-proxy.com/v1", apiKey: "test-key" }),
       });
       expect(saved.status).toBe(201);
       expect(await saved.json()).toEqual({ configured: true });
@@ -95,7 +95,7 @@ describe("WebUI", () => {
     await writeFile(join(output, "reviews", "01.json"), JSON.stringify({ chapter: 1, scope: "chapter", issues: [], dimensions: [{ dimension: "hook", score: 90, verdict: "pass", comment: "章末留钩" }], verdict: "pass", summary: "达标", affected_chapters: [] }));
     await writeFile(join(output, "outline.json"), JSON.stringify([{ chapter: 1, title: "开端", core_event: "e", hook: "h", scenes: [] }, { chapter: 2, title: "发展", core_event: "e2", hook: "", scenes: [] }]));
     const configPath = join(directory, "config.json");
-    await writeFile(configPath, JSON.stringify({ provider: "ollama", model: "qwen3:14b", providers: { ollama: { base_url: "http://localhost:11434/v1" } }, output_dir: output }));
+    await writeFile(configPath, JSON.stringify({ provider: "deepseek", model: "deepseek-chat", providers: { deepseek: { base_url: "https://api.deepseek.com/v1" } }, output_dir: output }));
     const handle = await startWebServer({ port: 0, configPath });
     try {
       const json = async (path: string): Promise<any> => JSON.parse(await (await fetch(`http://127.0.0.1:${handle.port}${path}`)).text());
@@ -163,7 +163,7 @@ describe("WebUI", () => {
       { id: "b", round: 2, target: "chapters/01.md", contentFile: "meta/reflection/demo-session/round-2/b.artifact", digest: `sha256:${createHash("sha256").update(second).digest("hex")}`, status: "staged" },
     ] }));
     const configPath = join(directory, "config.json");
-    await writeFile(configPath, JSON.stringify({ provider: "ollama", model: "qwen3:14b", providers: { ollama: { base_url: "http://localhost:11434/v1" } }, output_dir: output }));
+    await writeFile(configPath, JSON.stringify({ provider: "deepseek", model: "deepseek-chat", providers: { deepseek: { base_url: "https://api.deepseek.com/v1" } }, output_dir: output }));
     const handle = await startWebServer({ port: 0, configPath });
     try {
       const json = async (path: string): Promise<any> => JSON.parse(await (await fetch(`http://127.0.0.1:${handle.port}${path}`)).text());
@@ -197,7 +197,7 @@ describe("WebUI", () => {
     await writeFile(join(output, "meta", "progress.json"), JSON.stringify({ novel_name: "导出书", phase: "writing", current_chapter: 2, total_chapters: 2, completed_chapters: [1], total_word_count: 4, chapter_word_counts: { "1": 4 }, in_progress_chapter: 0, flow: "writing", pending_rewrites: [] }));
     await writeFile(join(output, "chapters", "01.md"), "第一章正文");
     const configPath = join(directory, "config.json");
-    await writeFile(configPath, JSON.stringify({ provider: "ollama", model: "qwen3:14b", providers: { ollama: { base_url: "http://localhost:11434/v1" } }, output_dir: output }));
+    await writeFile(configPath, JSON.stringify({ provider: "deepseek", model: "deepseek-chat", providers: { deepseek: { base_url: "https://api.deepseek.com/v1" } }, output_dir: output }));
     const source = join(directory, "source.txt");
     await writeFile(source, "第 1 章 导入章名\n\n这是导入的正文内容。\n");
     const handle = await startWebServer({ port: 0, configPath });
@@ -222,28 +222,28 @@ describe("WebUI", () => {
   it("masks settings on read and merges core fields on write", async () => {
     const directory = await mkdtemp(join(tmpdir(), "synchronicle-web-settings-"));
     const configPath = join(directory, "config.json");
-    await writeFile(configPath, JSON.stringify({ provider: "ollama", model: "qwen3:14b", providers: { ollama: { base_url: "http://localhost:11434/v1", api_key: "secret-key" } }, output_dir: join(directory, "novel") }));
+    await writeFile(configPath, JSON.stringify({ provider: "deepseek", model: "deepseek-chat", providers: { deepseek: { base_url: "https://api.deepseek.com/v1", api_key: "secret-key" } }, output_dir: join(directory, "novel") }));
     const handle = await startWebServer({ port: 0, configPath });
     try {
       const json = async (path: string): Promise<any> => JSON.parse(await (await fetch(`http://127.0.0.1:${handle.port}${path}`)).text());
       const initial = await json("/api/settings");
       expect(initial.configured).toBe(true);
-      expect(initial.settings.provider).toBe("ollama");
-      expect(initial.settings.providers.ollama.hasApiKey).toBe(true);
+      expect(initial.settings.provider).toBe("deepseek");
+      expect(initial.settings.providers.deepseek.hasApiKey).toBe(true);
       expect(JSON.stringify(initial)).not.toContain("secret-key");
 
       const saved = JSON.parse(await (await fetch(`http://127.0.0.1:${handle.port}/api/settings`, {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: "qwen3:32b", roles: { writer: { provider: "ollama", model: "qwen3:32b" } } }),
+        body: JSON.stringify({ model: "deepseek-chat", roles: { writer: { provider: "deepseek", model: "deepseek-chat" } } }),
       })).text());
       expect(saved.saved).toBe(true);
-      expect(saved.settings.model).toBe("qwen3:32b");
-      expect(saved.settings.roles.writer.model).toBe("qwen3:32b");
+      expect(saved.settings.model).toBe("deepseek-chat");
+      expect(saved.settings.roles.writer.model).toBe("deepseek-chat");
 
       const persisted = JSON.parse(await readFile(configPath, "utf8"));
-      expect(persisted.model).toBe("qwen3:32b");
-      expect(persisted.provider).toBe("ollama");
-      expect(persisted.providers.ollama.api_key).toBe("secret-key");
+      expect(persisted.model).toBe("deepseek-chat");
+      expect(persisted.provider).toBe("deepseek");
+      expect(persisted.providers.deepseek.api_key).toBe("secret-key");
     } finally {
       await handle.close();
       await rm(directory, { recursive: true, force: true });
@@ -267,7 +267,7 @@ describe("WebUI", () => {
     await mkdir(join(output, "meta"), { recursive: true });
     await writeFile(join(output, "meta", "progress.json"), JSON.stringify({ novel_name: "测试", phase: "writing", current_chapter: 8, total_chapters: 12, completed_chapters: [1, 2, 3, 4, 5, 6, 7], total_word_count: 100, strand_history: ["感情", "支线", "主线", "主线", "主线", "主线", "主线", "主线"], flow: "writing", pending_rewrites: [] }));
     const configPath = join(directory, "config.json");
-    await writeFile(configPath, JSON.stringify({ provider: "ollama", model: "qwen3:14b", providers: { ollama: { base_url: "http://localhost:11434/v1" } }, output_dir: output }));
+    await writeFile(configPath, JSON.stringify({ provider: "deepseek", model: "deepseek-chat", providers: { deepseek: { base_url: "https://api.deepseek.com/v1" } }, output_dir: output }));
     const handle = await startWebServer({ port: 0, configPath });
     try {
       const data = await (async () => JSON.parse(await (await fetch(`http://127.0.0.1:${handle.port}/api/diag`)).text()))();
@@ -287,7 +287,7 @@ describe("WebUI", () => {
     await mkdir(join(output, "meta"), { recursive: true });
     await writeFile(join(output, "meta", "progress.json"), JSON.stringify({ novel_name: "引导测试", phase: "writing", current_chapter: 4, total_chapters: 10, completed_chapters: [1, 2, 3], in_progress_chapter: 4, total_word_count: 50, flow: "writing", pending_rewrites: [] }));
     const configPath = join(directory, "config.json");
-    await writeFile(configPath, JSON.stringify({ provider: "ollama", model: "qwen3:14b", providers: { ollama: { base_url: "http://localhost:11434/v1" } }, output_dir: output }));
+    await writeFile(configPath, JSON.stringify({ provider: "deepseek", model: "deepseek-chat", providers: { deepseek: { base_url: "https://api.deepseek.com/v1" } }, output_dir: output }));
     let steerPayload: { prompt: string; targetChapter?: number } | undefined;
     const handle = await startWebServer({
       port: 0,
@@ -315,6 +315,82 @@ describe("WebUI", () => {
 
       const injections = await readFile(join(output, "meta", "injections.jsonl"), "utf8");
       expect(injections).toContain("[Steer 引导指令: 第 4 章] 加快推进，出现反转");
+    } finally {
+      await handle.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("handles chapter rewrite and adoption endpoints", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "synchronicle-web-rewrite-"));
+    const output = join(directory, "novel");
+    for (const dir of ["meta", "chapters"]) await mkdir(join(output, dir), { recursive: true });
+    await writeFile(join(output, "meta", "progress.json"), JSON.stringify({ novel_name: "重写书", phase: "writing", current_chapter: 2, total_chapters: 5, completed_chapters: [1], total_word_count: 20, chapter_word_counts: { "1": 20 }, in_progress_chapter: 0, flow: "writing", pending_rewrites: [] }));
+    await writeFile(join(output, "chapters", "01.md"), "他不禁皱起了眉，仿佛暴风雨降临一般，心中有一丝绝望。");
+    const configPath = join(directory, "config.json");
+    await writeFile(configPath, JSON.stringify({ provider: "deepseek", model: "deepseek-chat", providers: { deepseek: { base_url: "https://api.deepseek.com/v1", api_key: "secret-key" } }, output_dir: output }));
+    const handle = await startWebServer({ port: 0, configPath });
+    try {
+      const res = await fetch(`http://127.0.0.1:${handle.port}/api/chapters/1/rewrite`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ style: "suspense", instructions: "强化压迫感", reduceAitone: true }),
+      });
+      expect(res.status).toBe(200);
+      const data = JSON.parse(await res.text());
+      expect(data.chapter).toBe(1);
+      expect(data.style).toBe("suspense");
+      expect(data.staged).toBe(true);
+      expect(data.newScore).toBeGreaterThanOrEqual(data.previousScore);
+      expect(data.rewrittenText).not.toContain("不禁");
+
+      const adoptRes = await fetch(`http://127.0.0.1:${handle.port}/api/chapters/1/adopt`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text: data.rewrittenText }),
+      });
+      expect(adoptRes.status).toBe(200);
+      const adopted = JSON.parse(await adoptRes.text());
+      expect(adopted.adopted).toBe(true);
+
+      const updatedText = await readFile(join(output, "chapters", "01.md"), "utf8");
+      expect(updatedText).toBe(data.rewrittenText);
+    } finally {
+      await handle.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("serves entities API for graph storage", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "synchronicle-web-entities-"));
+    const output = join(directory, "novel");
+    for (const dir of ["meta", "chapters"]) await mkdir(join(output, dir), { recursive: true });
+    const configPath = join(directory, "config.json");
+    await writeFile(configPath, JSON.stringify({ provider: "deepseek", model: "deepseek-chat", providers: { deepseek: { base_url: "https://api.deepseek.com/v1", api_key: "secret-key" } }, output_dir: output }));
+    const handle = await startWebServer({ port: 0, configPath });
+    try {
+      const getInitial = await fetch(`http://127.0.0.1:${handle.port}/api/entities`);
+      expect(getInitial.status).toBe(200);
+      const initData = JSON.parse(await getInitial.text());
+      expect(initData.entities).toEqual([]);
+
+      const postRes = await fetch(`http://127.0.0.1:${handle.port}/api/entities`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          id: "hero",
+          name: "林辰",
+          type: "character",
+          aliases: ["剑绝"],
+          description: "主角",
+        }),
+      });
+      expect(postRes.status).toBe(200);
+
+      const getUpdated = (await (await fetch(`http://127.0.0.1:${handle.port}/api/entities`)).json()) as { entities: Array<{ name: string; aliases: string[] }> };
+      expect(getUpdated.entities).toHaveLength(1);
+      expect(getUpdated.entities[0]!.name).toBe("林辰");
+      expect(getUpdated.entities[0]!.aliases).toContain("剑绝");
     } finally {
       await handle.close();
       await rm(directory, { recursive: true, force: true });

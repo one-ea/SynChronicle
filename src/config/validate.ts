@@ -1,7 +1,7 @@
 import { ConfigSchema, type PartialConfig, type ResolvedConfig } from "./schemas.js";
 
 const knownRoles = new Set(["coordinator", "architect", "writer", "editor", "reviewer"]);
-const knownProviders = new Set(["openai", "anthropic", "gemini", "openrouter", "deepseek", "qwen", "glm", "grok", "mimo", "ollama", "bedrock"]);
+const knownProviders = new Set(["openai", "anthropic", "gemini", "openrouter", "deepseek", "qwen", "glm", "grok", "mimo", "bedrock"]);
 const knownNotifyEvents = new Set(["run_end", "repeat", "budget"]);
 
 function validateText(label: string, value = ""): void {
@@ -11,7 +11,7 @@ function validateText(label: string, value = ""): void {
 }
 
 function requiresApiKey(name: string, type?: string): boolean {
-  return name !== "ollama" && name !== "bedrock" && !type;
+  return name !== "bedrock" && !type;
 }
 
 function providerType(name: string, type?: string): string {

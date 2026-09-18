@@ -1,7 +1,7 @@
 const types: Record<string, string> = {
   openai: "openai", anthropic: "anthropic", gemini: "google", google: "google",
   openrouter: "openai", deepseek: "openai", qwen: "openai", glm: "openai",
-  grok: "openai", ollama: "openai", bedrock: "bedrock",
+  grok: "openai", bedrock: "bedrock",
 };
 
 export function knownProviderType(name: string): string | undefined {

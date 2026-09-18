@@ -209,6 +209,7 @@ export function renderWebApp(): string {
         <div class="side-label">内容</div>
         <nav class="side-nav">
           <button type="button" data-view="reader"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6.2C10.4 4.5 8 4 4 4v13.5c4 0 6.4.5 8 2.3 1.6-1.8 4-2.3 8-2.3V4c-4 0-6.4.5-8 2.2z"/><path d="M12 6.2v13.6"/></svg>章节与大纲</button>
+          <button type="button" data-view="entities"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="12" cy="18" r="3"/><line x1="8.5" y1="7.5" x2="15.5" y2="7.5"/><line x1="7.5" y1="8.5" x2="10.5" y2="15.5"/><line x1="16.5" y1="8.5" x2="13.5" y2="15.5"/></svg>人物图谱</button>
           <button type="button" data-view="records"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h9"/></svg>运行记录</button>
         </nav>
         <div class="side-label">管理</div>
@@ -247,18 +248,29 @@ export function renderWebApp(): string {
               <div class="card">
                 <h3 class="section-title">连接引擎</h3>
                 <form id="settings" class="form-grid" data-testid="config-form">
-                  <div class="seg" role="radiogroup" aria-label="模型服务商">
-                    <label><input type="radio" name="provider" value="ollama" checked /><span>Ollama</span></label>
-                    <label><input type="radio" name="provider" value="openrouter" /><span>OpenRouter</span></label>
-                    <label><input type="radio" name="provider" value="openai" /><span>OpenAI</span></label>
-                    <label><input type="radio" name="provider" value="anthropic" /><span>Anthropic</span></label>
+                  <div>
+                    <label class="helper" style="margin:0 0 6px 2px;font-size:12px;color:var(--muted)">接口协议类型</label>
+                    <div class="seg" role="radiogroup" aria-label="协议类型">
+                      <label><input type="radio" name="protocol-type" value="openai" checked /><span>OpenAI 兼容</span></label>
+                      <label><input type="radio" name="protocol-type" value="anthropic" /><span>Anthropic</span></label>
+                      <label><input type="radio" name="protocol-type" value="google" /><span>Gemini</span></label>
+                    </div>
                   </div>
-                  <div><div class="tf"><input id="model-input" placeholder=" " /><label for="model-input">模型名称</label></div><small class="helper">例如 qwen3:14b</small></div>
                   <div class="form-row">
-                    <div><div class="tf"><input id="base-url" placeholder=" " /><label for="base-url">接口地址（可选）</label></div><small class="helper">例如 http://localhost:11434/v1</small></div>
-                    <div><div class="tf"><input id="api-key" type="password" placeholder=" " /><label for="api-key">API Key（Ollama 可留空）</label></div><small class="helper">仅保存在本机配置</small></div>
+                    <div>
+                      <div class="tf"><input id="base-url" placeholder=" " required /><label for="base-url">接口地址 (Base URL)</label></div>
+                      <small class="helper">如 https://api.openai.com/v1 或中转端点</small>
+                    </div>
+                    <div>
+                      <div class="tf"><input id="api-key" type="password" placeholder=" " /><label for="api-key">API Key</label></div>
+                      <small class="helper">密钥仅保存在本机</small>
+                    </div>
                   </div>
-                  <div class="actions"><small>保存后即可开始创作。</small><button class="btn btn-tonal" type="submit">保存配置</button></div>
+                  <div>
+                    <div class="tf"><input id="model-input" placeholder=" " required /><label for="model-input">模型名称 (Model)</label></div>
+                    <small class="helper">如 gpt-4o, claude-3-7-sonnet, deepseek-chat, gemini-2.5-flash</small>
+                  </div>
+                  <div class="actions"><small>保存后即可开始创作。</small><button class="btn btn-tonal" type="submit">保存连接配置</button></div>
                 </form>
               </div>
               <div class="card">
@@ -300,12 +312,77 @@ export function renderWebApp(): string {
             <article class="card" aria-label="章节内容">
               <header class="chapter-head">
                 <h2 id="ch-title">选择左侧章节开始阅读</h2>
-                <div style="display:flex;gap:8px;align-items:center"><span id="ch-status" class="chip small" hidden></span><span id="ch-tone" class="chip small" hidden></span><span id="ch-words" class="meta"></span></div>
+                <div style="display:flex;gap:8px;align-items:center"><span id="ch-status" class="chip small" hidden></span><span id="ch-tone" class="chip small" hidden></span><span id="ch-words" class="meta"></span><button id="open-rewrite" class="btn btn-tonal" type="button" style="min-height:30px;padding:4px 12px;font-size:12px;" hidden>文风重构 / 去AI味</button></div>
               </header>
+              <div id="rewrite-panel" class="card" style="margin:14px 0;background:var(--alpha-4);border:1px dashed var(--line);" hidden>
+                <div class="panel-head"><h4 style="margin:0">AI 文风重构与去AI味</h4><span id="rewrite-status">就绪</span></div>
+                <div class="form-grid" style="gap:12px;margin-top:8px">
+                  <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+                    <label class="helper" style="margin:0;font-size:12px;font-weight:600">目标题材风格：</label>
+                    <div class="seg" role="radiogroup" aria-label="文风类型" style="max-width:380px">
+                      <label><input type="radio" name="rw-style" value="default" checked /><span>通用</span></label>
+                      <label><input type="radio" name="rw-style" value="suspense" /><span>悬疑推理</span></label>
+                      <label><input type="radio" name="rw-style" value="fantasy" /><span>奇幻史诗</span></label>
+                      <label><input type="radio" name="rw-style" value="romance" /><span>细腻言情</span></label>
+                    </div>
+                  </div>
+                  <div class="tf"><input id="rw-instructions" placeholder=" " /><label for="rw-instructions">额外润色或去AI味指令（可选）</label></div>
+                  <div class="actions" style="margin-top:4px">
+                    <small id="rw-hint">根据当前章节命中的 AI 套话特征词自动追加负向约束</small>
+                    <div style="display:flex;gap:8px">
+                      <button id="rw-start" class="btn btn-filled" type="button" style="min-height:32px;font-size:12px">开始重构</button>
+                      <button id="rw-adopt" class="btn btn-tonal" type="button" style="min-height:32px;font-size:12px" hidden>采纳重构正文</button>
+                      <button id="rw-cancel" class="btn btn-text" type="button" style="min-height:32px;font-size:12px">收起</button>
+                    </div>
+                  </div>
+                </div>
+                <div id="rw-diff" style="margin-top:12px;font-size:12px;line-height:1.6;color:var(--muted)" hidden></div>
+              </div>
               <div id="ch-summary" class="summary-block" hidden></div>
               <div id="ch-review" class="review-block" hidden></div>
               <div id="ch-text" class="chapter-text"><div class="empty">章节正文将在这里展示。</div></div>
             </article>
+          </div>
+        </section>
+        <section class="page" data-page="entities" aria-label="人物图谱" hidden>
+          <div class="page-head">
+            <div><h1>人物与势力图谱</h1><p class="meta">追踪出场角色性格羁绊、势力归属与心境动态弧度。</p></div>
+            <div class="head-actions"><button id="add-entity-btn" class="btn btn-tonal" type="button">新建人物/势力</button></div>
+          </div>
+          <div id="add-entity-modal" class="card" style="margin-bottom:16px;border:1px dashed var(--line)" hidden>
+            <h4 style="margin:0 0 12px">添加小说实体</h4>
+            <div class="form-grid" style="gap:12px">
+              <div class="form-row">
+                <div class="tf"><input id="ent-id" placeholder=" " required /><label for="ent-id">实体标识 (英文ID，如 hero)</label></div>
+                <div class="tf"><input id="ent-name" placeholder=" " required /><label for="ent-name">实体名称 (如 李林)</label></div>
+              </div>
+              <div class="form-row">
+                <div class="tf"><input id="ent-type" placeholder=" " value="character" /><label for="ent-type">类型 (character/faction/item)</label></div>
+                <div class="tf"><input id="ent-aliases" placeholder=" " /><label for="ent-aliases">别名/称号 (逗号分隔)</label></div>
+              </div>
+              <div class="tf"><input id="ent-desc" placeholder=" " /><label for="ent-desc">生平简介与核心动机</label></div>
+              <div class="actions">
+                <small>保存后沉淀至全书记忆知识库</small>
+                <div style="display:flex;gap:8px">
+                  <button id="save-entity-btn" class="btn btn-filled" type="button">保存入库</button>
+                  <button id="cancel-entity-btn" class="btn btn-text" type="button">取消</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="grid">
+            <section class="stack">
+              <div class="card">
+                <div class="panel-head"><h3>实体档案卡片</h3><span id="entities-count">0 位</span></div>
+                <div class="rowlines" id="entities-list"><div class="empty">暂无实体记录。创作进行中或可手动添加。</div></div>
+              </div>
+            </section>
+            <aside class="stack">
+              <div class="card">
+                <div class="panel-head"><h3>关系网络 & 羁绊</h3><span id="relations-count">0 条</span></div>
+                <div class="rowlines" id="relations-list"><div class="empty">暂无关系连线。</div></div>
+              </div>
+            </aside>
           </div>
         </section>
         <section class="page" data-page="records" aria-label="运行记录" hidden>
@@ -333,8 +410,8 @@ export function renderWebApp(): string {
               <h3 class="section-title">核心配置</h3>
               <form id="settings-form" class="form-grid">
                 <div class="form-row">
-                  <div><div class="tf"><input id="set-provider" placeholder=" " /><label for="set-provider">默认服务商</label></div><small class="helper">如 ollama / openrouter / openai</small></div>
-                  <div><div class="tf"><input id="set-model" placeholder=" " /><label for="set-model">默认模型</label></div><small class="helper">如 qwen3:14b</small></div>
+                  <div><div class="tf"><input id="set-provider" placeholder=" " /><label for="set-provider">默认服务商</label></div><small class="helper">如 openrouter / openai / anthropic / deepseek</small></div>
+                  <div><div class="tf"><input id="set-model" placeholder=" " /><label for="set-model">默认模型</label></div><small class="helper">如 google/gemini-2.5-flash</small></div>
                 </div>
                 <h4 style="margin:6px 0 0;font-size:13px">角色模型（留空保持现状）</h4>
                 <div id="roles-rows" class="form-grid"></div>
@@ -358,7 +435,7 @@ export function renderWebApp(): string {
       const phaseLabels = { init: '准备中', premise: '设定构思', outline: '大纲规划', writing: '正文创作', complete: '已完结' };
       const chapterLabels = { completed: '已完成', 'in-progress': '写作中', pending: '待写', rewrite: '待重写' };
       const formatNumber = (value) => new Intl.NumberFormat('zh-CN').format(value || 0);
-      const provider = () => (document.querySelector('input[name="provider"]:checked') || {}).value || 'ollama';
+      const provider = () => (document.querySelector('input[name="provider"]:checked') || {}).value || 'custom';
       const RUN_END = "\\u0000run_end";
       const rootElement = document.documentElement;
       const themeButtons = document.querySelectorAll('.theme-btn');
@@ -398,8 +475,35 @@ export function renderWebApp(): string {
       function selectChapter(chapter) { currentChapter = chapter; document.querySelectorAll('.trow').forEach((row) => { const active = Number(row.dataset.chapter) === chapter; row.classList.toggle('active', active); row.setAttribute('aria-selected', String(active)); }); void loadChapter(chapter); }
       async function loadChapter(chapter) { try { const data = await (await fetch('/api/chapters/' + chapter)).json(); if (!data.configured || !data.chapter) { $('ch-title').textContent = '尚未配置模型'; return; } const view = data.chapter; $('ch-title').textContent = view.title || ('第 ' + chapter + ' 章'); const chip = $('ch-status'); chip.hidden = false; chip.textContent = chapterLabels[view.status] || view.status; chip.dataset.state = view.status === 'rewrite' ? 'error' : view.status === 'completed' ? 'idle' : 'running';           $('ch-words').textContent = (view.source === 'draft' ? '草稿 · ' : '') + formatNumber(view.wordCount) + ' 字';
           const tone = $('ch-tone');
-          if (view.aitone && view.aitone.score < 100) { tone.hidden = false; tone.textContent = 'AI 味 ' + view.aitone.score; tone.className = 'chip small ' + (view.aitone.score < 70 ? 'warn' : ''); tone.title = view.aitone.hits.slice(0, 3).map((hit) => hit.name + ' x' + hit.count).join('；') || '无命中'; } else tone.hidden = true; const summary = $('ch-summary'); if (view.summary) { summary.hidden = false; summary.replaceChildren(); const head = document.createElement('h4'); head.textContent = '本章摘要'; const body = document.createElement('div'); body.textContent = view.summary.summary; summary.append(head, body); if (view.summary.keyEvents.length) { const list = document.createElement('ul'); for (const item of view.summary.keyEvents) { const li = document.createElement('li'); li.textContent = item; list.append(li); } summary.append(list); } } else summary.hidden = true; const review = $('ch-review'); if (view.review && (view.review.dimensions.length || view.review.summary)) { review.hidden = false; review.replaceChildren(); const head = document.createElement('div'); head.className = 'review-head'; const title = document.createElement('h4'); title.style.margin = '0'; title.textContent = 'Editor 评审'; const verdict = document.createElement('span'); verdict.className = 'chip small ' + (view.review.verdict === 'pass' ? 'ok' : 'warn'); verdict.textContent = view.review.verdict; head.append(title, verdict); review.append(head); if (view.review.summary) { const note = document.createElement('div'); note.className = 'meta'; note.style.marginTop = '6px'; note.textContent = view.review.summary; review.append(note); } for (const dimension of view.review.dimensions) { const row = document.createElement('div'); row.className = 'dim' + (dimension.score < 70 ? ' low' : ''); const name = document.createElement('span'); name.textContent = dimension.dimension; const bar = document.createElement('div'); bar.className = 'bar'; const fill = document.createElement('i'); fill.style.setProperty('--w', Math.max(0, Math.min(100, dimension.score)) + '%'); bar.append(fill); const score = document.createElement('b'); score.style.fontWeight = '600'; score.textContent = String(dimension.score); row.append(name, bar, score); review.append(row); } } else review.hidden = true; const text = $('ch-text'); text.replaceChildren(); if (view.text) { for (const block of view.text.split(/\\n{2,}/)) { const paragraph = document.createElement('p'); paragraph.textContent = block; text.append(paragraph); } } else { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = view.status === 'pending' ? '这一章还未书写。' : '暂无正文。'; text.append(empty); } } catch { showNotice('加载章节失败。'); } }
-      $('settings').addEventListener('submit', async (event) => { event.preventDefault(); try { await post('/api/config', { provider: provider(), model: $('model-input').value, baseUrl: $('base-url').value, apiKey: $('api-key').value }); $('api-key').value = ''; showNotice('配置已保存，可以开始创作。', 'success'); await refresh(); void loadBookSummary(); } catch (error) { showNotice(error.message || '配置保存失败'); } });
+          if (view.aitone && view.aitone.score < 100) {
+            tone.hidden = false;
+            tone.textContent = 'AI 味 ' + view.aitone.score;
+            tone.className = 'chip small ' + (view.aitone.score < 70 ? 'warn' : '');
+            tone.title = view.aitone.hits.slice(0, 3).map((hit) => hit.name + ' x' + hit.count).join('；') || '无命中';
+          } else tone.hidden = true;
+          const openRw = $('open-rewrite');
+          if (openRw) openRw.hidden = !view.text;
+          const rwPanel = $('rewrite-panel');
+          if (rwPanel) rwPanel.hidden = true; const summary = $('ch-summary'); if (view.summary) { summary.hidden = false; summary.replaceChildren(); const head = document.createElement('h4'); head.textContent = '本章摘要'; const body = document.createElement('div'); body.textContent = view.summary.summary; summary.append(head, body); if (view.summary.keyEvents.length) { const list = document.createElement('ul'); for (const item of view.summary.keyEvents) { const li = document.createElement('li'); li.textContent = item; list.append(li); } summary.append(list); } } else summary.hidden = true; const review = $('ch-review'); if (view.review && (view.review.dimensions.length || view.review.summary)) { review.hidden = false; review.replaceChildren(); const head = document.createElement('div'); head.className = 'review-head'; const title = document.createElement('h4'); title.style.margin = '0'; title.textContent = 'Editor 评审'; const verdict = document.createElement('span'); verdict.className = 'chip small ' + (view.review.verdict === 'pass' ? 'ok' : 'warn'); verdict.textContent = view.review.verdict; head.append(title, verdict); review.append(head); if (view.review.summary) { const note = document.createElement('div'); note.className = 'meta'; note.style.marginTop = '6px'; note.textContent = view.review.summary; review.append(note); } for (const dimension of view.review.dimensions) { const row = document.createElement('div'); row.className = 'dim' + (dimension.score < 70 ? ' low' : ''); const name = document.createElement('span'); name.textContent = dimension.dimension; const bar = document.createElement('div'); bar.className = 'bar'; const fill = document.createElement('i'); fill.style.setProperty('--w', Math.max(0, Math.min(100, dimension.score)) + '%'); bar.append(fill); const score = document.createElement('b'); score.style.fontWeight = '600'; score.textContent = String(dimension.score); row.append(name, bar, score); review.append(row); } } else review.hidden = true; const text = $('ch-text'); text.replaceChildren(); if (view.text) { for (const block of view.text.split(/\\n{2,}/)) { const paragraph = document.createElement('p'); paragraph.textContent = block; text.append(paragraph); } } else { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = view.status === 'pending' ? '这一章还未书写。' : '暂无正文。'; text.append(empty); } } catch { showNotice('加载章节失败。'); } }
+      $('settings').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        try {
+          const type = (document.querySelector('input[name="protocol-type"]:checked') || {}).value || 'openai';
+          await post('/api/config', {
+            provider: 'custom',
+            model: $('model-input').value.trim(),
+            baseUrl: $('base-url').value.trim(),
+            apiKey: $('api-key').value.trim(),
+            type,
+          });
+          $('api-key').value = '';
+          showNotice('自定义连接配置已保存，可以开始创作。', 'success');
+          await refresh();
+          void loadBookSummary();
+        } catch (error) {
+          showNotice(error.message || '配置保存失败');
+        }
+      });
       $('run').addEventListener('click', async () => { const value = $('prompt').value.trim(); if (!value) { showNotice('先写下一句创作 brief。'); return; } try { await post(['completed', 'paused'].includes(currentState) ? '/api/continue' : '/api/run', { prompt: value }); $('prompt').value = ''; $('live-text').textContent = ''; showNotice('创作已启动。', 'success'); await refresh(); } catch (error) { showNotice(error.message || '启动失败'); } });
       $('prompt').addEventListener('keydown', (event) => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); $('run').click(); } });
       $('steer-button').addEventListener('click', async () => { const value = $('steer-input').value.trim(); if (!value) { showNotice('先写下要调整的方向。'); return; } try { await post('/api/inject', { text: value }); $('steer-input').value = ''; showNotice('干预已加入下一次运行。', 'success'); await refresh(); } catch (error) { showNotice(error.message || '干预发送失败'); } });
@@ -536,6 +640,126 @@ export function renderWebApp(): string {
           }
         } catch { box.replaceChildren(); const error = document.createElement('div'); error.className = 'empty'; error.textContent = '诊断失败，请稍后重试。'; box.append(error); }
       });
+      let stagedRewriteText = '';
+      $('open-rewrite')?.addEventListener('click', () => {
+        const panel = $('rewrite-panel');
+        if (panel) {
+          panel.hidden = !panel.hidden;
+          $('rw-adopt').hidden = true;
+          $('rw-diff').hidden = true;
+          $('rw-status').textContent = '就绪';
+        }
+      });
+      $('rw-cancel')?.addEventListener('click', () => {
+        const panel = $('rewrite-panel');
+        if (panel) panel.hidden = true;
+      });
+      $('rw-start')?.addEventListener('click', async () => {
+        if (!currentChapter) return;
+        const style = ((document.querySelector('input[name="rw-style"]:checked') || {}).value) || 'default';
+        const instructions = $('rw-instructions')?.value.trim() || '';
+        $('rw-status').textContent = '重构处理中…';
+        try {
+          const res = await post('/api/chapters/' + currentChapter + '/rewrite', {
+            style,
+            instructions,
+            reduceAitone: true,
+          });
+          stagedRewriteText = res.rewrittenText;
+          $('rw-status').textContent = '重构完成 (AI味: ' + res.previousScore + ' → ' + res.newScore + ')';
+          const diff = $('rw-diff');
+          diff.hidden = false;
+          diff.replaceChildren();
+          const title = document.createElement('b');
+          title.textContent = '重构预览：';
+          const body = document.createElement('p');
+          body.style.margin = '4px 0 0';
+          body.textContent = res.rewrittenText.slice(0, 300) + '…';
+          diff.append(title, body);
+          $('rw-adopt').hidden = false;
+          showNotice('第 ' + currentChapter + ' 章已生成文风重写候选，可预览后采纳。', 'success');
+        } catch (err) {
+          $('rw-status').textContent = '重构失败';
+          showNotice(err.message || '重构失败');
+        }
+      });
+      $('rw-adopt')?.addEventListener('click', async () => {
+        if (!currentChapter || !stagedRewriteText) return;
+        try {
+          await post('/api/chapters/' + currentChapter + '/adopt', { text: stagedRewriteText });
+          showNotice('已采纳重写正文并更新第 ' + currentChapter + ' 章。', 'success');
+          $('rewrite-panel').hidden = true;
+          await loadChapter(currentChapter);
+          void loadBookSummary();
+        } catch (err) {
+          showNotice(err.message || '采纳失败');
+        }
+      });
+      async function loadEntities() {
+        try {
+          const res = await (await fetch('/api/entities')).json();
+          const list = $('entities-list');
+          const relList = $('relations-list');
+          if (!list || !relList) return;
+          list.replaceChildren();
+          relList.replaceChildren();
+          const items = res.entities || [];
+          $('entities-count').textContent = items.length + ' 位';
+          if (!items.length) {
+            const empty1 = document.createElement('div'); empty1.className = 'empty'; empty1.textContent = '暂无实体记录。可点击上方按钮添加。'; list.append(empty1);
+            const empty2 = document.createElement('div'); empty2.className = 'empty'; empty2.textContent = '暂无关系连线。'; relList.append(empty2);
+            $('relations-count').textContent = '0 条';
+            return;
+          }
+          let allRelCount = 0;
+          for (const ent of items) {
+            const card = document.createElement('div'); card.className = 'rowline'; card.style.flexDirection = 'column'; card.style.alignItems = 'flex-start'; card.style.gap = '4px';
+            const top = document.createElement('div'); top.style.display = 'flex'; top.style.justifyContent = 'space-between'; top.style.width = '100%';
+            const name = document.createElement('b'); name.textContent = ent.name + (ent.aliases?.length ? ' (' + ent.aliases.join('/') + ')' : '');
+            const badge = document.createElement('span'); badge.className = 'pill muted'; badge.textContent = ent.type;
+            top.append(name, badge);
+            const desc = document.createElement('small'); desc.style.color = 'var(--muted)'; desc.textContent = ent.description || '暂无描述';
+            card.append(top, desc);
+            list.append(card);
+
+            for (const r of ent.relations || []) {
+              allRelCount++;
+              const rRow = document.createElement('div'); rRow.className = 'rowline';
+              const label = document.createElement('span'); label.textContent = ent.name + ' → ' + r.targetId;
+              const typePill = document.createElement('span'); typePill.className = 'pill ' + (r.strength > 0 ? 'ok' : r.strength < 0 ? 'bad' : 'muted');
+              typePill.textContent = r.type + (r.strength ? ' (' + r.strength + ')' : '');
+              rRow.append(label, typePill);
+              relList.append(rRow);
+            }
+          }
+          $('relations-count').textContent = allRelCount + ' 条';
+        } catch { /* 忽略加载错误 */ }
+      }
+      $('add-entity-btn')?.addEventListener('click', () => {
+        const m = $('add-entity-modal');
+        if (m) m.hidden = !m.hidden;
+      });
+      $('cancel-entity-btn')?.addEventListener('click', () => {
+        const m = $('add-entity-modal');
+        if (m) m.hidden = true;
+      });
+      $('save-entity-btn')?.addEventListener('click', async () => {
+        const id = $('ent-id')?.value.trim();
+        const name = $('ent-name')?.value.trim();
+        const type = $('ent-type')?.value.trim() || 'character';
+        const aliases = ($('ent-aliases')?.value || '').split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+        const description = $('ent-desc')?.value.trim() || '';
+        if (!id || !name) { showNotice('ID 与名称必填'); return; }
+        try {
+          await post('/api/entities', { id, name, type, aliases, description });
+          showNotice('实体已添加至图谱。', 'success');
+          $('add-entity-modal').hidden = true;
+          await loadEntities();
+        } catch (err) {
+          showNotice(err.message || '保存失败');
+        }
+      });
+      document.querySelectorAll('[data-view="entities"]').forEach((button) => button.addEventListener('click', () => void loadEntities()));
       refresh();
       loadBookSummary();
     </script>

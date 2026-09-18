@@ -33,7 +33,7 @@ describe("provider mapping", () => {
   it.each([
     ["openai", "openai"], ["anthropic", "anthropic"], ["gemini", "google"],
     ["openrouter", "openai"], ["deepseek", "openai"], ["qwen", "openai"],
-    ["glm", "openai"], ["grok", "openai"], ["ollama", "openai"], ["bedrock", "bedrock"],
+    ["glm", "openai"], ["grok", "openai"], ["bedrock", "bedrock"],
   ])("maps %s to %s", (name, type) => expect(knownProviderType(name)).toBe(type));
 });
 

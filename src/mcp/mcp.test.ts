@@ -12,7 +12,7 @@ async function seed(directory: string): Promise<string> {
   await writeFile(join(output, "summaries", "01.json"), JSON.stringify({ chapter: 1, summary: "发现信号", characters: [], key_events: ["坐标"] }));
   await writeFile(join(output, "outline.json"), JSON.stringify([{ chapter: 1, title: "开端", core_event: "e", hook: "h", scenes: [] }, { chapter: 2, title: "发展", core_event: "e2", hook: "", scenes: [] }]));
   const configPath = join(directory, "config.json");
-  await writeFile(configPath, JSON.stringify({ provider: "ollama", model: "qwen3:14b", providers: { ollama: { base_url: "http://localhost:11434/v1" } }, output_dir: output }));
+  await writeFile(configPath, JSON.stringify({ provider: "deepseek", model: "deepseek-chat", providers: { deepseek: { base_url: "https://api.deepseek.com/v1" } }, output_dir: output }));
   return configPath;
 }
 
@@ -30,7 +30,17 @@ describe("mcp handler", () => {
     expect(await handler({ jsonrpc: "2.0", method: "notifications/initialized" })).toBeUndefined();
     expect(((await handler(request(2, "ping"))) as { result: object }).result).toEqual({});
     const tools = (await handler(request(3, "tools/list"))) as { result: { tools: Array<{ name: string }> } };
-    expect(tools.result.tools.map((tool) => tool.name).sort()).toEqual(["synchronicle_book", "synchronicle_chapter", "synchronicle_diag", "synchronicle_inject", "synchronicle_run", "synchronicle_status", "synchronicle_steer"].sort());
+    expect(tools.result.tools.map((tool) => tool.name).sort()).toEqual([
+      "synchronicle_book",
+      "synchronicle_chapter",
+      "synchronicle_diag",
+      "synchronicle_entities",
+      "synchronicle_inject",
+      "synchronicle_rewrite",
+      "synchronicle_run",
+      "synchronicle_status",
+      "synchronicle_steer",
+    ].sort());
     const unknown = (await handler(request(4, "no/such/method"))) as { error: { code: number } };
     expect(unknown.error.code).toBe(-32601);
   });
@@ -51,6 +61,13 @@ describe("mcp handler", () => {
       expect(chapter).toContain('"aitone"');
       const diag = toolText(await handler(request(4, "tools/call", { name: "synchronicle_diag" })));
       expect(diag).toContain("PacingStall");
+
+      const rw = toolText(await handler(request(5, "tools/call", { name: "synchronicle_rewrite", arguments: { chapter: 1, style: "suspense" } })));
+      expect(rw).toContain('"chapter": 1');
+      expect(rw).toContain('"style": "suspense"');
+
+      const entities = toolText(await handler(request(6, "tools/call", { name: "synchronicle_entities" })));
+      expect(entities).toContain("[]");
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
