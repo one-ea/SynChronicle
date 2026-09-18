@@ -175,6 +175,18 @@ describe("context envelope gaps", () => {
     const writer = await tools.novel_context.execute!({ chapter: 2, consumer: "writer" }, {} as never) as { episodic_memory: Record<string, unknown> };
     expect(writer.episodic_memory).toEqual({});
   });
+
+  it("injects style_guard for writer and aitone signals for editor", async () => {
+    const tools = createToolRegistry({ store });
+    await store.outline.saveOutline([{ chapter: 1, title: "开端", core_event: "事件", hook: "", scenes: [] }]);
+    await store.drafts.saveDraft(1, "他不禁皱起了眉，仿佛潮水一般涌来。");
+    await store.progress.save({ novel_name: "C", phase: "writing", current_chapter: 1, total_chapters: 1, completed_chapters: [], total_word_count: 0, flow: "writing" });
+    const writer = await tools.novel_context.execute!({ chapter: 1, consumer: "writer" }, {} as never) as { selected_memory: { style_guard?: { avoid: string[] } } };
+    expect(writer.selected_memory.style_guard?.avoid).toEqual(expect.arrayContaining(["对比定义句式『不是…而是…』"]));
+    const editor = await tools.novel_context.execute!({ chapter: 1, consumer: "editor" }, {} as never) as { quality_signals?: { aitone: { score: number; hits: Array<{ name: string }> } } };
+    expect(editor.quality_signals?.aitone.score).toBeLessThan(100);
+    expect(editor.quality_signals!.aitone.hits.length).toBeGreaterThan(0);
+  });
 });
 
 describe("user rules wiring", () => {

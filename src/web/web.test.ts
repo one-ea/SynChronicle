@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { renderWebApp } from "./app.js";
@@ -146,6 +147,47 @@ describe("WebUI", () => {
     expect(html).toContain("上一章");
     expect(html).toContain("下一章");
     expect(html).not.toContain("innerHTML =");
+  });
+
+  it("lists and commits staged reflection rounds", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "synchronicle-web-reflection-"));
+    const output = join(directory, "novel");
+    for (const dir of ["meta", "chapters", "meta/reflection/demo-session/round-1", "meta/reflection/demo-session/round-2"]) await mkdir(join(output, dir), { recursive: true });
+    await writeFile(join(output, "chapters", "01.md"), "旧版正文");
+    const first = "第一轮候选内容";
+    const second = "第二轮更好的候选内容，足够具体。";
+    await writeFile(join(output, "meta", "reflection", "demo-session", "round-1", "a.artifact"), first);
+    await writeFile(join(output, "meta", "reflection", "demo-session", "round-2", "b.artifact"), second);
+    await writeFile(join(output, "meta", "reflection", "demo-session", "manifest.json"), JSON.stringify({ sessionId: "demo-session", artifacts: [
+      { id: "a", round: 1, target: "chapters/01.md", contentFile: "meta/reflection/demo-session/round-1/a.artifact", digest: `sha256:${createHash("sha256").update(first).digest("hex")}`, status: "committed" },
+      { id: "b", round: 2, target: "chapters/01.md", contentFile: "meta/reflection/demo-session/round-2/b.artifact", digest: `sha256:${createHash("sha256").update(second).digest("hex")}`, status: "staged" },
+    ] }));
+    const configPath = join(directory, "config.json");
+    await writeFile(configPath, JSON.stringify({ provider: "ollama", model: "qwen3:14b", providers: { ollama: { base_url: "http://localhost:11434/v1" } }, output_dir: output }));
+    const handle = await startWebServer({ port: 0, configPath });
+    try {
+      const json = async (path: string): Promise<any> => JSON.parse(await (await fetch(`http://127.0.0.1:${handle.port}${path}`)).text());
+      const list = await json("/api/reflection");
+      expect(list.configured).toBe(true);
+      expect(list.sessions).toHaveLength(1);
+      const round2 = list.sessions[0].rounds.find((round: { round: number }) => round.round === 2);
+      expect(round2.artifacts[0].preview).toContain("第二轮更好的候选");
+
+      const committed = await (await fetch(`http://127.0.0.1:${handle.port}/api/reflection/commit`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sessionId: "demo-session", round: 2 }),
+      })).json();
+      expect(committed).toEqual({ committed: 1 });
+      const text = await readFile(join(output, "chapters", "01.md"), "utf8");
+      expect(text).toContain("第二轮更好的候选");
+
+      const again = await fetch(`http://127.0.0.1:${handle.port}/api/reflection/commit`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sessionId: "demo-session", round: 2 }),
+      });
+      expect(again.status).toBe(400);
+    } finally {
+      await handle.close();
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("serves the read front without a model configuration", async () => {

@@ -24,7 +24,6 @@ const chapters = [
 
 const completed = chapters.map((_unused, index) => index + 1);
 const wordCounts = Object.fromEntries(chapters.map((chapter, index) => [String(index + 1), [...chapter.text.replace(/\s/g, "")].length]));
-const strandHistory = chapters.map((chapter) => chapter.strand);
 
 await mkdir(join(dir, "meta"), { recursive: true });
 await mkdir(join(dir, "chapters"), { recursive: true });
@@ -36,8 +35,12 @@ await writeFile(join(dir, "meta", "progress.json"), JSON.stringify({
   novel_name: "十七年的坐标", phase: "writing", current_chapter: 8, total_chapters: 12,
   completed_chapters: completed, total_word_count: Object.values(wordCounts).reduce((a, b) => a + b, 0),
   chapter_word_counts: wordCounts, in_progress_chapter: 0, flow: "writing",
-  strand_history: strandHistory, hook_history: chapters.map((chapter) => "悬念"), pending_rewrites: [],
+  strand_history: ["感情", "支线", "主线", "主线", "主线", "主线", "主线", "主线"], hook_history: chapters.map((chapter) => "悬念"), pending_rewrites: [],
 }, null, 2));
+
+await writeFile(join(dir, "meta", "compass.json"), JSON.stringify({
+  ending_direction: "林晚揭开十七年前的真相，与母亲和解。", open_threads: ["母亲的旧海图与铅笔字", "锚身上的名字与生辰"],
+}));
 
 await writeFile(join(dir, "outline.json"), JSON.stringify(chapters.map((chapter, index) => ({
   chapter: index + 1, title: chapter.title, core_event: chapter.core, hook: chapter.hook, scenes: [],

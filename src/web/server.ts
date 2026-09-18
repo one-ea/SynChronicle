@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { readdir } from "node:fs/promises";
 import { loadAssets } from "../assets/load.js";
 import { defaultConfigPath, fillDefaults, loadConfig, needsSetup, saveConfig } from "../config/index.js";
 import { validateConfig } from "../config/validate.js";
@@ -48,6 +49,8 @@ async function route(request: IncomingMessage, response: ServerResponse, context
   if (request.method === "POST" && url.pathname === "/api/inject") return handleInject(request, response, context);
   if (request.method === "GET" && url.pathname === "/api/book") return handleBook(response, context);
   if (request.method === "GET" && url.pathname === "/api/diag") return handleDiag(response, context);
+  if (request.method === "GET" && url.pathname === "/api/reflection") return handleReflectionList(response, context);
+  if (request.method === "POST" && url.pathname === "/api/reflection/commit") return handleReflectionCommit(request, response, context);
   if (request.method === "GET" && /^\/api\/chapters\/\d+$/.test(url.pathname)) return handleChapter(response, context, Number(url.pathname.split("/").pop()));
   if (request.method === "GET" && url.pathname === "/api/stream") return handleStream(request, response, context);
   sendJson(response, 404, { error: "Not found" });
@@ -60,6 +63,45 @@ async function handleDiag(response: ServerResponse, context: RuntimeContext): Pr
   try {
     sendJson(response, 200, { configured: true, report: await diagnose(context.store) });
   } catch (error) { sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) }); }
+}
+
+interface ReflectionArtifactView { id: string; round: number; target: string; status: string; preview: string }
+
+async function handleReflectionList(response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.store) return sendJson(response, 200, { configured: false, sessions: [] });
+  try {
+    const root = new FileIO(context.store.dir);
+    const entries = await readdir(root.path("meta/reflection"), { withFileTypes: true }).catch(() => []);
+    const sessions = [];
+    for (const entry of entries.filter((item) => item.isDirectory()).map((item) => item.name).sort().reverse()) {
+      const manifest = await root.readJSON<{ sessionId: string; artifacts: Array<{ id: string; round: number; target: string; contentFile: string; status: string }> }>(`meta/reflection/${entry}/manifest.json`);
+      if (!manifest?.artifacts?.length) continue;
+      const artifacts: ReflectionArtifactView[] = [];
+      for (const artifact of manifest.artifacts) {
+        const content = await root.readText(artifact.contentFile);
+        artifacts.push({ id: artifact.id, round: artifact.round, target: artifact.target, status: artifact.status, preview: [...content].slice(0, 160).join("") });
+      }
+      const rounds = [...new Set(artifacts.map((artifact) => artifact.round))].sort((a, b) => b - a).map((round) => ({ round, artifacts: artifacts.filter((artifact) => artifact.round === round) }));
+      sessions.push({ sessionId: entry, rounds });
+    }
+    sendJson(response, 200, { configured: true, sessions });
+  } catch (error) { sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) }); }
+}
+
+async function handleReflectionCommit(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.store) return sendJson(response, 503, { error: "尚未配置模型" });
+  try {
+    const body = await readJson(request);
+    const sessionId = optionalText(body.sessionId);
+    const round = Number(body.round);
+    if (!sessionId || !/^[A-Za-z0-9_-]+$/.test(sessionId) || !Number.isSafeInteger(round) || round <= 0) return sendJson(response, 400, { error: "sessionId 与正整数 round 必填" });
+    const manifest = await new FileIO(context.store.dir).readJSON<{ artifacts: Array<{ id: string; round: number; status: string }> }>(`meta/reflection/${sessionId}/manifest.json`);
+    const ids = (manifest?.artifacts ?? []).filter((artifact) => artifact.round === round && artifact.status === "staged").map((artifact) => artifact.id);
+    if (!ids.length) return sendJson(response, 400, { error: "该轮没有可采纳的候选（会话或轮次不存在，或已全部提交）" });
+    const session = await context.store.staging.createSession(sessionId);
+    await session.commit(ids);
+    sendJson(response, 200, { committed: ids.length });
+  } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
 }
 
 async function handleBook(response: ServerResponse, context: RuntimeContext): Promise<void> {

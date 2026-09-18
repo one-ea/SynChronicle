@@ -307,6 +307,10 @@ export function renderWebApp(): string {
               <div style="display:flex;gap:8px;margin-bottom:6px"><button id="diag-run" class="btn btn-tonal" type="button" style="min-height:34px">运行诊断</button></div>
               <div class="rowlines" id="diag-findings"><div class="empty">点击「运行诊断」检查工件完整性与节奏红线。</div></div>
             </div>
+            <div class="card">
+              <div class="panel-head"><h3>反思候选</h3><span id="reflection-count"></span></div>
+              <div class="rowlines" id="reflection-list"><div class="empty">暂无反思暂存会话——创作运行后会在这里展示各轮候选。</div></div>
+            </div>
           </div>
         </section>
         <section class="page" data-page="settings" aria-label="配置" hidden>
@@ -370,6 +374,33 @@ export function renderWebApp(): string {
       $('resume').addEventListener('click', async () => { try { await post('/api/resume'); showNotice('正在恢复上一轮创作。', 'success'); await refresh(); } catch (error) { showNotice(error.message || '恢复失败'); } });
       $('new-run').addEventListener('click', () => { $('prompt').focus(); $('prompt').value = ''; showNotice('写下新的 brief，即可开始下一轮。', 'success'); });
       const severityLabels = { critical: '严重', warning: '警告', info: '提示' };
+      async function loadReflection() {
+        const box = $('reflection-list');
+        try {
+          const data = await (await fetch('/api/reflection')).json();
+          box.replaceChildren();
+          const sessions = data.sessions ?? [];
+          $('reflection-count').textContent = sessions.length ? sessions.length + ' 个会话' : '';
+          if (!data.configured || !sessions.length) { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = data.configured ? '暂无反思暂存会话——创作运行后会在这里展示各轮候选。' : '尚未配置模型。'; box.append(empty); return; }
+          for (const session of sessions.slice(0, 5)) {
+            const row = document.createElement('div'); row.className = 'rowline'; row.style.alignItems = 'flex-start'; row.style.flexDirection = 'column'; row.style.gap = '8px';
+            const head = document.createElement('div'); head.style.display = 'flex'; head.style.justifyContent = 'space-between'; head.style.width = '100%'; head.style.gap = '10px';
+            const name = document.createElement('span'); name.textContent = '会话 ' + session.sessionId.slice(0, 8);
+            const rounds = document.createElement('div'); rounds.style.display = 'flex'; rounds.style.gap = '8px'; rounds.style.flexWrap = 'wrap';
+            for (const round of session.rounds) {
+              const staged = round.artifacts.filter((artifact) => artifact.status === 'staged');
+              const tag = document.createElement('span'); tag.className = 'pill ' + (staged.length ? 'warn' : 'muted'); tag.textContent = '第 ' + round.round + ' 轮 · ' + round.artifacts[0].target;
+              tag.title = round.artifacts[0].preview;
+              if (staged.length) { const adopt = document.createElement('button'); adopt.type = 'button'; adopt.className = 'btn btn-text'; adopt.style.minHeight = '26px'; adopt.style.padding = '2px 10px'; adopt.style.fontSize = '11.5px'; adopt.textContent = '采纳此轮'; adopt.addEventListener('click', async () => { try { const result = await post('/api/reflection/commit', { sessionId: session.sessionId, round: round.round }); showNotice('已采纳第 ' + round.round + ' 轮（' + result.committed + ' 个工件）。', 'success'); await loadReflection(); } catch (error) { showNotice(error.message || '采纳失败'); } }); tag.append(adopt); }
+              rounds.append(tag);
+            }
+            head.append(name);
+            row.append(head, rounds);
+            box.append(row);
+          }
+        } catch { /* 保持现有内容 */ }
+      }
+      loadReflection();
       $('diag-run').addEventListener('click', async () => {
         const box = $('diag-findings');
         box.replaceChildren();

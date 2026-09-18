@@ -37,6 +37,13 @@ export const NotifyConfigSchema = z.object({
   events: z.array(z.string()).optional(),
 });
 
+export const EmbeddingConfigSchema = z.object({
+  base_url: z.string().optional(),
+  model: z.string().optional(),
+  api_key: z.string().optional(),
+  dimensions: z.number().int().positive().optional(),
+});
+
 export const ConfigSchema = z.object({
   output_dir: z.string().optional(),
   provider: z.string(),
@@ -48,6 +55,7 @@ export const ConfigSchema = z.object({
   context_window: z.number().int().optional(),
   budget: BudgetConfigSchema.optional(),
   notify: NotifyConfigSchema.optional(),
+  embedding: EmbeddingConfigSchema.optional(),
   reflection: ReflectionConfigSchema,
 });
 
@@ -56,6 +64,7 @@ export type ModelRef = z.infer<typeof ModelRefSchema>;
 export type RoleConfig = z.infer<typeof RoleConfigSchema>;
 export type BudgetConfig = z.infer<typeof BudgetConfigSchema>;
 export type NotifyConfig = z.infer<typeof NotifyConfigSchema>;
+export type EmbeddingConfig = z.infer<typeof EmbeddingConfigSchema>;
 export type ResolvedConfig = z.output<typeof ConfigSchema>;
 export type ConfigInput = z.input<typeof ConfigSchema>;
 export type Config = ConfigInput;

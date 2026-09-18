@@ -1,6 +1,7 @@
 import type { Store } from "../store/index.js";
 import { FileIO } from "../store/io.js";
 import { pacingFindings } from "./pacing.js";
+import { foreshadowFindings } from "./foreshadow.js";
 
 /**
  * 确定性事实诊断器：对任意产出目录跑一套只读工件规则 + 运行时规则，
@@ -207,6 +208,7 @@ export async function diagnose(store: Store): Promise<DiagReport> {
 
   findings.push(...(await detectRepeatedToolLoop(store)));
   findings.push(...pacingFindings(progress));
+  findings.push(...(await foreshadowFindings(store)));
 
   return {
     stats: {

@@ -3,8 +3,11 @@ import type { OutlineEntry, Progress, ReviewEntry, RunMeta, VolumeOutline } from
 import type { RegisteredTool, ToolRegistryOptions } from "./registry.js";
 import { buildSnapshot, type Candidate, type Snapshot } from "../rules/index.js";
 import { compute, type StyleStats } from "../stylestat/index.js";
+import { detectAitone } from "../stylestat/aitone.js";
 import { formatMessage, route } from "../runtime/flow/router.js";
 import { bm25Search, type Bm25Doc } from "../retrieval/bm25.js";
+import { cosineSimilarity, embedTexts } from "../retrieval/embedding.js";
+import { createHash } from "node:crypto";
 
 const positiveInt = z.number().int().positive();
 const strings = z.array(z.string());
@@ -89,11 +92,14 @@ export function createTools({ store, askUser, references, normalize, subagents }
       if (resolvedConsumer === "architect") return { progress_status: progressStatus(progress), planning_memory: { outline: await store.outline.loadOutline() }, foundation_memory: await foundation(store), reference_pack: pickReferences("architect", references), working_memory: working };
       const style_stats = await computeStyleStats(store);
       const selected_memory = resolvedConsumer === "writer" ? await retrieveRelatedChapters(store, progress, chapter!) : {};
+      const style_guard = resolvedConsumer === "writer" ? buildStyleGuard(style_stats) : undefined;
+      const quality_signals = resolvedConsumer === "editor" ? await buildQualitySignals(store, chapter!) : undefined;
       return {
         working_memory: { ...working, chapter_plan: await store.drafts.loadChapterPlan(chapter!) },
         episodic_memory: style_stats ? { style_stats } : {},
         reference_pack: pickReferences(resolvedConsumer, references),
-        ...(resolvedConsumer === "writer" ? { selected_memory } : {}),
+        ...(resolvedConsumer === "writer" ? { selected_memory: { ...selected_memory, ...(style_guard ? { style_guard } : {}) } } : {}),
+        ...(quality_signals ? { quality_signals } : {}),
       };
     }),
     save_foundation: registered("保存小说基础设定", saveFoundationSchema, async ({ type, content, scale, volume, arc }) => {
@@ -249,10 +255,32 @@ async function foundation(store: ToolRegistryOptions["store"]) { return { premis
  * 排除最近 3 章摘要窗口（摘要窗口已覆盖），章数不足或大纲缺失时保持空对象。
  */
 const SUMMARY_WINDOW = 3;
+const vectorCache = new Map<string, { hash: string; vector: number[] }>();
+
+/**
+ * 文风护栏（specs/2026-09-18-p1-quality-depth R4）：
+ * writer 拿到"本章规避清单"（stylestat 高频模式 + 固定 AI 味三类），
+ * editor 拿到本章草稿的 AI 命中明细供评审举证。均为只读扩展。
+ */
+const FIXED_AVOID = ["量词癖『一丝/一抹/一缕』", "明喻套句『如同/宛如/仿佛…一般』", "对比定义句式『不是…而是…』"];
+function buildStyleGuard(stats: StyleStats | null): { avoid: string[] } | undefined {
+  const hot = (stats?.patterns ?? []).filter((pattern) => pattern.perChapter >= 2).slice(0, 5).map((pattern) => pattern.name);
+  const avoid = [...new Set([...hot, ...FIXED_AVOID])];
+  return avoid.length ? { avoid } : undefined;
+}
+
+async function buildQualitySignals(store: ToolRegistryOptions["store"], chapter: number): Promise<{ aitone: ReturnType<typeof detectAitone> } | undefined> {
+  const draft = await store.drafts.loadDraft(chapter) || await store.drafts.loadChapterText(chapter);
+  if (!draft) return undefined;
+  const aitone = detectAitone(draft);
+  return aitone && aitone.score < 100 ? { aitone } : undefined;
+}
+
 async function retrieveRelatedChapters(store: ToolRegistryOptions["store"], progress: Progress | null, chapter: number): Promise<Record<string, unknown>> {
   const completed = progress?.completed_chapters ?? [];
   if (completed.length < 2) return {};
-  const entry = (await store.outline.loadOutline()).find((item) => item.chapter === chapter);
+  const outlineEntries = await store.outline.loadOutline();
+  const entry = outlineEntries.find((item) => item.chapter === chapter);
   if (!entry) return {};
   const window = new Set(completed.slice(-SUMMARY_WINDOW));
   const corpus: Array<{ chapter: number; text: string }> = [];
@@ -265,16 +293,46 @@ async function retrieveRelatedChapters(store: ToolRegistryOptions["store"], prog
     corpus.push({ chapter: done, text: `${summary.summary} ${summary.key_events.join(" ")}` });
   }
   if (corpus.length < 2) return {};
+  const query = `${entry.title} ${entry.core_event} ${entry.hook ?? ""}`;
+  const titles = new Map(outlineEntries.map((item) => [item.chapter, item.title]));
+  const decorate = (hits: Array<{ id: number; score: number }>) =>
+    hits.map((hit) => { const found = summaries.get(hit.id)!; return { chapter: hit.id, title: titles.get(hit.id) ?? `第 ${hit.id} 章`, summary: found.summary, key_events: found.keyEvents, score: hit.score }; });
+
+  const embedding = (progress as Progress & { embedding?: { base_url?: string; model?: string; api_key?: string; dimensions?: number } } | null)?.embedding;
+  if (embedding?.api_key) {
+    try {
+      const vectors: Array<number[] | undefined> = [];
+      const pending: Array<{ index: number; text: string }> = [];
+      corpus.forEach((item, index) => {
+        const hash = createHash("sha256").update(item.text).digest("hex").slice(0, 16);
+        const key = `${store.dir}:${item.chapter}`;
+        const cached = vectorCache.get(key);
+        if (cached && cached.hash === hash) vectors[index] = cached.vector;
+        else pending.push({ index, text: item.text });
+      });
+      if (pending.length) {
+        const embedded = await embedTexts(embedding, pending.map((item) => item.text));
+        pending.forEach((item, offset) => {
+          const vector = embedded[offset]!;
+          const chapter = corpus[item.index]!.chapter;
+          const hash = createHash("sha256").update(item.text).digest("hex").slice(0, 16);
+          vectorCache.set(`${store.dir}:${chapter}`, { hash, vector });
+          vectors[item.index] = vector;
+        });
+      }
+      const [queryVector] = await embedTexts(embedding, [query]);
+      const hits = corpus
+        .map((item, index) => ({ id: item.chapter, score: Math.round(cosineSimilarity(queryVector!, vectors[index]!) * 1000) / 1000 }))
+        .filter((hit) => hit.score > 0)
+        .sort((a, b) => b.score - a.score || a.id - b.id)
+        .slice(0, 3);
+      if (hits.length) return { related_chapters: decorate(hits), engine: "embedding" };
+    } catch { /* 嵌入失败回落 BM25 */ }
+  }
   const docs: Bm25Doc[] = corpus.map((item) => ({ id: item.chapter, text: item.text }));
-  const hits = bm25Search(docs, `${entry.title} ${entry.core_event} ${entry.hook ?? ""}`, 3);
+  const hits = bm25Search(docs, query, 3);
   if (!hits.length) return {};
-  const titles = new Map((await store.outline.loadOutline()).map((item) => [item.chapter, item.title]));
-  return {
-    related_chapters: hits.map((hit) => {
-      const found = summaries.get(hit.id)!;
-      return { chapter: hit.id, title: titles.get(hit.id) ?? `第 ${hit.id} 章`, summary: found.summary, key_events: found.keyEvents, score: hit.score };
-    }),
-  };
+  return { related_chapters: decorate(hits), engine: "bm25" };
 }
 function defaultRunMeta(): RunMeta { return { started_at: new Date().toISOString(), provider: "", style: "", model: "", planning_tier: "mid", steer_history: [], pending_steer: "", pause_point: null }; }
 async function saveRunMeta(store: ToolRegistryOptions["store"], patch: Partial<RunMeta>) { const current = await store.runMeta.load() as RunMeta | null; await store.runMeta.save({ ...defaultRunMeta(), ...current, ...patch }); }
