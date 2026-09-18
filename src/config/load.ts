@@ -110,6 +110,7 @@ export function mergeConfig(base: PartialConfig, overlay: PartialConfig): Resolv
   for (const key of ["provider", "model", "reasoning_effort", "style"] as const) {
     if (overlay[key]) result[key] = overlay[key];
   }
+  if (overlay.output_dir) result.output_dir = overlay.output_dir;
   if ((overlay.context_window ?? 0) > 0) result.context_window = overlay.context_window;
   result.providers = { ...(base.providers ?? {}) };
   for (const [name, provider] of Object.entries(overlay.providers ?? {})) {
