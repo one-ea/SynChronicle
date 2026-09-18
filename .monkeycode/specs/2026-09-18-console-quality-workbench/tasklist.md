@@ -15,6 +15,10 @@
   - 阅读器：左树右文、默认选中最近完成章、四态标记（颜色+图形双通道）、摘要卡、评审维度分数条
   - 空树引导态；记录/配置页本任务先挂"后续任务开放"空态
   - 测试：renderWebApp 结构断言（data-page、EventSource）
+- [x] 3b. 前台阅读页（2026-09-18 追加，MCP 调研 emdash 后全方位复刻）
+  - `GET /read` 渲染阅读前台（src/web/read.ts）：药丸导航 + hero + 章节目录 + 正文阅读 + 上/下一章翻页
+  - 控制台重构为 emdash admin 版式：顶栏（品牌 + 前台阅读 + 主题切换 + 状态）+ 分组侧栏 + 大标题页头 + 分段统计卡 + 内容摘要卡（状态药丸）+ 活动流
+  - 测试：renderReadApp 断言 + /read 服务冒烟（共 9 用例）
 - [ ] 4. 运行记录页与诊断面板
   - R: `GET /api/diag`（stats + findings，严重度分级）
   - 记录页：事件时间线（SSE + 回放）+ 诊断触发 + SevCritical 高亮
@@ -25,5 +29,5 @@
   - R: `GET /api/settings` 脱敏、`POST /api/settings` 核心字段合并写回（校验失败不落盘）
   - roles 五角色（coordinator/architect/writer/editor/reviewer）模型编辑
 - [ ] 7. 暗色主题与全量回归
-  - M3 暗色令牌组 + 三态切换（auto/light/dark，localStorage 持久化）
+  - M3 暗色令牌组 + 三态切换（auto/light/dark，localStorage 持久化）→ 已交付（2026-09-18 视觉层复刻 emdash 设计令牌：heat 橙主色、浮动药丸导航、Light/Dark/System 三态切换 + 防 FOUC 脚本 + prefers-color-scheme 跟随）
   - `pnpm typecheck && pnpm test && pnpm build`、`npm pack --dry-run`、文档同步（README 控制台章节）
