@@ -1,0 +1,29 @@
+# 实施任务列表：控制台质量工作台（阶段一）
+
+- [x] 1. 图书与章节只读 API
+  - `RuntimeContext` 增加 `store`（配置加载后按 `output_dir` 直建，Host 可缺席）
+  - R: `GET /api/book`：三层树 + 进度 + 字数 + 四态章节状态；分层缺失时扁平大纲兜底
+  - R: `GET /api/chapters/:n`：终稿/草稿降级链 + 摘要 + 大纲条目 + 评审维度分数
+  - 测试：播种临时作品目录断言树/详情/400/未配置 200+null
+- [x] 2. SSE 广播通道与概览实时化
+  - server 内 Broadcaster：单消费 host.events()/stream(true)，扇出 runtime/delta，5s 心跳携带 snapshot
+  - R: `GET /api/stream`（text/event-stream）
+  - 前端 EventSource 消费：事件喂 feed、delta 喂流式正文面板、run_end 标记完成；错误后退化为轮询
+  - 测试：SSE 首块为 snapshot；既有路由契约回归
+- [x] 3. 章节阅读器视图
+  - 导航 `data-view` 真实化（overview/reader/records/settings 四页切换 + aria-current 跟随）
+  - 阅读器：左树右文、默认选中最近完成章、四态标记（颜色+图形双通道）、摘要卡、评审维度分数条
+  - 空树引导态；记录/配置页本任务先挂"后续任务开放"空态
+  - 测试：renderWebApp 结构断言（data-page、EventSource）
+- [ ] 4. 运行记录页与诊断面板
+  - R: `GET /api/diag`（stats + findings，严重度分级）
+  - 记录页：事件时间线（SSE + 回放）+ 诊断触发 + SevCritical 高亮
+- [ ] 5. 导入与导出
+  - R: `POST /api/export`（txt/epub + 章节区间）、`POST /api/import`
+  - 概览页操作入口 + snackbar 反馈
+- [ ] 6. 配置页
+  - R: `GET /api/settings` 脱敏、`POST /api/settings` 核心字段合并写回（校验失败不落盘）
+  - roles 五角色（coordinator/architect/writer/editor/reviewer）模型编辑
+- [ ] 7. 暗色主题与全量回归
+  - M3 暗色令牌组 + 三态切换（auto/light/dark，localStorage 持久化）
+  - `pnpm typecheck && pnpm test && pnpm build`、`npm pack --dry-run`、文档同步（README 控制台章节）
