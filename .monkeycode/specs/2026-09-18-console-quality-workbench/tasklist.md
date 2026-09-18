@@ -19,9 +19,10 @@
   - `GET /read` 渲染阅读前台（src/web/read.ts）：药丸导航 + hero + 章节目录 + 正文阅读 + 上/下一章翻页
   - 控制台重构为 emdash admin 版式：顶栏（品牌 + 前台阅读 + 主题切换 + 状态）+ 分组侧栏 + 大标题页头 + 分段统计卡 + 内容摘要卡（状态药丸）+ 活动流
   - 测试：renderReadApp 断言 + /read 服务冒烟（共 9 用例）
-- [ ] 4. 运行记录页与诊断面板
+- [x] 4. 运行记录页与诊断面板（2026-09-18 交付）
   - R: `GET /api/diag`（stats + findings，严重度分级）
-  - 记录页：事件时间线（SSE + 回放）+ 诊断触发 + SevCritical 高亮
+  - 记录页：事件时间线（SSE + 回放）+ 诊断触发 + 严重度药丸（critical/warning/info 分色）
+  - 测试：web.test.ts diag 用例（含 PacingStall 断言）
 - [ ] 5. 导入与导出
   - R: `POST /api/export`（txt/epub + 章节区间）、`POST /api/import`
   - 概览页操作入口 + snackbar 反馈
