@@ -4,198 +4,369 @@ export function renderWebApp(): string {
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>SynChronicle · Story Studio</title>
+    <title>SynChronicle 控制台</title>
+    <script>(function(){try{var t=localStorage.getItem('theme');var d=document.documentElement;if(t==='dark'||t==='light'){d.classList.add(t);}else if(window.matchMedia('(prefers-color-scheme: dark)').matches){d.classList.add('dark');}}catch(e){}})();</script>
     <style>
-      :root { color-scheme: dark; --desk: #0b1016; --desk-soft: #131b25; --paper: #f3eee4; --ink: #19212a; --ink-soft: #51606c; --white: #f5f0e6; --muted: #9da8b2; --faint: #6d7884; --line: rgba(245,240,230,.15); --paper-line: rgba(25,33,42,.16); --lime: #d9ff67; --coral: #df8467; --blue: #a9bbff; }
+      :root {
+        color-scheme: light;
+        --heat-100: #fa5d19; --heat-90: rgba(250, 93, 25, .9); --heat-40: rgba(250, 93, 25, .4);
+        --heat-20: rgba(250, 93, 25, .2); --heat-12: rgba(250, 93, 25, .12); --heat-8: rgba(250, 93, 25, .06);
+        --ink: #262626; --paper: #ffffff; --bg: #f9f9f9; --side-bg: #f7f7f8; --raised: #ffffff;
+        --muted: rgba(38, 38, 38, .58); --faint: rgba(38, 38, 38, .4);
+        --line: #e8e8e8; --line-faint: #ededed;
+        --alpha-4: rgba(38, 38, 38, .04); --alpha-6: rgba(38, 38, 38, .06); --alpha-7: rgba(38, 38, 38, .08);
+        --success: #1f9d52; --success-dot: #42c366; --warning: #ecb730; --error: #dc2626;
+        --btn-radius: 10px; --radius-sm: 8px; --radius: 10px; --radius-lg: 16px;
+        --shadow-sm: 0 1px 2px rgba(0, 0, 0, .04); --shadow-lg: 0 8px 16px -12px rgba(0, 0, 0, .19); --shadow-xl: 0 18px 32px -24px rgba(0, 0, 0, .28);
+        --dur-fast: .15s; --dur: .2s; --ease: ease;
+        --font: "Inter", "Google Sans Text", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      :root.dark {
+        color-scheme: dark;
+        --ink: #f5f5f5; --paper: #171717; --bg: #0a0a0a; --side-bg: #101010; --raised: #1f1f1f;
+        --muted: rgba(255, 255, 255, .58); --faint: rgba(255, 255, 255, .4);
+        --line: #333; --line-faint: #2a2a2a;
+        --alpha-4: rgba(255, 255, 255, .05); --alpha-6: rgba(255, 255, 255, .08); --alpha-7: rgba(255, 255, 255, .1);
+        --heat-8: rgba(250, 93, 25, .1);
+      }
       * { box-sizing: border-box; }
-      ::selection { color: var(--ink); background: var(--lime); }
-      ::-webkit-scrollbar { width: 8px; height: 8px; }
-      ::-webkit-scrollbar-thumb { background: #3d4a58; border-radius: 999px; }
-      body { margin: 0; min-width: 320px; min-height: 100vh; color: var(--white); background: var(--desk); font: 15px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-      button, textarea, input, select { font: inherit; }
+      ::selection { background: var(--heat-12); color: var(--ink); }
+      body { margin: 0; min-width: 320px; color: var(--ink); background: var(--bg); font: 400 14px/1.6 var(--font); -webkit-font-smoothing: antialiased; }
+      button, input, textarea { font: inherit; color: inherit; }
       button { cursor: pointer; }
-      button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
-      .app-shell { width: min(1440px, calc(100% - 56px)); margin: 0 auto; padding: 28px 0 42px; }
-      .masthead { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding-bottom: 22px; border-bottom: 1px solid var(--line); }
-      .brand { display: flex; align-items: center; gap: 13px; }
-      .brand-mark { display: grid; place-items: center; width: 42px; height: 42px; border: 1px solid var(--lime); color: var(--lime); transform: rotate(-7deg); font: 700 20px/1 Georgia, serif; }
-      .brand-name { display: block; color: var(--white); font: 600 19px/1.1 Georgia, serif; letter-spacing: -.025em; }
-      .brand-meta { display: block; margin-top: 5px; color: var(--muted); font-size: 10px; letter-spacing: .13em; text-transform: uppercase; }
-      .runtime-chip { display: inline-flex; align-items: center; gap: 9px; color: var(--muted); font-size: 12px; white-space: nowrap; }
-      .runtime-chip i { width: 8px; height: 8px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 15px rgba(217,255,103,.8); }
-      .runtime-chip[data-state="setup"] i { background: #d4b46d; box-shadow: 0 0 12px rgba(212,180,109,.7); }
-      .runtime-chip[data-state="paused"] i { background: #e2ad70; box-shadow: 0 0 12px rgba(226,173,112,.7); }
-      .runtime-chip[data-state="error"] i { background: var(--coral); box-shadow: 0 0 12px rgba(223,132,103,.7); }
-      .layout { display: grid; grid-template-columns: 190px minmax(0, 1fr) 270px; gap: 24px; padding-top: 24px; }
-      .rail { display: flex; min-height: 620px; flex-direction: column; }
-      .rail-label { margin: 0 0 14px; color: var(--faint); font-size: 10px; letter-spacing: .16em; text-transform: uppercase; }
-      .rail-title { margin: 0 0 28px; color: var(--white); font: 400 22px/1.1 Georgia, serif; letter-spacing: -.03em; }
-      .steps { display: grid; gap: 7px; }
-      .step { display: grid; grid-template-columns: 28px 1fr; gap: 10px; width: 100%; padding: 10px 0; border: 0; border-bottom: 1px solid transparent; color: var(--muted); text-align: left; background: transparent; }
-      .step-index { color: var(--faint); font-size: 11px; letter-spacing: .04em; }
-      .step strong { display: block; color: inherit; font-size: 13px; font-weight: 600; }
-      .step small { display: block; margin-top: 3px; color: var(--faint); font-size: 10px; }
-      .step.is-active { color: var(--white); border-bottom-color: var(--lime); }
-      .step.is-active .step-index { color: var(--lime); }
-      .rail-note { margin-top: auto; padding-top: 18px; border-top: 1px solid var(--line); }
-      .rail-note p { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--white); font-size: 12px; }
-      .rail-note small { display: block; margin-top: 7px; color: var(--faint); font-size: 10px; line-height: 1.5; }
-      .rail-note i { width: 6px; height: 6px; border-radius: 50%; background: var(--lime); }
-      .workspace { min-width: 0; }
-      .workspace-surface { min-height: 620px; padding: clamp(28px, 5vw, 58px); color: var(--ink); background: var(--paper); position: relative; overflow: hidden; }
-      .workspace-surface::after { content: ""; position: absolute; right: -120px; bottom: -150px; width: 330px; height: 330px; border: 1px solid rgba(25,33,42,.15); border-radius: 50%; box-shadow: 0 0 0 30px rgba(25,33,42,.035), 0 0 0 62px rgba(25,33,42,.025); pointer-events: none; }
-      .workspace-meta { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 28px; color: var(--ink-soft); font-size: 10px; letter-spacing: .13em; text-transform: uppercase; }
-      .workspace-meta strong { color: var(--coral); font-weight: 700; }
-      h1 { max-width: 650px; margin: 0; color: var(--ink); font: 400 clamp(46px, 5.4vw, 78px)/.97 Georgia, "Times New Roman", serif; letter-spacing: -.06em; }
-      h1 em { color: #465769; font-style: normal; }
-      .lede { max-width: 560px; margin: 22px 0 0; color: var(--ink-soft); font-size: 16px; line-height: 1.65; }
-      .setup-card { position: relative; z-index: 1; max-width: 660px; margin-top: 48px; padding-top: 22px; border-top: 1px solid var(--paper-line); }
-      .setup-card[hidden] { display: none; }
-      .setup-card h2 { margin: 0; color: var(--ink); font: 400 26px/1.1 Georgia, serif; letter-spacing: -.035em; }
-      .setup-card p { max-width: 490px; margin: 9px 0 18px; color: var(--ink-soft); font-size: 13px; }
-      .config-form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-      .field { display: grid; gap: 5px; }
-      .field-wide { grid-column: 1 / -1; }
-      .field label { color: var(--ink-soft); font-size: 11px; }
-      .field label span { color: #7f8b94; }
-      .config-form input, .config-form select { width: 100%; min-height: 42px; padding: 10px 11px; border: 1px solid var(--paper-line); border-radius: 0; outline: none; color: var(--ink); background: rgba(255,255,255,.36); }
-      .config-form input::placeholder { color: #82909b; }
-      .config-form input:focus, .config-form select:focus { border-color: var(--ink); box-shadow: 0 0 0 3px rgba(25,33,42,.1); }
-      .config-form small { grid-column: 1 / -1; color: #7d8790; font-size: 11px; }
-      .config-form button { grid-column: 1 / -1; justify-self: start; min-height: 43px; padding: 0 22px; border: 1px solid var(--ink); border-radius: 0; color: var(--paper); background: var(--ink); font-weight: 700; }
-      .config-form button:hover { color: var(--ink); background: var(--lime); }
-      .composer-card { position: relative; z-index: 1; max-width: 760px; margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--paper-line); }
-      .composer-card[data-ready="true"] { margin-top: 62px; }
-      .composer-card header { display: flex; align-items: baseline; justify-content: space-between; gap: 15px; margin-bottom: 13px; }
-      .composer-label { color: var(--ink); font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-      .composer-state { color: var(--ink-soft); font-size: 11px; }
-      .composer-card label { display: block; margin-bottom: 8px; color: var(--ink-soft); font-size: 12px; }
-      textarea { width: 100%; min-height: 102px; resize: vertical; padding: 14px 15px; border: 1px solid var(--paper-line); border-radius: 0; outline: none; color: var(--ink); background: rgba(255,255,255,.48); }
-      textarea::placeholder { color: #8a969d; }
-      textarea:focus { border-color: var(--ink); box-shadow: 0 0 0 3px rgba(25,33,42,.1); }
-      .composer-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 11px; }
-      .composer-actions small { color: var(--ink-soft); font-size: 11px; }
-      .steering { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--paper-line); }
-      .steering[hidden], .runtime-actions[hidden] { display: none; }
-      .steering label { display: block; margin-bottom: 8px; color: var(--ink-soft); font-size: 11px; }
-      .steering-row { display: grid; grid-template-columns: 1fr auto; gap: 9px; }
-      .steering input { min-width: 0; min-height: 42px; padding: 10px 11px; border: 1px solid var(--paper-line); border-radius: 0; outline: none; color: var(--ink); background: rgba(255,255,255,.48); }
-      .steering input:focus { border-color: var(--ink); box-shadow: 0 0 0 3px rgba(25,33,42,.1); }
-      .steering button, .runtime-actions button { min-height: 42px; padding: 0 14px; border: 1px solid var(--ink); border-radius: 0; color: var(--paper); background: var(--ink); font-size: 12px; font-weight: 700; }
-      .steering button:hover, .runtime-actions button:hover { color: var(--ink); background: var(--lime); }
-      button.primary { min-height: 44px; padding: 0 22px; border: 1px solid var(--ink); border-radius: 0; color: var(--paper); background: var(--ink); font-weight: 700; transition: transform .18s ease, color .18s ease, background .18s ease, opacity .18s ease; }
-      button.primary:hover:not(:disabled) { color: var(--ink); background: var(--lime); }
-      button.primary:active:not(:disabled) { transform: translateY(1px); }
-      button:disabled { opacity: .58; cursor: not-allowed; }
-      .notice { display: none; position: relative; z-index: 1; max-width: 760px; margin-top: 13px; padding: 10px 12px; border-left: 2px solid var(--coral); color: #8d493a; background: rgba(223,132,103,.12); font-size: 12px; }
-      .notice.show { display: block; }
-      .notice[data-tone="success"] { border-left-color: var(--lime); color: #496126; background: rgba(217,255,103,.2); }
-      .workspace-foot { position: relative; z-index: 1; display: flex; gap: 17px; margin-top: 32px; color: #89949b; font-size: 10px; }
-      .workspace-foot span + span { padding-left: 17px; border-left: 1px solid var(--paper-line); }
-      .activity { min-width: 0; }
-      .activity-panel { min-height: 620px; padding: 20px; border: 1px solid var(--line); background: var(--desk-soft); }
-      .activity-header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
-      .activity-header h2 { margin: 0; color: var(--white); font: 400 21px/1.1 Georgia, serif; }
-      .activity-header span { color: var(--faint); font-size: 10px; letter-spacing: .1em; }
-      .metrics { display: grid; gap: 0; margin-top: 4px; }
-      .metric { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 15px 0; border-bottom: 1px solid var(--line); }
-      .metric span { color: var(--muted); font-size: 11px; }
-      .metric b { color: var(--white); font: 400 23px/1 Georgia, serif; }
-      .activity-log { margin-top: 34px; }
-      .runtime-actions { display: flex; gap: 8px; margin-top: 20px; }
-      .runtime-actions button { flex: 1; }
-      .activity-log h3 { margin: 0 0 14px; color: var(--faint); font-size: 10px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; }
-      .feed { display: grid; gap: 14px; max-height: 270px; overflow: auto; }
-      .event { position: relative; padding-left: 15px; color: #d3d8dc; font-size: 12px; }
-      .event::before { content: ""; position: absolute; top: .56em; left: 0; width: 5px; height: 5px; border: 1px solid var(--blue); border-radius: 50%; }
-      .event time { display: block; margin-bottom: 3px; color: var(--faint); font-size: 10px; letter-spacing: .04em; }
-      .activity-foot { margin-top: auto; padding-top: 26px; color: var(--faint); font-size: 10px; }
-      @media (max-width: 1100px) { .app-shell { width: min(100% - 40px, 900px); } .layout { grid-template-columns: 1fr 260px; } .rail { grid-column: 1 / -1; min-height: auto; flex-direction: row; align-items: center; gap: 22px; } .rail-title { margin: 0; } .rail-label, .rail-note { display: none; } .steps { display: flex; flex: 1; justify-content: flex-end; gap: 19px; } .step { width: auto; grid-template-columns: 22px auto; padding: 7px 0; } .step small { display: none; } }
-      @media (max-width: 760px) { .app-shell { width: min(100% - 28px, 600px); padding-top: 18px; } .masthead { align-items: flex-start; } .runtime-chip { padding-top: 7px; } .layout { grid-template-columns: 1fr; gap: 16px; padding-top: 16px; } .rail { display: block; } .rail-title { display: none; } .steps { justify-content: stretch; gap: 0; } .step { flex: 1; grid-template-columns: 18px 1fr; gap: 7px; padding: 8px 7px; } .step strong { font-size: 11px; } .workspace-surface { min-height: auto; padding: 28px 22px 24px; } h1 { font-size: clamp(43px, 13vw, 64px); } .lede { font-size: 14px; } .setup-card, .composer-card, .composer-card[data-ready="true"] { margin-top: 36px; } .config-form { grid-template-columns: 1fr; } .field-wide, .config-form small, .config-form button { grid-column: auto; } .composer-actions { align-items: stretch; flex-direction: column; } .composer-actions button { width: 100%; } .steering-row { grid-template-columns: 1fr; } .steering button { width: 100%; } .workspace-foot { flex-wrap: wrap; gap: 10px; } .activity-panel { min-height: auto; } .activity-log { margin-top: 26px; } }
-      @media (prefers-reduced-motion: no-preference) { .workspace-surface, .activity-panel { animation: settle .48s cubic-bezier(.22,1,.36,1) both; } .activity-panel { animation-delay: .08s; } @keyframes settle { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } } }
-      @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; } }
+      h1, h2, h3, h4 { letter-spacing: -.02em; font-weight: 700; line-height: 1.2; margin: 0; }
+      button:focus-visible, input:focus-visible, textarea:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--heat-100); }
+      .topbar { position: sticky; top: 0; z-index: 100; display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 56px; padding: 0 22px; background: var(--paper); border-bottom: 1px solid var(--line); }
+      .brand { display: inline-flex; align-items: baseline; gap: 1px; color: var(--ink); font-weight: 800; font-size: 16px; letter-spacing: -.03em; white-space: nowrap; }
+      .brand em { color: var(--heat-100); font-style: normal; }
+      .brand small { margin-left: 9px; color: var(--muted); font-size: 11px; font-weight: 500; letter-spacing: 0; }
+      .topbar-right { display: flex; align-items: center; gap: 12px; }
+      .view-site { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 4px 11px; border: 1px solid var(--line); border-radius: var(--btn-radius); background: var(--paper); color: var(--muted); font-size: 12px; font-weight: 500; transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease); }
+      .view-site:hover { color: var(--ink); background: var(--alpha-4); }
+      .view-site svg { width: 13px; height: 13px; }
+      .chip { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 12px; border-radius: var(--btn-radius); background: var(--alpha-4); color: var(--ink); font-size: 12px; font-weight: 500; white-space: nowrap; }
+      .chip i { width: 7px; height: 7px; border-radius: 50%; background: var(--success-dot); }
+      .chip[data-state="running"] i { background: var(--heat-100); animation: blink 1.6s infinite; }
+      .chip[data-state="error"] i, .chip[data-state="closed"] i { background: var(--error); }
+      .chip.small { height: 24px; padding: 0 9px; font-size: 11px; }
+      .chip.ok { background: rgba(66, 195, 102, .14); color: var(--success); }
+      .chip.warn { background: rgba(220, 38, 38, .1); color: var(--error); }
+      .theme-switcher { display: flex; gap: 2px; padding: 3px; border-radius: 14px; background: var(--alpha-4); }
+      .theme-btn { min-height: 26px; padding: 3px 9px; border: 0; border-radius: var(--btn-radius); background: transparent; color: var(--muted); font-size: 11.5px; font-weight: 500; line-height: 1.3; transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease); }
+      .theme-btn:hover, .theme-btn.active { color: var(--ink); background: var(--paper); box-shadow: var(--shadow-sm); }
+      .progress { position: relative; height: 3px; overflow: hidden; background: var(--heat-12); }
+      .progress[hidden] { display: none; }
+      .progress span { position: absolute; inset: 0; background: var(--heat-100); animation: indeterminate 1.9s ease infinite; }
+      @keyframes indeterminate { 0% { transform: translateX(-45%) scaleX(.3); } 55% { transform: translateX(50%) scaleX(.5); } 100% { transform: translateX(110%) scaleX(.3); } }
+      @keyframes blink { 50% { opacity: .35; } }
+      .admin { display: grid; grid-template-columns: 250px minmax(0, 1fr); min-height: calc(100vh - 56px); }
+      .side { display: flex; flex-direction: column; gap: 2px; padding: 18px 14px; background: var(--side-bg); border-right: 1px solid var(--line); }
+      .side-label { margin: 14px 12px 4px; padding-bottom: 7px; border-bottom: 1px solid var(--line-faint); color: var(--faint); font-size: 10.5px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
+      .side-label:first-child { margin-top: 0; }
+      .side-nav { display: grid; gap: 2px; }
+      .side-nav button { display: flex; align-items: center; gap: 11px; width: 100%; min-height: 40px; padding: 0 12px; border: 0; border-radius: var(--btn-radius); background: transparent; color: var(--ink); font-size: 13.5px; font-weight: 500; text-align: left; transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease); }
+      .side-nav button:hover { background: var(--alpha-4); }
+      .side-nav button[aria-current="page"] { background: var(--alpha-6); font-weight: 600; }
+      .side-nav svg { width: 16px; height: 16px; flex: none; color: var(--muted); }
+      .side-nav button[aria-current="page"] svg { color: var(--heat-100); }
+      .side-foot { margin-top: auto; padding-top: 14px; border-top: 1px solid var(--line-faint); color: var(--faint); font-size: 11px; line-height: 1.6; }
+      .main { min-width: 0; max-width: 1160px; width: 100%; margin: 0 auto; padding: 28px 30px 64px; }
+      .page[hidden] { display: none; }
+      .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+      .page-head h1 { font-size: 26px; }
+      .page-head .meta { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+      .head-actions { display: flex; gap: 8px; }
+      .stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 20px; }
+      .stat-split { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--paper); }
+      .stat-top { display: flex; align-items: center; gap: 8px; padding: 8px 14px; background: var(--bg); border-bottom: 1px solid var(--line-faint); color: var(--muted); font-size: 11.5px; font-weight: 600; }
+      .stat-split b { display: block; padding: 12px 14px 14px; font-size: 24px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .stat-split b[data-state="running"] { color: var(--heat-100); }
+      .stat-split b[data-state="error"] { color: var(--error); }
+      .grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(300px, .9fr); gap: 20px; align-items: start; }
+      .card { border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--paper); padding: clamp(20px, 3vw, 28px); box-shadow: var(--shadow-sm); }
+      .stack { display: grid; gap: 20px; }
+      .announce { display: inline-flex; align-items: center; gap: 10px; margin-bottom: 16px; padding: 5px 13px 5px 6px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); font-size: 12px; box-shadow: var(--shadow-sm); }
+      .announce b { padding: 2px 9px; border-radius: 999px; background: var(--heat-12); color: var(--heat-100); font-size: 11px; font-weight: 600; letter-spacing: .02em; }
+      .announce span { color: var(--muted); }
+      .hero h2 { max-width: 560px; font-size: clamp(26px, 3.4vw, 34px); line-height: 1.15; }
+      .hero .intro { max-width: 540px; margin: 12px 0 24px; color: var(--muted); font-size: 14.5px; }
+      .tf { position: relative; }
+      .tf input, .tf textarea { width: 100%; min-height: 44px; padding: 0 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper); color: var(--ink); transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease); }
+      .tf textarea { min-height: 124px; padding: 15px 14px; resize: vertical; }
+      .tf input:hover, .tf textarea:hover { border-color: var(--faint); }
+      .tf input:focus, .tf textarea:focus { border-color: var(--heat-100); box-shadow: 0 0 0 3px var(--heat-20); outline: none; }
+      .tf label { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); padding: 0 4px; background: var(--paper); color: var(--muted); font-size: 13.5px; pointer-events: none; transition: all var(--dur-fast) var(--ease); }
+      .tf textarea + label { top: 16px; transform: none; }
+      .tf input:focus + label, .tf input:not(:placeholder-shown) + label, .tf textarea:focus + label, .tf textarea:not(:placeholder-shown) + label { top: 0; transform: translateY(-50%); font-size: 11.5px; font-weight: 600; }
+      .tf input:focus + label, .tf textarea:focus + label { color: var(--heat-100); }
+      .helper { display: block; margin: 6px 4px 0; color: var(--faint); font-size: 11.5px; }
+      .form-grid { display: grid; gap: 18px; }
+      .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+      .seg { display: flex; gap: 2px; padding: 3px; border-radius: 14px; background: var(--alpha-4); }
+      .seg label { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 34px; padding: 0 8px; border-radius: var(--btn-radius); color: var(--muted); font-size: 12.5px; font-weight: 500; text-align: center; cursor: pointer; transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease); }
+      .seg input { position: absolute; opacity: 0; pointer-events: none; }
+      .seg label:has(input:checked) { color: var(--ink); background: var(--paper); box-shadow: var(--shadow-sm); font-weight: 600; }
+      .seg label:has(input:focus-visible) { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--heat-100); }
+      .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 38px; padding: 8px 16px; border: 0; border-radius: var(--btn-radius); font-size: 13.5px; font-weight: 500; line-height: 1.35; transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease); }
+      .btn:active { transform: scale(.995); }
+      .btn-filled { background: var(--heat-100); color: #fffbf5; }
+      .btn-filled:hover { background: var(--heat-90); }
+      .btn-tonal { background: var(--alpha-4); color: var(--ink); }
+      .btn-tonal:hover { background: var(--alpha-6); }
+      .btn-tonal:active { background: var(--alpha-7); }
+      .btn-text { background: transparent; color: var(--heat-100); padding: 8px 12px; font-weight: 600; }
+      .btn-text:hover { background: var(--heat-8); }
+      .btn:disabled { pointer-events: none; background: var(--alpha-4); color: var(--faint); }
+      .actions { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+      .actions small { color: var(--muted); font-size: 11.5px; }
+      .section-title { margin: 0 0 16px; font-size: 17px; }
+      .steering { display: none; }
+      .steering.show { display: block; }
+      .steer-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+      .rowlines { display: grid; }
+      .rowline { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 2px; border-bottom: 1px solid var(--line-faint); font-size: 13.5px; }
+      .rowline:last-child { border-bottom: 0; }
+      .rowline > span { color: var(--ink); font-weight: 500; }
+      .rowline .pills { display: flex; gap: 6px; align-items: center; }
+      .pill { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px; border-radius: 999px; font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
+      .pill.ok { background: rgba(66, 195, 102, .14); color: var(--success); }
+      .pill.muted { background: var(--alpha-6); color: var(--muted); }
+      .pill.warn { background: var(--heat-12); color: var(--heat-100); }
+      .pill.bad { background: rgba(220, 38, 38, .1); color: var(--error); }
+      .pill svg { width: 11px; height: 11px; }
+      .feed { display: grid; max-height: 300px; overflow: auto; }
+      .feed.tall { max-height: 62vh; }
+      .event { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: baseline; padding: 10px 0; border-bottom: 1px solid var(--line-faint); font-size: 12.5px; }
+      .event:last-child { border-bottom: 0; }
+      .event::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--heat-100); opacity: .75; align-self: center; }
+      .event span { color: var(--ink); line-height: 1.5; overflow: hidden; text-overflow: ellipsis; }
+      .event time { color: var(--faint); font-size: 10.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+      .empty { color: var(--muted); font-size: 12.5px; }
+      .panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+      .panel-head h3 { margin: 0; font-size: 15px; }
+      .panel-head span { color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+      .live-text { max-height: 220px; overflow: auto; font-size: 13px; line-height: 1.8; color: var(--muted); white-space: pre-wrap; word-break: break-word; }
+      .reader { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 20px; align-items: start; }
+      .tree-card { padding: 16px; }
+      .tree { display: grid; gap: 1px; max-height: 70vh; overflow: auto; align-content: start; }
+      .vol { margin: 12px 4px 4px; color: var(--faint); font-size: 10.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+      .arc { margin: 8px 4px 3px; color: var(--muted); font-size: 11.5px; }
+      .trow { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 34px; padding: 4px 10px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--ink); font-size: 13px; text-align: left; transition: background var(--dur-fast) var(--ease); }
+      .trow:hover { background: var(--alpha-4); }
+      .trow.active { background: var(--alpha-6); font-weight: 600; }
+      .trow .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+      .s-completed { background: var(--heat-100); }
+      .s-in-progress { background: var(--heat-100); animation: blink 1.6s infinite; }
+      .s-pending { background: var(--line); }
+      .s-rewrite { background: var(--error); }
+      .trow small { margin-left: auto; color: var(--faint); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+      .chapter-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+      .chapter-head h2 { font-size: 21px; }
+      .meta { color: var(--muted); font-size: 12px; }
+      .chapter-text { max-width: 68ch; margin-top: 18px; font-size: 15px; line-height: 1.9; }
+      .chapter-text p { margin: 0 0 1em; }
+      .summary-block { margin-top: 14px; padding: 14px 16px; border: 1px solid var(--line-faint); border-radius: var(--radius); background: var(--bg); font-size: 13px; }
+      .summary-block h4 { margin: 0 0 6px; font-size: 13px; }
+      .summary-block ul { margin: 6px 0 0; padding-left: 18px; }
+      .review-block { margin-top: 12px; padding: 14px 16px; border: 1px solid var(--line-faint); border-radius: var(--radius); background: var(--bg); }
+      .review-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+      .dim { display: grid; grid-template-columns: 110px 1fr 44px; gap: 10px; align-items: center; margin-top: 10px; font-size: 12.5px; }
+      .dim .bar { position: relative; height: 7px; border-radius: 999px; background: var(--alpha-6); overflow: hidden; }
+      .dim .bar i { position: absolute; top: 0; bottom: 0; left: 0; width: var(--w, 0%); border-radius: inherit; background: var(--heat-100); }
+      .dim.low .bar i { background: var(--error); }
+      #notice { position: fixed; left: 16px; bottom: 16px; z-index: 60; display: flex; align-items: center; gap: 12px; max-width: min(420px, calc(100vw - 32px)); min-height: 46px; padding: 10px 16px; border-radius: 12px; background: #262626; color: #fff; font-size: 13px; box-shadow: var(--shadow-xl); opacity: 0; transform: translateY(12px); pointer-events: none; transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease); }
+      #notice.show { opacity: 1; transform: none; }
+      #notice::before { content: ""; flex: none; width: 9px; height: 9px; border-radius: 50%; background: #ff8b5e; }
+      #notice[data-tone="success"]::before { background: #42c366; }
+      :root.dark #notice { background: #1f1f1f; border: 1px solid #333; }
+      @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } .reader { grid-template-columns: 1fr; } .tree { max-height: 34vh; } .stat-row { grid-template-columns: repeat(2, 1fr); } }
+      @media (max-width: 860px) { .admin { grid-template-columns: 1fr; } .side { flex-direction: row; align-items: center; gap: 6px; padding: 10px 14px; border-right: 0; border-bottom: 1px solid var(--line); overflow-x: auto; } .side-label, .side-foot { display: none; } .side-nav { display: flex; gap: 4px; } .side-nav button { width: auto; min-height: 36px; white-space: nowrap; } .main { padding: 20px 16px 52px; } }
+      @media (max-width: 560px) { .topbar { padding: 0 14px; } .brand small { display: none; } .theme-switcher { display: none; } .form-row { grid-template-columns: 1fr; } .actions { align-items: stretch; flex-direction: column; } .actions .btn { width: 100%; } .steer-row { grid-template-columns: 1fr; } .steer-row .btn { width: 100%; } .seg label { font-size: 11px; padding: 0 4px; } .stat-row { grid-template-columns: 1fr 1fr; } }
+      @media (prefers-reduced-motion: no-preference) { .card { animation: enter .3s ease both; } @keyframes enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } } }
+      @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }
     </style>
   </head>
   <body>
-    <main class="app-shell">
-      <header class="masthead"><div class="brand"><span class="brand-mark">S</span><div><strong class="brand-name">SynChronicle</strong><small class="brand-meta">story studio / local edition</small></div></div><div id="runtime-status" class="runtime-chip" data-testid="runtime-status" data-state="idle" role="status"><i></i><span aria-live="polite">正在连接本地引擎</span></div></header>
-      <div class="layout">
-         <aside class="rail" aria-label="创作流程"><div><p class="rail-label">Workspace</p><h2 class="rail-title">本地创作室</h2></div><nav class="steps"><button class="step is-active" type="button" aria-current="step" data-target="config-panel"><span class="step-index">01</span><span><strong>连接引擎</strong><small>模型与本地密钥</small></span></button><button class="step" type="button" data-target="composer-card"><span class="step-index">02</span><span><strong>提交 brief</strong><small>一句话定方向</small></span></button><button class="step" type="button" data-target="activity-panel"><span class="step-index">03</span><span><strong>观察创作</strong><small>状态与现场记录</small></span></button></nav><div class="rail-note"><p><i></i>作品文件保存在本机</p><small>你掌握每一份正文、配置与运行记录。</small></div></aside>
-        <section class="workspace" aria-label="创作工作面"><div class="workspace-surface"><div class="workspace-meta"><span><strong>Story engine</strong> / first run</span><span>Local / 01</span></div><h1>让一个念头，<em>长成一部小说。</em></h1><p class="lede">把灵感交给 Architect、Writer 与 Editor。你负责方向，SynChronicle 负责让世界持续生长。</p>
-          <section id="config-panel" class="setup-card" data-testid="config-form"><h2>先连接你的写作引擎</h2><p>保存一次模型配置，之后每次进入本地工作台都可以直接继续。密钥只留在这台机器上。</p><form id="settings" class="config-form"><div class="field"><label for="provider">模型服务商</label><select id="provider"><option value="ollama">Ollama（本机）</option><option value="openrouter">OpenRouter</option><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option></select></div><div class="field"><label for="model-input">模型名称</label><input id="model-input" placeholder="例如 qwen3:14b" /></div><div class="field field-wide"><label for="base-url">接口地址 <span>(可选)</span></label><input id="base-url" placeholder="例如 http://localhost:11434/v1" /></div><div class="field field-wide"><label for="api-key">API Key <span>(Ollama 可留空)</span></label><input id="api-key" type="password" placeholder="仅保存在本机配置" /></div><small>配置只写入本机，不会上传到 SynChronicle。</small><button type="submit">保存配置</button></form></section>
-           <section id="composer-card" class="composer-card" data-ready="false"><header><span class="composer-label">创作 brief</span><span id="prompt-state" class="composer-state">等待连接</span></header><form id="composer"><label for="prompt">你想写什么？</label><textarea id="prompt" aria-label="创作需求" disabled placeholder="例如：写一本发生在海上空间站的悬疑长篇……"></textarea><div class="composer-actions"><small>一句话足够。后续可以在运行中继续干预。</small><button id="run" class="primary" type="submit" disabled>先保存配置后开始</button></div></form><div id="steering" class="steering" hidden><label for="steer-input">运行中干预</label><div class="steering-row"><input id="steer-input" placeholder="告诉 Writer 下一步怎么走" /><button id="steer-button" type="button">发送干预</button></div></div></section>
-           <div id="notice" class="notice" role="alert" tabindex="-1"></div><footer class="workspace-foot"><span>Ctrl + Enter 提交</span><span>本地运行</span><span>可随时恢复</span></footer>
-        </div></section>
-         <aside class="activity" aria-label="运行状态"><div id="activity-panel" class="activity-panel"><header class="activity-header"><h2>运行状态</h2><span>NOW</span></header><div class="metrics"><div class="metric"><span>引擎状态</span><b id="state">setup</b></div><div class="metric"><span>当前模型</span><b id="model">—</b></div><div class="metric"><span>输入 tokens</span><b id="input">0</b></div><div class="metric"><span>输出 tokens</span><b id="output">0</b></div></div><p class="footer" id="config">请配置模型后开始</p><div id="runtime-actions" class="runtime-actions" hidden><button id="resume" type="button">恢复上一轮</button><button id="new-run" type="button">重新开始</button></div><section class="activity-log"><h3>现场记录</h3><div id="feed" class="feed" role="log" aria-live="polite"><div class="event"><time>NOW</time>本地工作室已就位，等你投递第一颗灵感。</div></div></section><div class="activity-foot">LOCAL RUNTIME · PRIVATE BY DEFAULT</div></div></aside>
+    <header class="topbar">
+      <a class="brand" href="#" aria-label="SynChronicle 控制台">S<em>—</em><small>本地创作控制台</small></a>
+      <div class="topbar-right">
+        <a class="view-site" href="/read"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3h7v7h-2V6.41l-9.29 9.3l-1.42-1.42l9.3-9.29H14V3Z"/><path d="M5 5h6v2H7v10h10v-4h2v6H5V5Z"/></svg>前台阅读</a>
+        <div id="runtime-status" class="chip" data-testid="runtime-status" data-state="idle" role="status"><i aria-hidden="true"></i><span aria-live="polite">正在检查引擎</span></div>
+        <div class="theme-switcher" role="group" aria-label="主题选择">
+          <button type="button" class="theme-btn" data-theme="light" aria-pressed="false">Light</button>
+          <button type="button" class="theme-btn" data-theme="dark" aria-pressed="false">Dark</button>
+          <button type="button" class="theme-btn" data-theme="system" aria-pressed="true">System</button>
+        </div>
       </div>
-    </main>
+    </header>
+    <div id="progress" class="progress" role="progressbar" aria-label="引擎运行中" hidden><span></span></div>
+    <div class="admin">
+      <aside class="side" aria-label="主导航">
+        <div class="side-label">工作区</div>
+        <nav class="side-nav">
+          <button type="button" data-view="overview" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><rect x="13" y="13" width="7" height="7" rx="2"/></svg>创作概览</button>
+        </nav>
+        <div class="side-label">内容</div>
+        <nav class="side-nav">
+          <button type="button" data-view="reader"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6.2C10.4 4.5 8 4 4 4v13.5c4 0 6.4.5 8 2.3 1.6-1.8 4-2.3 8-2.3V4c-4 0-6.4.5-8 2.2z"/><path d="M12 6.2v13.6"/></svg>章节与大纲</button>
+          <button type="button" data-view="records"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h9"/></svg>运行记录</button>
+        </nav>
+        <div class="side-label">管理</div>
+        <nav class="side-nav">
+          <button type="button" data-view="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 8h9M17.5 8H20M4 16h3M11.5 16H20"/><circle cx="15" cy="8" r="2.4"/><circle cx="9" cy="16" r="2.4"/></svg>配置</button>
+        </nav>
+        <div class="side-foot">Local runtime<br />作品、配置与运行记录均保存在本机。</div>
+      </aside>
+      <main class="main">
+        <section class="page" data-page="overview" aria-label="创作概览">
+          <div class="page-head">
+            <div><h1>创作概览</h1><p class="meta">从一个 brief 开始，持续推进你的故事。</p></div>
+            <div class="head-actions" id="runtime-actions" hidden><button id="resume" class="btn btn-tonal" type="button">恢复上一轮</button><button id="new-run" class="btn btn-text" type="button">新建 brief</button></div>
+          </div>
+          <div class="stat-row">
+            <div class="stat-split"><div class="stat-top">引擎</div><b id="state">setup</b></div>
+            <div class="stat-split"><div class="stat-top">模型</div><b id="model">—</b></div>
+            <div class="stat-split"><div class="stat-top">输入 tokens</div><b id="input">0</b></div>
+            <div class="stat-split"><div class="stat-top">输出 tokens</div><b id="output">0</b></div>
+          </div>
+          <div class="grid">
+            <section class="stack">
+              <div class="card hero">
+                <div class="announce"><b>Local</b><span>作品、配置与运行记录均保存在本机</span></div>
+                <h2>把想法变成一条可继续的故事线。</h2>
+                <p class="intro">Architect 负责结构，Writer 负责正文，Editor 负责校准。你只需要提供方向。</p>
+                <section id="composer" aria-label="创作 brief">
+                  <div class="tf"><textarea id="prompt" aria-label="创作需求" placeholder=" " disabled></textarea><label for="prompt">你想写什么？</label></div>
+                  <div class="actions" style="margin-top:14px"><small>支持 Ctrl / Cmd + Enter 提交。</small><button id="run" class="btn btn-filled" type="button" disabled>开始创作</button></div>
+                  <div id="steering-panel" class="steering" style="margin-top:18px">
+                    <div class="steer-row"><div class="tf"><input id="steer-input" placeholder=" " /><label for="steer-input">运行中干预</label></div><button id="steer-button" class="btn btn-tonal" type="button">发送干预</button></div>
+                  </div>
+                </section>
+              </div>
+              <div class="card">
+                <h3 class="section-title">连接引擎</h3>
+                <form id="settings" class="form-grid" data-testid="config-form">
+                  <div class="seg" role="radiogroup" aria-label="模型服务商">
+                    <label><input type="radio" name="provider" value="ollama" checked /><span>Ollama</span></label>
+                    <label><input type="radio" name="provider" value="openrouter" /><span>OpenRouter</span></label>
+                    <label><input type="radio" name="provider" value="openai" /><span>OpenAI</span></label>
+                    <label><input type="radio" name="provider" value="anthropic" /><span>Anthropic</span></label>
+                  </div>
+                  <div><div class="tf"><input id="model-input" placeholder=" " /><label for="model-input">模型名称</label></div><small class="helper">例如 qwen3:14b</small></div>
+                  <div class="form-row">
+                    <div><div class="tf"><input id="base-url" placeholder=" " /><label for="base-url">接口地址（可选）</label></div><small class="helper">例如 http://localhost:11434/v1</small></div>
+                    <div><div class="tf"><input id="api-key" type="password" placeholder=" " /><label for="api-key">API Key（Ollama 可留空）</label></div><small class="helper">仅保存在本机配置</small></div>
+                  </div>
+                  <div class="actions"><small>保存后即可开始创作。</small><button class="btn btn-tonal" type="submit">保存配置</button></div>
+                </form>
+              </div>
+            </section>
+            <aside class="stack">
+              <div class="card">
+                <div class="panel-head"><h3>本书内容</h3><span id="book-phase">—</span></div>
+                <div class="rowlines" id="book-rows"><div class="empty">尚未配置模型，先连接引擎。</div></div>
+              </div>
+              <div class="card" id="live-card" hidden>
+                <div class="panel-head"><h3>正在书写</h3><span id="live-state">生成中</span></div>
+                <div id="live-text" class="live-text" aria-live="polite"></div>
+              </div>
+              <div class="card">
+                <div class="panel-head"><h3>最近活动</h3><span id="event-count">0 条</span></div>
+                <div id="feed" class="feed" role="log" aria-live="polite"><div class="empty">暂无运行记录。</div></div>
+              </div>
+            </aside>
+          </div>
+        </section>
+        <section class="page" data-page="reader" aria-label="章节与大纲" hidden>
+          <div class="page-head"><div><h1>章节与大纲</h1><p class="meta">卷弧章三层结构与章节质量详情。</p></div></div>
+          <div class="reader">
+            <aside class="card tree-card" aria-label="大纲树">
+              <div class="panel-head"><h3 id="book-title">大纲</h3><span id="book-progress">—</span></div>
+              <div id="outline-tree" class="tree" role="tree" aria-label="卷弧章大纲"><div class="empty">尚未开始创作。</div></div>
+            </aside>
+            <article class="card" aria-label="章节内容">
+              <header class="chapter-head">
+                <h2 id="ch-title">选择左侧章节开始阅读</h2>
+                <div style="display:flex;gap:8px;align-items:center"><span id="ch-status" class="chip small" hidden></span><span id="ch-tone" class="chip small" hidden></span><span id="ch-words" class="meta"></span></div>
+              </header>
+              <div id="ch-summary" class="summary-block" hidden></div>
+              <div id="ch-review" class="review-block" hidden></div>
+              <div id="ch-text" class="chapter-text"><div class="empty">章节正文将在这里展示。</div></div>
+            </article>
+          </div>
+        </section>
+        <section class="page" data-page="records" aria-label="运行记录" hidden>
+          <div class="page-head"><div><h1>运行记录</h1><p class="meta">事件时间线与运行诊断。</p></div></div>
+          <div class="stack">
+            <div class="card">
+              <div class="panel-head"><h3>事件时间线</h3><span id="tl-count">0 条</span></div>
+              <div id="timeline" class="feed tall" role="log" aria-live="polite"><div class="empty">暂无事件。</div></div>
+            </div>
+            <div class="card"><div class="empty">诊断面板将在后续任务开放。</div></div>
+          </div>
+        </section>
+        <section class="page" data-page="settings" aria-label="配置" hidden>
+          <div class="page-head"><div><h1>配置</h1><p class="meta">模型与运行参数管理。</p></div></div>
+          <div class="card"><p class="section-title" style="margin-bottom:8px">配置管理</p><div class="empty">完整配置编辑将在后续任务开放。当前可通过概览页的「连接引擎」表单修改基础模型配置。</div></div>
+        </section>
+      </main>
+    </div>
+    <div id="notice" role="alert"></div>
     <script>
       const $ = (id) => document.getElementById(id);
-      const status = $('runtime-status');
-      const notice = $('notice');
-      const run = $('run');
-      const prompt = $('prompt');
-      const composerCard = $('composer-card');
-      const configPanel = $('config-panel');
-      const steering = $('steering');
-      const promptState = $('prompt-state');
-      const runtimeActions = $('runtime-actions');
+      const stateLabels = { running: '引擎运行中', completed: '本轮已完成', paused: '等待继续', idle: '引擎就绪', closed: '服务已关闭', setup: '等待配置', error: '运行异常' };
+      const phaseLabels = { init: '准备中', premise: '设定构思', outline: '大纲规划', writing: '正文创作', complete: '已完结' };
+      const chapterLabels = { completed: '已完成', 'in-progress': '写作中', pending: '待写', rewrite: '待重写' };
       const formatNumber = (value) => new Intl.NumberFormat('zh-CN').format(value || 0);
-      const stateLabels = { running: '引擎运行中', completed: '本轮已完成', paused: '等待继续', idle: '本地引擎就绪', closed: '服务已关闭', setup: '等待本地配置' };
-      function showNotice(message, tone = 'error') { notice.textContent = message; notice.dataset.tone = tone; notice.classList.add('show'); notice.focus({ preventScroll: true }); }
-      function clearNotice() { notice.textContent = ''; notice.classList.remove('show'); }
-      function renderEvents(events) {
-        const feed = $('feed');
-        feed.replaceChildren();
-        if (!events.length) {
-          const empty = document.createElement('div'); empty.className = 'event'; empty.textContent = '暂时没有新的现场记录。'; feed.append(empty); return;
-        }
-        events.slice(-12).reverse().forEach((event) => {
-          const item = document.createElement('div'); item.className = 'event';
-          const time = document.createElement('time'); time.textContent = new Date(event.time || Date.now()).toLocaleTimeString('zh-CN');
-          const message = document.createElement('span'); message.textContent = String(event.message || event.summary || event.type || '');
-          item.append(time, message); feed.append(item);
-        });
+      const provider = () => (document.querySelector('input[name="provider"]:checked') || {}).value || 'ollama';
+      const RUN_END = "\\u0000run_end";
+      const rootElement = document.documentElement;
+      const themeButtons = document.querySelectorAll('.theme-btn');
+      function applyTheme(theme) {
+        rootElement.classList.remove('light', 'dark');
+        if (theme === 'system') { localStorage.removeItem('theme'); if (matchMedia('(prefers-color-scheme: dark)').matches) rootElement.classList.add('dark'); }
+        else { localStorage.setItem('theme', theme); rootElement.classList.add(theme); }
+        themeButtons.forEach((button) => { const active = button.dataset.theme === theme; button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active)); });
       }
-      async function refresh() {
-        try {
-          const response = await fetch('/api/status');
-          const data = await response.json();
-          const state = data.snapshot?.runtimeState || (data.configured ? 'idle' : 'setup');
-          const ready = Boolean(data.configured);
-          const active = state === 'running';
-          configPanel.hidden = ready;
-          composerCard.dataset.ready = String(ready);
-          steering.hidden = !ready;
-          runtimeActions.hidden = !ready || !['paused', 'completed'].includes(state);
-          $('resume').hidden = state !== 'paused';
-          $('new-run').hidden = !['paused', 'completed'].includes(state);
-          prompt.disabled = !ready || active || state === 'closed';
-          run.disabled = !ready || active || state === 'closed';
-          promptState.textContent = ready ? (active ? '正在写作' : state === 'paused' ? '可恢复或补充指令' : '可以开始') : '等待连接';
-          run.textContent = ready ? (active ? '创作进行中…' : state === 'completed' ? '开始下一轮' : state === 'paused' ? '继续创作' : '开始创作') : '先保存配置后开始';
-          status.dataset.state = state === 'error' ? 'error' : state;
-          const activeTarget = !ready ? 'config-panel' : active ? 'activity-panel' : 'composer-card';
-          document.querySelectorAll('.step[data-target]').forEach((item) => item.removeAttribute('aria-current'));
-          document.querySelector('.step[data-target="' + activeTarget + '"]')?.setAttribute('aria-current', 'step');
-          status.querySelector('span').textContent = stateLabels[state] || '运行状态：' + state;
-          $('state').textContent = state;
-          $('input').textContent = formatNumber(data.snapshot?.usage?.inputTokens);
-          $('output').textContent = formatNumber(data.snapshot?.usage?.outputTokens);
-          $('model').textContent = data.snapshot?.model || '—';
-          $('config').textContent = ready ? '配置已加载 · ' + (data.snapshot.provider || 'local') : (data.error || '请配置模型后开始');
-          if (data.events) renderEvents(data.events);
-        } catch (error) { status.dataset.state = 'error'; status.querySelector('span').textContent = '本地服务未连接'; showNotice('无法连接本地服务，请确认 SynChronicle 仍在运行。'); }
-      }
+      applyTheme(localStorage.getItem('theme') || 'system');
+      themeButtons.forEach((button) => button.addEventListener('click', () => applyTheme(button.dataset.theme)));
+      let currentState = 'setup';
+      let noticeTimer = 0;
+      function showNotice(message, tone = 'error') { const notice = $('notice'); notice.textContent = message; notice.dataset.tone = tone; notice.classList.add('show'); clearTimeout(noticeTimer); noticeTimer = setTimeout(() => notice.classList.remove('show'), 4200); }
+      function renderEvents(events) { const feed = $('feed'); feed.replaceChildren(); $('event-count').textContent = events.length + ' 条'; const timeline = $('timeline'); timeline.replaceChildren(); $('tl-count').textContent = events.length + ' 条'; if (!events.length) { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '暂无运行记录。'; feed.append(empty); const empty2 = document.createElement('div'); empty2.className = 'empty'; empty2.textContent = '暂无事件。'; timeline.append(empty2); return; } const recent = events.slice(-50).reverse(); for (const target of [feed, timeline]) recent.forEach((event) => { const item = document.createElement('div'); item.className = 'event'; const time = document.createElement('time'); time.textContent = new Date(event.time || Date.now()).toLocaleTimeString('zh-CN'); const message = document.createElement('span'); message.textContent = String(event.message || event.summary || event.type || ''); item.append(time, message); target.append(item); }); }
+      let eventsBuf = [];
+      function pushEvent(event) { eventsBuf = [...eventsBuf.slice(-49), event]; renderEvents(eventsBuf); }
       async function post(path, body) { const response = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) }); const data = await response.json(); if (!response.ok) throw new Error(data.error || '操作失败'); return data; }
-      $('composer').addEventListener('submit', async (event) => { event.preventDefault(); clearNotice(); const value = prompt.value.trim(); if (!value) { showNotice('先写下一句创作需求。'); return; } run.disabled = true; run.textContent = '正在启动…'; try { const state = $('state').textContent; await post(document.querySelector('[data-ready="true"]') && ['completed', 'paused'].includes(state) ? '/api/continue' : '/api/run', { prompt: value }); prompt.value = ''; showNotice('创作已启动，右侧会持续显示现场状态。', 'success'); } catch (error) { showNotice(error.message || '启动失败'); } finally { await refresh(); } });
-      prompt.addEventListener('keydown', (event) => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); $('composer').requestSubmit(); } });
-      $('settings').addEventListener('submit', async (event) => { event.preventDefault(); clearNotice(); try { await post('/api/config', { provider: $('provider').value, model: $('model-input').value, baseUrl: $('base-url').value, apiKey: $('api-key').value }); $('api-key').value = ''; showNotice('模型配置已保存，可以开始创作。', 'success'); await refresh(); } catch (error) { showNotice(error.message || '配置保存失败'); } });
+      function applyStatus(data) { currentState = data.snapshot?.runtimeState || (data.configured ? 'idle' : 'setup'); const ready = Boolean(data.configured); const active = currentState === 'running'; const status = $('runtime-status'); status.dataset.state = data.error ? 'error' : currentState; status.querySelector('span').textContent = data.error ? '服务异常' : (stateLabels[currentState] || currentState); $('progress').hidden = !active; $('state').textContent = currentState; $('state').dataset.state = currentState; $('model').textContent = data.snapshot?.model || '—'; $('input').textContent = formatNumber(data.snapshot?.usage?.inputTokens); $('output').textContent = formatNumber(data.snapshot?.usage?.outputTokens); $('prompt').disabled = !ready || active || currentState === 'closed'; $('run').disabled = !ready || active || currentState === 'closed'; $('run').textContent = active ? '创作进行中…' : currentState === 'paused' ? '继续创作' : '开始创作'; $('steering-panel').classList.toggle('show', ready); $('runtime-actions').hidden = !ready || !['paused', 'completed'].includes(currentState); $('resume').hidden = currentState !== 'paused'; if (!active) $('live-state').textContent = '本轮已完成'; if (data.events) { eventsBuf = data.events; renderEvents(eventsBuf); } }
+      async function refresh() { try { applyStatus(await (await fetch('/api/status')).json()); } catch { $('runtime-status').dataset.state = 'error'; $('runtime-status').querySelector('span').textContent = '本地服务未连接'; showNotice('无法连接本地服务，请确认 SynChronicle 仍在运行。'); } }
+      function appendDelta(value) { if (value === RUN_END) { $('live-state').textContent = '本轮已完成'; return; } $('live-card').hidden = false; $('live-state').textContent = '生成中'; const el = $('live-text'); el.textContent = (el.textContent + value).slice(-4000); el.scrollTop = el.scrollHeight; }
+      let sseErrored = false; let pollTimer = 0;
+      function startPolling() { if (pollTimer) return; pollTimer = setInterval(() => void refresh(), 3000); }
+      const es = new EventSource('/api/stream');
+      es.addEventListener('snapshot', (e) => applyStatus(JSON.parse(e.data)));
+      es.addEventListener('runtime', (e) => pushEvent(JSON.parse(e.data)));
+      es.addEventListener('delta', (e) => appendDelta(JSON.parse(e.data).value));
+      es.onerror = () => { if (sseErrored) { es.close(); startPolling(); } sseErrored = true; };
+      function showView(view) { document.querySelectorAll('.page').forEach((page) => { page.hidden = page.dataset.page !== view; }); document.querySelectorAll('[data-view]').forEach((button) => { if (button.dataset.view === view) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current'); }); if (view === 'reader') void loadBook(); }
+      document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => showView(button.dataset.view)));
+      function flatten(book) { const rows = []; for (const volume of book.volumes) for (const arc of volume.arcs) for (const chapter of arc.chapters) rows.push(chapter); return rows; }
+      function rowPill(label, count, tone) { const pill = document.createElement('span'); pill.className = 'pill ' + tone; pill.textContent = count + ' ' + label; return pill; }
+      async function loadBookSummary() { const box = $('book-rows'); try { const data = await (await fetch('/api/book')).json(); if (!data.configured || !data.book) { box.replaceChildren(); const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '尚未配置模型，先连接引擎。'; box.append(empty); $('book-phase').textContent = '—'; return; } const book = data.book; const rows = flatten(book); const done = rows.filter((row) => row.status === 'completed').length; const rewrite = rows.filter((row) => row.status === 'rewrite').length; const pending = rows.length - done - rewrite; box.replaceChildren(); const rowA = document.createElement('div'); rowA.className = 'rowline'; const labelA = document.createElement('span'); labelA.textContent = '章节进度'; const pills = document.createElement('div'); pills.className = 'pills'; pills.append(rowPill('已完成', done, 'ok'), rowPill('待写', pending, 'muted')); if (rewrite) pills.append(rowPill('待重写', rewrite, 'bad')); rowA.append(labelA, pills); const rowB = document.createElement('div'); rowB.className = 'rowline'; const labelB = document.createElement('span'); labelB.textContent = '全书字数'; const valueB = document.createElement('span'); valueB.style.fontWeight = '700'; valueB.style.fontSize = '15px'; valueB.textContent = formatNumber(book.totalWordCount); rowB.append(labelB, valueB); const rowC = document.createElement('div'); rowC.className = 'rowline'; const labelC = document.createElement('span'); labelC.textContent = '阅读前台'; const link = document.createElement('a'); link.href = '/read'; link.className = 'btn btn-text'; link.style.minHeight = '32px'; link.textContent = '打开 /read'; rowC.append(labelC, link); box.append(rowA, rowB, rowC); $('book-phase').textContent = phaseLabels[book.phase] || book.phase; } catch { /* 保持现有内容 */ } }
+      function treeEmpty(message) { $('outline-tree').replaceChildren(); const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = message; $('outline-tree').append(empty); $('book-progress').textContent = '—'; }
+      async function loadBook() { try { const data = await (await fetch('/api/book')).json(); if (!data.configured || !data.book) { $('book-title').textContent = '大纲'; treeEmpty('尚未配置模型，先在概览页连接引擎。'); return; } const book = data.book; $('book-title').textContent = book.novelName || '大纲'; $('book-progress').textContent = book.completedChapters.length + '/' + (book.totalChapters || flatten(book).length) + ' 章'; const tree = $('outline-tree'); tree.replaceChildren(); const rows = flatten(book); if (!rows.length) { treeEmpty('尚未开始创作，提交 brief 后这里会长出大纲。'); return; } for (const volume of book.volumes) { const vol = document.createElement('div'); vol.className = 'vol'; vol.textContent = '第 ' + volume.index + ' 卷 · ' + (volume.title || '未命名'); tree.append(vol); for (const arc of volume.arcs) { const arcLabel = document.createElement('div'); arcLabel.className = 'arc'; arcLabel.textContent = ' ' + (arc.title || '弧') + (arc.goal ? ' — ' + arc.goal : ''); tree.append(arcLabel); for (const chapter of arc.chapters) { const row = document.createElement('button'); row.type = 'button'; row.className = 'trow'; row.dataset.chapter = String(chapter.chapter); row.setAttribute('role', 'treeitem'); const dot = document.createElement('i'); dot.className = 'dot s-' + chapter.status; dot.setAttribute('aria-hidden', 'true'); const label = document.createElement('span'); label.textContent = chapter.chapter + '. ' + chapter.title; const words = document.createElement('small'); words.textContent = chapter.wordCount ? formatNumber(chapter.wordCount) + ' 字' : ''; row.append(dot, label, words); row.addEventListener('click', () => selectChapter(chapter.chapter)); tree.append(row); } } } const target = rows.find((row) => row.status === 'in-progress') || [...rows].reverse().find((row) => row.status === 'completed') || rows[0]; if (target) selectChapter(target.chapter); } catch { treeEmpty('加载大纲失败，请稍后重试。'); } }
+      let currentChapter = 0;
+      function selectChapter(chapter) { currentChapter = chapter; document.querySelectorAll('.trow').forEach((row) => { const active = Number(row.dataset.chapter) === chapter; row.classList.toggle('active', active); row.setAttribute('aria-selected', String(active)); }); void loadChapter(chapter); }
+      async function loadChapter(chapter) { try { const data = await (await fetch('/api/chapters/' + chapter)).json(); if (!data.configured || !data.chapter) { $('ch-title').textContent = '尚未配置模型'; return; } const view = data.chapter; $('ch-title').textContent = view.title || ('第 ' + chapter + ' 章'); const chip = $('ch-status'); chip.hidden = false; chip.textContent = chapterLabels[view.status] || view.status; chip.dataset.state = view.status === 'rewrite' ? 'error' : view.status === 'completed' ? 'idle' : 'running';           $('ch-words').textContent = (view.source === 'draft' ? '草稿 · ' : '') + formatNumber(view.wordCount) + ' 字';
+          const tone = $('ch-tone');
+          if (view.aitone && view.aitone.score < 100) { tone.hidden = false; tone.textContent = 'AI 味 ' + view.aitone.score; tone.className = 'chip small ' + (view.aitone.score < 70 ? 'warn' : ''); tone.title = view.aitone.hits.slice(0, 3).map((hit) => hit.name + ' x' + hit.count).join('；') || '无命中'; } else tone.hidden = true; const summary = $('ch-summary'); if (view.summary) { summary.hidden = false; summary.replaceChildren(); const head = document.createElement('h4'); head.textContent = '本章摘要'; const body = document.createElement('div'); body.textContent = view.summary.summary; summary.append(head, body); if (view.summary.keyEvents.length) { const list = document.createElement('ul'); for (const item of view.summary.keyEvents) { const li = document.createElement('li'); li.textContent = item; list.append(li); } summary.append(list); } } else summary.hidden = true; const review = $('ch-review'); if (view.review && (view.review.dimensions.length || view.review.summary)) { review.hidden = false; review.replaceChildren(); const head = document.createElement('div'); head.className = 'review-head'; const title = document.createElement('h4'); title.style.margin = '0'; title.textContent = 'Editor 评审'; const verdict = document.createElement('span'); verdict.className = 'chip small ' + (view.review.verdict === 'pass' ? 'ok' : 'warn'); verdict.textContent = view.review.verdict; head.append(title, verdict); review.append(head); if (view.review.summary) { const note = document.createElement('div'); note.className = 'meta'; note.style.marginTop = '6px'; note.textContent = view.review.summary; review.append(note); } for (const dimension of view.review.dimensions) { const row = document.createElement('div'); row.className = 'dim' + (dimension.score < 70 ? ' low' : ''); const name = document.createElement('span'); name.textContent = dimension.dimension; const bar = document.createElement('div'); bar.className = 'bar'; const fill = document.createElement('i'); fill.style.setProperty('--w', Math.max(0, Math.min(100, dimension.score)) + '%'); bar.append(fill); const score = document.createElement('b'); score.style.fontWeight = '600'; score.textContent = String(dimension.score); row.append(name, bar, score); review.append(row); } } else review.hidden = true; const text = $('ch-text'); text.replaceChildren(); if (view.text) { for (const block of view.text.split(/\\n{2,}/)) { const paragraph = document.createElement('p'); paragraph.textContent = block; text.append(paragraph); } } else { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = view.status === 'pending' ? '这一章还未书写。' : '暂无正文。'; text.append(empty); } } catch { showNotice('加载章节失败。'); } }
+      $('settings').addEventListener('submit', async (event) => { event.preventDefault(); try { await post('/api/config', { provider: provider(), model: $('model-input').value, baseUrl: $('base-url').value, apiKey: $('api-key').value }); $('api-key').value = ''; showNotice('配置已保存，可以开始创作。', 'success'); await refresh(); void loadBookSummary(); } catch (error) { showNotice(error.message || '配置保存失败'); } });
+      $('run').addEventListener('click', async () => { const value = $('prompt').value.trim(); if (!value) { showNotice('先写下一句创作 brief。'); return; } try { await post(['completed', 'paused'].includes(currentState) ? '/api/continue' : '/api/run', { prompt: value }); $('prompt').value = ''; $('live-text').textContent = ''; showNotice('创作已启动。', 'success'); await refresh(); } catch (error) { showNotice(error.message || '启动失败'); } });
+      $('prompt').addEventListener('keydown', (event) => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); $('run').click(); } });
       $('steer-button').addEventListener('click', async () => { const value = $('steer-input').value.trim(); if (!value) { showNotice('先写下要调整的方向。'); return; } try { await post('/api/inject', { text: value }); $('steer-input').value = ''; showNotice('干预已加入下一次运行。', 'success'); await refresh(); } catch (error) { showNotice(error.message || '干预发送失败'); } });
-       $('resume').addEventListener('click', async () => { try { const result = await post('/api/resume'); showNotice(result.started ? '正在恢复上一轮创作。' : '没有可恢复的运行记录。', result.started ? 'success' : 'error'); await refresh(); } catch (error) { showNotice(error.message || '恢复失败'); } });
-      $('new-run').addEventListener('click', () => { prompt.focus(); showNotice('写下新的 brief，即可开始下一轮。', 'success'); });
-       document.querySelectorAll('.step[data-target]').forEach((step) => step.addEventListener('click', () => { const target = $(step.dataset.target); const behavior = matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'; target?.scrollIntoView({ behavior, block: 'start' }); document.querySelectorAll('.step').forEach((item) => item.removeAttribute('aria-current')); step.setAttribute('aria-current', 'step'); }));
-      refresh(); setInterval(refresh, 1400);
+      $('resume').addEventListener('click', async () => { try { await post('/api/resume'); showNotice('正在恢复上一轮创作。', 'success'); await refresh(); } catch (error) { showNotice(error.message || '恢复失败'); } });
+      $('new-run').addEventListener('click', () => { $('prompt').focus(); $('prompt').value = ''; showNotice('写下新的 brief，即可开始下一轮。', 'success'); });
+      refresh();
+      loadBookSummary();
     </script>
   </body>
 </html>`;

@@ -4,6 +4,7 @@ import type { RegisteredTool, ToolRegistryOptions } from "./registry.js";
 import { buildSnapshot, type Candidate, type Snapshot } from "../rules/index.js";
 import { compute, type StyleStats } from "../stylestat/index.js";
 import { formatMessage, route } from "../runtime/flow/router.js";
+import { bm25Search, type Bm25Doc } from "../retrieval/bm25.js";
 
 const positiveInt = z.number().int().positive();
 const strings = z.array(z.string());
@@ -87,11 +88,12 @@ export function createTools({ store, askUser, references, normalize, subagents }
       if (resolvedConsumer === "coordinator") return { progress_status: progressStatus(progress), foundation_status: await store.foundationMissing(), working_memory: working, reference_pack: {} };
       if (resolvedConsumer === "architect") return { progress_status: progressStatus(progress), planning_memory: { outline: await store.outline.loadOutline() }, foundation_memory: await foundation(store), reference_pack: pickReferences("architect", references), working_memory: working };
       const style_stats = await computeStyleStats(store);
+      const selected_memory = resolvedConsumer === "writer" ? await retrieveRelatedChapters(store, progress, chapter!) : {};
       return {
         working_memory: { ...working, chapter_plan: await store.drafts.loadChapterPlan(chapter!) },
         episodic_memory: style_stats ? { style_stats } : {},
         reference_pack: pickReferences(resolvedConsumer, references),
-        ...(resolvedConsumer === "writer" ? { selected_memory: {} } : {}),
+        ...(resolvedConsumer === "writer" ? { selected_memory } : {}),
       };
     }),
     save_foundation: registered("保存小说基础设定", saveFoundationSchema, async ({ type, content, scale, volume, arc }) => {
@@ -240,5 +242,39 @@ async function mergeUserRule(store: ToolRegistryOptions["store"], normalize: ((t
 function foundationArtifact(type: string) { return ({ outline: "outline.json", layered_outline: "layered_outline.json", characters: "characters.json", world_rules: "world_rules.json", update_compass: "meta/compass.json" } as Record<string, string>)[type] ?? "meta/progress.json"; }
 function progressStatus(progress: Progress | null) { return progress ? { phase: progress.phase, flow: progress.flow ?? "writing", completed_chapters: progress.completed_chapters.length, total_chapters: progress.total_chapters, next_chapter: Math.max(1, ...progress.completed_chapters.map((chapter) => chapter + 1)), total_word_count: progress.total_word_count, pending_rewrites: progress.pending_rewrites ?? [] } : null; }
 async function foundation(store: ToolRegistryOptions["store"]) { return { premise: await store.outline.loadPremise(), outline: await store.outline.loadOutline(), characters: await store.characters.load(), world_rules: await store.world.loadWorldRules() }; }
+
+/**
+ * BM25 相关章节检索（specs/2026-09-18-quality-trio R1）：
+ * 以当前章大纲为查询、已完成章摘要为语料，注入 selected_memory.related_chapters。
+ * 排除最近 3 章摘要窗口（摘要窗口已覆盖），章数不足或大纲缺失时保持空对象。
+ */
+const SUMMARY_WINDOW = 3;
+async function retrieveRelatedChapters(store: ToolRegistryOptions["store"], progress: Progress | null, chapter: number): Promise<Record<string, unknown>> {
+  const completed = progress?.completed_chapters ?? [];
+  if (completed.length < 2) return {};
+  const entry = (await store.outline.loadOutline()).find((item) => item.chapter === chapter);
+  if (!entry) return {};
+  const window = new Set(completed.slice(-SUMMARY_WINDOW));
+  const corpus: Array<{ chapter: number; text: string }> = [];
+  const summaries = new Map<number, { summary: string; keyEvents: string[] }>();
+  for (const done of completed) {
+    if (window.has(done)) continue;
+    const summary = await store.summaries.loadSummary(done);
+    if (!summary?.summary) continue;
+    summaries.set(done, { summary: summary.summary, keyEvents: summary.key_events ?? [] });
+    corpus.push({ chapter: done, text: `${summary.summary} ${summary.key_events.join(" ")}` });
+  }
+  if (corpus.length < 2) return {};
+  const docs: Bm25Doc[] = corpus.map((item) => ({ id: item.chapter, text: item.text }));
+  const hits = bm25Search(docs, `${entry.title} ${entry.core_event} ${entry.hook ?? ""}`, 3);
+  if (!hits.length) return {};
+  const titles = new Map((await store.outline.loadOutline()).map((item) => [item.chapter, item.title]));
+  return {
+    related_chapters: hits.map((hit) => {
+      const found = summaries.get(hit.id)!;
+      return { chapter: hit.id, title: titles.get(hit.id) ?? `第 ${hit.id} 章`, summary: found.summary, key_events: found.keyEvents, score: hit.score };
+    }),
+  };
+}
 function defaultRunMeta(): RunMeta { return { started_at: new Date().toISOString(), provider: "", style: "", model: "", planning_tier: "mid", steer_history: [], pending_steer: "", pause_point: null }; }
 async function saveRunMeta(store: ToolRegistryOptions["store"], patch: Partial<RunMeta>) { const current = await store.runMeta.load() as RunMeta | null; await store.runMeta.save({ ...defaultRunMeta(), ...current, ...patch }); }
