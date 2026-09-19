@@ -43,43 +43,51 @@ import { openDatabase, ensureSchema, type SqlDatabase } from "../db/sql.js";
 import { UsersDao } from "../db/users.js";
 import { SqlKV } from "../db/kv.js";
 import { setStoreBackend } from "../store/io.js";
+import { PlatformCrypto, maskKey } from "../platform/crypto.js";
+import { ChannelsDao, QuotaDao, type ChannelRow } from "../platform/dao.js";
 
 export type PlatformMode = "selfhost" | "commercial";
 export interface WebServerOptions { port?: number; host?: string; configPath?: string; hostInstance?: Host; auth?: boolean; storage?: "fs" | "db"; dbUrl?: string; mode?: PlatformMode; }
 export interface WebServerHandle { port: number; close(): Promise<void>; }
-interface RuntimeContext { host?: Host; store?: Store; config?: ResolvedConfig; configured: boolean; configPath: string; error?: string; bookRoot?: string; bookshelf?: BookshelfFile; autopilot?: AutopilotRunner; user?: SessionUser; authEnabled: boolean; authStore: AuthStore; rateLimiter: LoginRateLimiter; registerLimiter: LoginRateLimiter; mode: PlatformMode; storageMode: "fs" | "db"; db?: SqlDatabase; usersDao?: UsersDao; }
+interface RuntimeContext { host?: Host; store?: Store; config?: ResolvedConfig; configured: boolean; configPath: string; error?: string; bookRoot?: string; bookshelf?: BookshelfFile; autopilot?: AutopilotRunner; user?: SessionUser; authEnabled: boolean; authStore: AuthStore; rateLimiter: LoginRateLimiter; registerLimiter: LoginRateLimiter; mode: PlatformMode; storageMode: "fs" | "db"; db?: SqlDatabase; usersDao?: UsersDao; channelsDao?: ChannelsDao; quotaDao?: QuotaDao; crypto?: PlatformCrypto; }
 
 export async function startWebServer(options: WebServerOptions = {}): Promise<WebServerHandle> {
   const mode: PlatformMode = options.mode ?? (process.env.MODE === "commercial" ? "commercial" : "selfhost");
   const storageMode = options.storage ?? "fs";
   let db: SqlDatabase | undefined;
   let usersDao: UsersDao | undefined;
+  let channelsDao: ChannelsDao | undefined;
+  let quotaDao: QuotaDao | undefined;
+  let crypto: PlatformCrypto | undefined;
   if (storageMode === "db") {
     db = await openDatabase(options.dbUrl ?? process.env.DATABASE_URL ?? "sqlite:data/synchronicle.db");
     await ensureSchema(db);
     usersDao = new UsersDao(db);
+    channelsDao = new ChannelsDao(db);
+    quotaDao = new QuotaDao(db);
+    crypto = mode === "commercial" ? PlatformCrypto.fromEnv() : await PlatformCrypto.loadOrInit(db);
     setStoreBackend(new SqlKV(db));
   }
-  const context = await loadRuntime(options.configPath, options.auth !== false, mode, storageMode, db, usersDao);
+  const context = await loadRuntime(options.configPath, options.auth !== false, mode, storageMode, db, usersDao, channelsDao, quotaDao, crypto);
   if (options.hostInstance) context.host = options.hostInstance;
   const server = createServer((request, response) => void route(request, response, context));
   const port = await listen(server, options.port ?? 3000, options.host ?? "127.0.0.1");
   return { port, close: async () => { await close(server, context.host); if (storageMode === "db" && context.db) { setStoreBackend(null); await context.db.close(); } } };
 }
 
-async function loadRuntime(configPath?: string, authEnabled = true, mode: PlatformMode = "selfhost", storageMode: "fs" | "db" = "fs", db?: SqlDatabase, usersDao?: UsersDao): Promise<RuntimeContext> {
+async function loadRuntime(configPath?: string, authEnabled = true, mode: PlatformMode = "selfhost", storageMode: "fs" | "db" = "fs", db?: SqlDatabase, usersDao?: UsersDao, channelsDao?: ChannelsDao, quotaDao?: QuotaDao, crypto?: PlatformCrypto): Promise<RuntimeContext> {
   const targetPath = configPath || defaultConfigPath();
   const fallbackRoot = dirname(targetPath);
   try {
-    if (await needsSetup(configPath)) return { configured: false, configPath: targetPath, authEnabled, authStore: new AuthStore(fallbackRoot, usersDao), rateLimiter: new LoginRateLimiter(), registerLimiter: new LoginRateLimiter(), mode, storageMode, db, usersDao };
+    if (await needsSetup(configPath)) return { configured: false, configPath: targetPath, authEnabled, authStore: new AuthStore(fallbackRoot, usersDao), rateLimiter: new LoginRateLimiter(), registerLimiter: new LoginRateLimiter(), mode, storageMode, db, usersDao, channelsDao, quotaDao, crypto };
     const config = await loadConfig(configPath);
     const root = resolveBooksRoot(config.output_dir ?? "output/novel");
-    const context: RuntimeContext = { config, configured: true, configPath: targetPath, authEnabled, authStore: new AuthStore(root, usersDao), rateLimiter: new LoginRateLimiter(), registerLimiter: new LoginRateLimiter(), mode, storageMode, db, usersDao };
+    const context: RuntimeContext = { config, configured: true, configPath: targetPath, authEnabled, authStore: new AuthStore(root, usersDao), rateLimiter: new LoginRateLimiter(), registerLimiter: new LoginRateLimiter(), mode, storageMode, db, usersDao, channelsDao, quotaDao, crypto };
     await activateInitialBook(context, config);
     await migrateBookOwners(context);
     return context;
   } catch (error) {
-    return { configured: false, configPath: targetPath, error: error instanceof Error ? error.message : String(error), authEnabled, authStore: new AuthStore(fallbackRoot, usersDao), rateLimiter: new LoginRateLimiter(), registerLimiter: new LoginRateLimiter(), mode, storageMode, db, usersDao };
+    return { configured: false, configPath: targetPath, error: error instanceof Error ? error.message : String(error), authEnabled, authStore: new AuthStore(fallbackRoot, usersDao), rateLimiter: new LoginRateLimiter(), registerLimiter: new LoginRateLimiter(), mode, storageMode, db, usersDao, channelsDao, quotaDao, crypto };
   }
 }
 
@@ -151,6 +159,19 @@ async function route(request: IncomingMessage, response: ServerResponse, context
     if (request.method === "GET") return handleInviteList(response, context);
     if (request.method === "POST") return handleInviteCreate(request, response, context);
   }
+  if (url.pathname === "/api/admin/recharge-codes") {
+    if (request.method === "GET") return sendJson(response, 200, { codes: context.quotaDao ? await context.quotaDao.listRechargeCodes() : [] });
+    if (request.method === "POST") return handleRechargeCreate(request, response, context);
+  }
+  if (url.pathname === "/api/channels") {
+    if (request.method === "GET") return handleChannelsList(response, context);
+    if (request.method === "POST") return handleChannelCreate(request, response, context);
+  }
+  if (/^\/api\/channels\/[^/]+$/.test(url.pathname) && request.method === "DELETE") return handleChannelDelete(response, context, decodeURIComponent(url.pathname.split("/")[3] ?? ""));
+  if (/^\/api\/channels\/[^/]+\/(grant|revoke)$/.test(url.pathname) && request.method === "POST") return handleChannelGrant(request, response, context, decodeURIComponent(url.pathname.split("/")[3] ?? ""), url.pathname.endsWith("/grant"));
+  if (request.method === "GET" && url.pathname === "/api/models") return handleModelsList(response, context);
+  if (request.method === "GET" && url.pathname === "/api/quota") return handleQuotaGet(response, context);
+  if (request.method === "POST" && url.pathname === "/api/quota/redeem") return handleQuotaRedeem(request, response, context);
   if (request.method === "POST" && /^\/api\/users\/[^/]+\/disable$/.test(url.pathname)) return handleUserDisable(response, context, decodeURIComponent(url.pathname.split("/")[3] ?? ""));
   if (url.pathname === "/api/prep" && request.method === "GET") return handlePrepList(response, context);
   if (url.pathname === "/api/prep" && request.method === "POST") return handlePrepCreate(request, response, context);
@@ -446,6 +467,114 @@ async function handleInviteList(response: ServerResponse, context: RuntimeContex
   if (!requireAdmin(context, response)) return;
   if (!context.usersDao) return sendJson(response, 200, { invites: [] });
   sendJson(response, 200, { invites: await context.usersDao.listInvites() });
+}
+
+/** ---------- P10-B 渠道 / 额度 / 模型 ---------- */
+
+function projectChannel(row: ChannelRow, granted: boolean, crypto?: PlatformCrypto) {
+  const models = row.models ? row.models.split(",").map((item) => item.trim()).filter(Boolean) : [];
+  let apiKeyMasked = "****";
+  if (crypto) { try { apiKeyMasked = maskKey(crypto.decrypt({ ct: row.api_key_ct, iv: row.api_key_iv, tag: row.api_key_tag })); } catch { apiKeyMasked = "****（密钥需重录）"; } }
+  return { id: row.id, name: row.name, provider: row.provider, baseUrl: row.base_url, models, weight: row.weight, status: row.status, own: row.owner_id !== null, granted, apiKeyMasked };
+}
+
+async function handleChannelsList(response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.channelsDao || !context.user) return sendJson(response, 200, { channels: [] });
+  const isAdmin = context.user.role === "admin";
+  const rows = isAdmin ? await context.channelsDao.listAll() : await context.channelsDao.effective(context.user.id);
+  const grantedIds = new Set(context.user ? await context.channelsDao.listGrantedIds(context.user.id) : []);
+  sendJson(response, 200, { channels: rows.map((row) => projectChannel(row, grantedIds.has(row.id), context.crypto)) });
+}
+
+async function handleChannelCreate(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.channelsDao || !context.crypto || !context.user) return sendJson(response, 503, { error: "渠道管理需要数据库存储" });
+  try {
+    const body = await readJson(request);
+    const name = textField(body.name, "渠道名称");
+    const provider = textField(body.provider, "provider");
+    const baseUrl = textField(body.baseUrl, "baseUrl");
+    const apiKey = textField(body.apiKey, "apiKey");
+    const models = Array.isArray(body.models) ? body.models.filter((item): item is string => typeof item === "string") : [];
+    if (!models.length) return sendJson(response, 400, { error: "至少提供一个模型名" });
+    const asAdminPool = body.shared === true && context.user.role === "admin";
+    const secret = context.crypto.encrypt(apiKey);
+    const row: ChannelRow = { id: `ch-${randomBytes(6).toString("hex")}`, owner_id: asAdminPool ? null : context.user.id, name: name.slice(0, 40), provider: provider.slice(0, 20), base_url: baseUrl, api_key_ct: secret.ct, api_key_iv: secret.iv, api_key_tag: secret.tag, models: models.join(","), weight: Math.max(Number(body.weight) || 1, 0.1), status: "active", created_at: new Date().toISOString() };
+    await context.channelsDao.create(row);
+    sendJson(response, 201, { created: true, channel: projectChannel(row, false, context.crypto) });
+  } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
+}
+
+async function handleChannelDelete(response: ServerResponse, context: RuntimeContext, id: string): Promise<void> {
+  if (!context.channelsDao || !context.user) return sendJson(response, 503, { error: "渠道管理需要数据库存储" });
+  const row = await context.channelsDao.get(id);
+  if (!row) return sendJson(response, 404, { error: "渠道不存在" });
+  if (context.user.role !== "admin" && row.owner_id !== context.user.id) return sendJson(response, 403, { error: "无权删除该渠道" });
+  await context.channelsDao.remove(id);
+  sendJson(response, 200, { removed: true, id });
+}
+
+async function handleChannelGrant(request: IncomingMessage, response: ServerResponse, context: RuntimeContext, id: string, grant: boolean): Promise<void> {
+  if (!requireAdmin(context, response)) return;
+  if (!context.channelsDao) return sendJson(response, 503, { error: "渠道管理需要数据库存储" });
+  try {
+    const row = await context.channelsDao.get(id);
+    if (!row) return sendJson(response, 404, { error: "渠道不存在" });
+    if (grant && row.owner_id !== null) return sendJson(response, 400, { error: "仅管理员池渠道可下发" });
+    const body = await readJson(request);
+    const userId = textField(body.userId, "userId");
+    if (grant) await context.channelsDao.grant(id, userId, new Date().toISOString());
+    else await context.channelsDao.revoke(id, userId);
+    sendJson(response, 200, { [grant ? "granted" : "revoked"]: true, channelId: id, userId });
+  } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
+}
+
+async function handleModelsList(response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.channelsDao || !context.user) return sendJson(response, 200, { models: [] });
+  const grantedIds = new Set(await context.channelsDao.listGrantedIds(context.user.id));
+  const rows = await context.channelsDao.effective(context.user.id);
+  const models: Array<{ model: string; channel: string; provider: string; own: boolean }> = [];
+  const seen = new Set<string>();
+  for (const row of rows) for (const model of row.models.split(",").map((item) => item.trim()).filter(Boolean)) {
+    const key = `${model}@${row.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    models.push({ model, channel: row.name, provider: row.provider, own: row.owner_id !== null && !grantedIds.has(row.id) });
+  }
+  sendJson(response, 200, { models });
+}
+
+async function handleQuotaGet(response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.quotaDao || !context.user) return sendJson(response, 200, { remaining: 0, used: 0, ledger: [], daily: [] });
+  const balance = await context.quotaDao.balance(context.user.id);
+  sendJson(response, 200, { ...balance, ledger: await context.quotaDao.ledger(context.user.id), daily: await context.quotaDao.dailySummary(context.user.id), billing: context.mode === "commercial" });
+}
+
+async function handleQuotaRedeem(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.quotaDao || !context.user) return sendJson(response, 503, { error: "额度功能需要数据库存储" });
+  try {
+    const body = await readJson(request);
+    const code = textField(body.code, "code");
+    const result = await context.quotaDao.redeem(code, context.user.id, new Date().toISOString());
+    if (!result.ok) return sendJson(response, 400, { error: "兑换码不存在或已被使用" });
+    sendJson(response, 200, { redeemed: true, amountUsd: result.amountUsd, ...await context.quotaDao.balance(context.user.id) });
+  } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
+}
+
+async function handleRechargeCreate(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!requireAdmin(context, response)) return;
+  if (!context.quotaDao) return sendJson(response, 503, { error: "额度功能需要数据库存储" });
+  try {
+    const body = await readJson(request);
+    const count = Math.min(Math.max(Number(body.count) || 1, 1), 50);
+    const amountUsd = Math.max(Number(body.amountUsd) || 0, 0);
+    const codes: string[] = [];
+    for (let index = 0; index < count; index += 1) {
+      const code = `rc-${randomBytes(8).toString("hex")}`;
+      await context.quotaDao.createRechargeCode(code, amountUsd, context.user?.id ?? "admin");
+      codes.push(code);
+    }
+    sendJson(response, 201, { created: true, codes, amountUsd });
+  } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
 }
 
 type ChapterStatus = "completed" | "in-progress" | "pending" | "rewrite";
