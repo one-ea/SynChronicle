@@ -10,6 +10,12 @@ import { Store } from "../store/index.js";
 import { FileIO } from "../store/io.js";
 import { detectAitone } from "../stylestat/aitone.js";
 import { diagnose } from "../diag/index.js";
+import { adversarialReview } from "../diag/reader.js";
+import { estimateCost } from "../diag/cost.js";
+import { scanSafety } from "../diag/safety.js";
+import { recall } from "../retrieval/recall.js";
+import { deconstruct } from "../runtime/deconstruct.js";
+import { charCardToEntity, parseCharacterCard } from "../domain/charcard.js";
 import { buildRewritePlan } from "../runtime/rewrite.js";
 import { evaluateArenaCandidates } from "../runtime/arena.js";
 import type { ResolvedConfig } from "../config/schemas.js";
@@ -68,6 +74,12 @@ async function route(request: IncomingMessage, response: ServerResponse, context
   if (request.method === "POST" && /^\/api\/chapters\/\d+\/branches\/checkout$/.test(url.pathname)) return handleBranchCheckout(request, response, context, Number(url.pathname.split("/")[3]));
   if (request.method === "GET" && url.pathname === "/api/entities") return handleEntitiesGet(response, context);
   if (request.method === "POST" && url.pathname === "/api/entities") return handleEntitiesPost(request, response, context);
+  if (request.method === "POST" && url.pathname === "/api/entities/import-card") return handleCharacterCardImport(request, response, context);
+  if (request.method === "GET" && url.pathname === "/api/recall") return handleRecall(response, context, url.searchParams.get("q") ?? "");
+  if (request.method === "GET" && url.pathname === "/api/reader-review") return handleReaderReview(response, context);
+  if (request.method === "POST" && url.pathname === "/api/deconstruct") return handleDeconstruct(request, response);
+  if (request.method === "GET" && url.pathname === "/api/cost-preview") return handleCostPreview(response, context, url);
+  if (request.method === "POST" && url.pathname === "/api/safety/scan") return handleSafetyScan(request, response, context);
   if (request.method === "GET" && url.pathname === "/api/stream") return handleStream(request, response, context);
   sendJson(response, 404, { error: "Not found" });
 }
@@ -314,6 +326,86 @@ async function handleChapterAdopt(request: IncomingMessage, response: ServerResp
     sendJson(response, 200, { adopted: true, chapter, wordCount: words });
   } catch (error) {
     sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function handleCharacterCardImport(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.store) return sendJson(response, 503, { error: "尚未配置小说工作区" });
+  try {
+    const body = await readJson(request);
+    const base64 = optionalText(body.pngBase64);
+    if (!base64) return sendJson(response, 400, { error: "pngBase64 必填" });
+    const bytes = new Uint8Array(Buffer.from(base64, "base64"));
+    const card = parseCharacterCard(bytes);
+    const entity = charCardToEntity(card);
+    await context.store.entities.upsertEntity(entity);
+    sendJson(response, 200, { saved: true, id: entity.id, name: entity.name, aliases: entity.aliases, hasDescription: Boolean(entity.description) });
+  } catch (error) {
+    sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function handleRecall(response: ServerResponse, context: RuntimeContext, query: string): Promise<void> {
+  if (!context.store) return sendJson(response, 200, { configured: false, engine: "bm25", hits: [] });
+  try {
+    const progress = await context.store.progress.load();
+    const embedding = (progress as { embedding?: import("../retrieval/embedding.js").EmbeddingConfig } | null)?.embedding;
+    sendJson(response, 200, { configured: true, ...(await recall(context.store, query, { k: 8, embedding })) });
+  } catch (error) {
+    sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function handleReaderReview(response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.store) return sendJson(response, 200, { configured: false, report: null });
+  try {
+    const progress = await context.store.progress.load();
+    const completed = [...(progress?.completed_chapters ?? [])].sort((a, b) => a - b);
+    const chapters: Array<{ chapter: number; title: string; text: string; aitoneScore?: number }> = [];
+    for (const chapter of completed) {
+      const text = await context.store.drafts.loadChapterText(chapter);
+      if (!text) continue;
+      const aitone = detectAitone(text);
+      chapters.push({ chapter, title: `第 ${chapter} 章`, text, aitoneScore: aitone?.score });
+    }
+    const entities = await context.store.entities.load();
+    const report = adversarialReview(chapters, entities.entities.map((entity) => entity.name));
+    sendJson(response, 200, { configured: true, report });
+  } catch (error) {
+    sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function handleDeconstruct(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  try {
+    const body = await readJson(request);
+    const text = optionalText(body.text);
+    if (!text) return sendJson(response, 400, { error: "text 必填" });
+    sendJson(response, 200, deconstruct(text));
+  } catch (error) {
+    sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function handleCostPreview(response: ServerResponse, context: RuntimeContext, url: URL): Promise<void> {
+  const progress = context.store ? await context.store.progress.load() : null;
+  const model = url.searchParams.get("model") || context.config?.model || "";
+  const chapters = Number(url.searchParams.get("chapters")) || progress?.total_chapters || 0;
+  const words = Number(url.searchParams.get("words")) || Number(Object.values(progress?.chapter_word_counts ?? {}).slice(-3).reduce((total: number, value) => total + Number(value), 0) / Math.max(1, Object.keys(progress?.chapter_word_counts ?? {}).length)) || 3000;
+  sendJson(response, 200, estimateCost({ chapters, wordsPerChapter: words, model }));
+}
+
+async function handleSafetyScan(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
+  try {
+    const body = await readJson(request);
+    let text = optionalText(body.text) ?? "";
+    const chapter = Number(body.chapter) || 0;
+    if (!text && chapter > 0 && context.store) text = await context.store.drafts.loadChapterText(chapter);
+    if (!text) return sendJson(response, 400, { error: "提供 text 或 chapter" });
+    const extra = Array.isArray(body.patterns) ? body.patterns.filter((item): item is { category: "violenceDetail" | "pornographic" | "selfHarm" | "gamblingFraud" | "custom"; pattern: string } => typeof item === "object" && item !== null) : [];
+    sendJson(response, 200, scanSafety(text, extra));
+  } catch (error) {
+    sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) });
   }
 }
 

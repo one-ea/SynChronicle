@@ -333,6 +333,16 @@ export function renderWebApp(): string {
             </section>
             <aside class="stack">
               <div class="card">
+                <div class="panel-head"><h3>设定检索</h3><span id="recall-engine">RAG</span></div>
+                <div class="steer-row"><div class="tf"><input id="recall-query" placeholder=" " /><label for="recall-query">检索设定 / 伏笔 / 摘要</label></div><button id="recall-run" class="btn btn-tonal" type="button">检索</button></div>
+                <div class="rowlines" id="recall-results" style="margin-top:8px"><div class="empty">输入关键词检索实体图谱、章节摘要与伏笔线索。</div></div>
+                <div class="actions" style="margin-top:10px"><small>把检索结果注入下一轮生成上下文。</small><button id="recall-inject" class="btn btn-text" type="button" hidden>注入上下文</button></div>
+              </div>
+              <div class="card">
+                <div class="panel-head"><h3>成本预估</h3><span id="cost-model">—</span></div>
+                <div class="rowlines" id="cost-rows"><div class="empty">尚未配置模型。</div></div>
+              </div>
+              <div class="card">
                 <div class="panel-head"><h3>本书内容</h3><span id="book-phase">—</span></div>
                 <div class="rowlines" id="book-rows"><div class="empty">尚未配置模型，先连接引擎。</div></div>
               </div>
@@ -348,7 +358,15 @@ export function renderWebApp(): string {
           </div>
         </section>
         <section class="page" data-page="reader" aria-label="章节与大纲" hidden>
-          <div class="page-head"><div><h1>章节与大纲</h1><p class="meta">卷弧章三层结构与章节质量详情。</p></div></div>
+          <div class="page-head"><div><h1>章节与大纲</h1><p class="meta">卷弧章三层结构与章节质量详情。</p></div><div class="head-actions"><button id="reader-review-btn" class="btn btn-tonal" type="button">读者评审</button><button id="deconstruct-btn" class="btn btn-tonal" type="button">拆书分析</button></div></div>
+          <div id="reader-review-panel" class="card" style="margin-bottom:18px;background:var(--alpha-4);border:1px dashed var(--line);" hidden>
+            <div class="panel-head"><h4 style="margin:0">读者模拟评分与对抗评审</h4><span id="review-avg">—</span></div>
+            <div id="review-rows" class="rowlines" style="margin-top:8px"></div>
+          </div>
+          <div id="deconstruct-panel" class="card" style="margin-bottom:18px;background:var(--alpha-4);border:1px dashed var(--line);" hidden>
+            <div class="panel-head"><h4 style="margin:0">拆书报告（结构骨架 / 节奏 / 爽点峰值）</h4><span id="deconstruct-meta">—</span></div>
+            <div id="deconstruct-rows" class="rowlines" style="margin-top:8px"></div>
+          </div>
           <div class="reader">
             <aside class="card tree-card" aria-label="大纲树">
               <div class="panel-head"><h3 id="book-title">大纲</h3><span id="book-progress">—</span></div>
@@ -357,7 +375,7 @@ export function renderWebApp(): string {
             <article class="card" aria-label="章节内容">
               <header class="chapter-head">
                 <h2 id="ch-title">选择左侧章节开始阅读</h2>
-                <div style="display:flex;gap:8px;align-items:center"><span id="ch-status" class="chip small" hidden></span><span id="ch-tone" class="chip small" hidden></span><span id="ch-words" class="meta"></span><button id="open-rewrite" class="btn btn-tonal" type="button" style="min-height:30px;padding:4px 12px;font-size:12px;" hidden>文风重构 / 去AI味</button><button id="open-arena" class="btn btn-tonal" type="button" style="min-height:30px;padding:4px 12px;font-size:12px;" hidden>A/B 双模型竞写</button><button id="open-branch" class="btn btn-tonal" type="button" style="min-height:30px;padding:4px 12px;font-size:12px;" hidden>剧情分支</button></div>
+                <div style="display:flex;gap:8px;align-items:center"><span id="ch-status" class="chip small" hidden></span><span id="ch-tone" class="chip small" hidden></span><span id="ch-words" class="meta"></span><button id="safety-btn" class="btn btn-tonal" type="button" style="min-height:30px;padding:4px 12px;font-size:12px;" hidden>安全扫描</button><button id="open-rewrite" class="btn btn-tonal" type="button" style="min-height:30px;padding:4px 12px;font-size:12px;" hidden>文风重构 / 去AI味</button><button id="open-arena" class="btn btn-tonal" type="button" style="min-height:30px;padding:4px 12px;font-size:12px;" hidden>A/B 双模型竞写</button><button id="open-branch" class="btn btn-tonal" type="button" style="min-height:30px;padding:4px 12px;font-size:12px;" hidden>剧情分支</button></div>
               </header>
               <div id="arena-panel" class="card" style="margin:14px 0;background:var(--alpha-4);border:1px dashed var(--line);" hidden>
                 <div class="panel-head"><h4 style="margin:0">多模型同章 A/B 竞写 & 盲审对比</h4><span id="arena-status">就绪</span></div>
@@ -430,7 +448,7 @@ export function renderWebApp(): string {
         <section class="page" data-page="entities" aria-label="人物图谱" hidden>
           <div class="page-head">
             <div><h1>人物与势力图谱</h1><p class="meta">追踪出场角色性格羁绊、势力归属与心境动态弧度。</p></div>
-            <div class="head-actions"><button id="add-entity-btn" class="btn btn-tonal" type="button">新建人物/势力</button></div>
+            <div class="head-actions"><label class="btn btn-text" for="card-file-input" style="cursor:pointer">导入角色卡</label><input id="card-file-input" type="file" accept="image/png" hidden /><button id="add-entity-btn" class="btn btn-tonal" type="button">新建人物/势力</button></div>
           </div>
           <div id="add-entity-modal" class="card" style="margin-bottom:16px;border:1px dashed var(--line)" hidden>
             <h4 style="margin:0 0 12px">添加小说实体</h4>
@@ -571,12 +589,14 @@ export function renderWebApp(): string {
             tone.className = 'chip small ' + (view.aitone.score < 70 ? 'warn' : '');
             tone.title = view.aitone.hits.slice(0, 3).map((hit) => hit.name + ' x' + hit.count).join('；') || '无命中';
           } else tone.hidden = true;
-          const openRw = $('open-rewrite');
-          if (openRw) openRw.hidden = !view.text;
-          const openAr = $('open-arena');
-          if (openAr) openAr.hidden = !view.text;
-          const openBr = $('open-branch');
-          if (openBr) openBr.hidden = !view.text;
+           const openRw = $('open-rewrite');
+           if (openRw) openRw.hidden = !view.text;
+           const openAr = $('open-arena');
+           if (openAr) openAr.hidden = !view.text;
+           const openBr = $('open-branch');
+           if (openBr) openBr.hidden = !view.text;
+           const sfBtn = $('safety-btn');
+           if (sfBtn) sfBtn.hidden = !view.text;
           const rwPanel = $('rewrite-panel');
           if (rwPanel) rwPanel.hidden = true;
           const arPanel = $('arena-panel');
@@ -901,6 +921,143 @@ export function renderWebApp(): string {
           await loadBranches(currentChapter);
         } catch (err) { showNotice(err.message || '创建分支失败'); }
       });
+      let recallSnippetText = '';
+      $('recall-run')?.addEventListener('click', async () => {
+        const query = $('recall-query')?.value.trim();
+        const box = $('recall-results');
+        if (!query || !box) return;
+        try {
+          const res = await (await fetch('/api/recall?q=' + encodeURIComponent(query))).json();
+          $('recall-engine').textContent = res.engine === 'embedding' ? '向量检索' : 'BM25';
+          box.replaceChildren();
+          recallSnippetText = '';
+          if (!res.hits?.length) { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '无命中，换个关键词试试。'; box.append(empty); $('recall-inject').hidden = true; return; }
+          for (const hit of res.hits) {
+            recallSnippetText += '[' + hit.kind + '] ' + hit.source + ' — ' + hit.snippet + '\n';
+            const row = document.createElement('div'); row.className = 'rowline';
+            const left = document.createElement('div');
+            const pill = document.createElement('span'); pill.className = 'pill ' + (hit.kind === 'entity' ? 'ok' : hit.kind === 'foreshadow' ? 'warn' : 'muted'); pill.textContent = hit.kind;
+            const label = document.createElement('span'); label.style.marginLeft = '6px'; label.textContent = hit.source;
+            left.append(pill, label);
+            const score = document.createElement('small'); score.style.color = 'var(--faint)'; score.textContent = String(hit.score);
+            row.append(left, score);
+            box.append(row);
+          }
+          $('recall-inject').hidden = false;
+        } catch (err) { showNotice(err.message || '检索失败'); }
+      });
+      $('recall-inject')?.addEventListener('click', async () => {
+        if (!recallSnippetText) return;
+        try {
+          await post('/api/inject', { text: '[设定检索结果]\n' + recallSnippetText.trim() });
+          showNotice('检索结果已注入，将在下一轮生成时生效。', 'success');
+        } catch (err) { showNotice(err.message || '注入失败'); }
+      });
+      async function loadCostPreview() {
+        const box = $('cost-rows');
+        if (!box) return;
+        try {
+          const res = await (await fetch('/api/cost-preview')).json();
+          $('cost-model').textContent = res.model || '—';
+          box.replaceChildren();
+          const rows = [
+            ['计划规模', res.totalChars > 0 ? formatNumber(Math.round(res.totalChars / 1000)) + 'k 字' : '未设定'],
+            ['预估 tokens', formatNumber(res.inputTokens + res.outputTokens)],
+            ['预估成本', res.usd.high > 0 ? '$' + res.usd.low + ' ~ $' + res.usd.high : '按自定义价格计算'],
+          ];
+          for (const [label, value] of rows) {
+            const row = document.createElement('div'); row.className = 'rowline';
+            const left = document.createElement('span'); left.textContent = label;
+            const right = document.createElement('b'); right.style.fontSize = '14px'; right.textContent = value;
+            row.append(left, right);
+            box.append(row);
+          }
+        } catch { box.replaceChildren(); }
+      }
+      $('safety-btn')?.addEventListener('click', async () => {
+        if (!currentChapter) return;
+        try {
+          const res = await post('/api/safety/scan', { chapter: currentChapter });
+          if (res.clean) { showNotice('第 ' + currentChapter + ' 章安全扫描通过，未命中敏感模式。', 'success'); return; }
+          const detail = res.hits.map((hit) => hit.category + ' x' + hit.count).join('，');
+          showNotice('安全扫描命中：' + detail, 'warn');
+        } catch (err) { showNotice(err.message || '扫描失败'); }
+      });
+      $('reader-review-btn')?.addEventListener('click', async () => {
+        const panel = $('reader-review-panel');
+        const box = $('review-rows');
+        if (!panel || !box) return;
+        panel.hidden = !panel.hidden;
+        if (panel.hidden) return;
+        try {
+          const res = await (await fetch('/api/reader-review')).json();
+          box.replaceChildren();
+          if (!res.configured || !res.report || !res.report.chapters.length) { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '暂无可评审的已完成章节。'; box.append(empty); $('review-avg').textContent = '—'; return; }
+          $('review-avg').textContent = '均分 ' + res.report.averageScore;
+          for (const row of res.report.chapters) {
+            const line = document.createElement('div'); line.className = 'rowline';
+            const left = document.createElement('span'); left.textContent = '第 ' + row.chapter + ' 章 读者分';
+            const right = document.createElement('div'); right.className = 'pills';
+            const scorePill = document.createElement('span'); scorePill.className = 'pill ' + (row.score >= 70 ? 'ok' : row.score >= 55 ? 'muted' : 'bad'); scorePill.textContent = String(row.score);
+            const dim = document.createElement('small'); dim.style.color = 'var(--faint)'; dim.textContent = '爽' + row.dimensions.thrill + ' 钩' + row.dimensions.hook + ' 律' + row.dimensions.rhythm + ' 话' + row.dimensions.dialogue;
+            right.append(scorePill, dim);
+            line.append(left, right);
+            box.append(line);
+          }
+          for (const finding of res.report.findings) {
+            const line = document.createElement('div'); line.className = 'rowline';
+            const left = document.createElement('span'); left.textContent = '⚠ ' + finding.evidence;
+            const pill = document.createElement('span'); pill.className = 'pill ' + (finding.severity === 'warning' ? 'bad' : 'muted'); pill.textContent = finding.attack;
+            line.append(left, pill);
+            box.append(line);
+          }
+        } catch { box.replaceChildren(); }
+      });
+      $('deconstruct-btn')?.addEventListener('click', async () => {
+        const panel = $('deconstruct-panel');
+        const box = $('deconstruct-rows');
+        if (!panel || !box) return;
+        panel.hidden = !panel.hidden;
+        if (panel.hidden) return;
+        try {
+          const book = await (await fetch('/api/book')).json();
+          if (!book.configured || !book.book) { box.replaceChildren(); const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '尚未配置模型，先连接引擎。'; box.append(empty); return; }
+          const parts = [];
+          for (const volume of book.book.volumes) for (const arc of volume.arcs) for (const chapter of arc.chapters) {
+            if (chapter.status === 'pending' || !chapter.wordCount) continue;
+            const detail = await (await fetch('/api/chapters/' + chapter.chapter)).json();
+            if (detail.chapter?.text) parts.push('第 ' + chapter.chapter + ' 章 ' + (chapter.title || '') + '\n' + detail.chapter.text);
+          }
+          if (!parts.length) { box.replaceChildren(); const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '暂无可分析的已写章节。'; box.append(empty); return; }
+          const res = await post('/api/deconstruct', { text: parts.join('\n\n') });
+          $('deconstruct-meta').textContent = res.totalChapters + ' 章 · ' + formatNumber(res.totalWords) + ' 字';
+          box.replaceChildren();
+          const acts = res.acts.map((act) => act.act + ' ' + Math.round(act.ratio * 100) + '%').join(' → ');
+          const peaks = res.peaks.map((peak) => '第' + peak.chapter + '章(' + peak.composite + ')').join('、');
+          const terms = res.topBigrams.map((item) => item.term + '×' + item.count).join('、') || '—';
+          for (const [label, value] of [['三幕骨架', acts], ['爽点峰值', peaks || '—'], ['高频词', terms]]) {
+            const line = document.createElement('div'); line.className = 'rowline';
+            const left = document.createElement('span'); left.textContent = label;
+            const right = document.createElement('small'); right.style.color = 'var(--muted)'; right.textContent = value;
+            line.append(left, right);
+            box.append(line);
+          }
+        } catch (err) { showNotice(err.message || '拆书失败'); }
+      });
+      $('card-file-input')?.addEventListener('change', async (event) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+        try {
+          const buffer = await file.arrayBuffer();
+          let binary = '';
+          const bytes = new Uint8Array(buffer);
+          for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+          const res = await post('/api/entities/import-card', { pngBase64: btoa(binary) });
+          showNotice('角色卡【' + res.name + '】已导入实体图谱。', 'success');
+          await loadEntities();
+        } catch (err) { showNotice(err.message || '角色卡导入失败'); }
+        event.target.value = '';
+      });
       async function loadEntities() {
         try {
           const res = await (await fetch('/api/entities')).json();
@@ -969,6 +1126,7 @@ export function renderWebApp(): string {
       });
       document.querySelectorAll('[data-view="entities"]').forEach((button) => button.addEventListener('click', () => void loadEntities()));
       refresh();
+      loadCostPreview();
       loadBookSummary();
     </script>
   </body>

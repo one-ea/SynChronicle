@@ -6,6 +6,24 @@ import { tmpdir } from "node:os";
 import { renderWebApp } from "./app.js";
 import { renderReadApp } from "./read.js";
 import { startWebServer } from "./server.js";
+import { crc32 } from "../domain/charcard_crc.js";
+
+function makeTestCardPng(): Buffer {
+  const chunk = (type: string, data: Buffer): Buffer => {
+    const head = Buffer.alloc(8);
+    head.writeUInt32BE(data.length, 0);
+    head.write(type, 4, "latin1");
+    const tail = Buffer.alloc(4);
+    tail.writeUInt32BE(crc32(Buffer.concat([Buffer.from(type, "latin1"), data])) >>> 0, 0);
+    return Buffer.concat([head, data, tail]);
+  };
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const ihdr = chunk("IHDR", Buffer.from([0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0]));
+  const card = { spec: "chara_card_v2", data: { name: "沈砚", description: "雨夜书局掌柜", personality: "冷静" } };
+  const text = chunk("tEXt", Buffer.concat([Buffer.from("chara\0", "latin1"), Buffer.from(Buffer.from(JSON.stringify(card), "utf8").toString("base64"), "latin1")]));
+  const iend = chunk("IEND", Buffer.alloc(0));
+  return Buffer.concat([signature, ihdr, text, iend]);
+}
 
 describe("WebUI", () => {
   it("renders a studio shell with a prompt and live status regions", () => {
@@ -433,6 +451,78 @@ describe("WebUI", () => {
       expect(getUpdated.entities).toHaveLength(1);
       expect(getUpdated.entities[0]!.name).toBe("林辰");
       expect(getUpdated.entities[0]!.aliases).toContain("剑绝");
+    } finally {
+      await handle.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("serves p4 competitive parity endpoints", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "synchronicle-web-p4-"));
+    const output = join(directory, "novel");
+    for (const dir of ["meta", "chapters", "summaries"]) await mkdir(join(output, dir), { recursive: true });
+    await writeFile(join(output, "chapters", "01.md"), "沈砚推开书局的门。“这么晚还来？”他忽然想起十年前的雨夜。");
+    await writeFile(join(output, "summaries", "01.json"), JSON.stringify({ chapter: 1, summary: "沈砚发现旧钟楼的钥匙", characters: ["沈砚"], key_events: ["发现钥匙"] }));
+    await writeFile(join(output, "meta", "progress.json"), JSON.stringify({ novel_name: "测试", phase: "writing", current_chapter: 2, total_chapters: 12, completed_chapters: [1], total_word_count: 30, chapter_word_counts: { "1": 30 } }));
+    const configPath = join(directory, "config.json");
+    await writeFile(configPath, JSON.stringify({ provider: "deepseek", model: "deepseek-chat", providers: { deepseek: { base_url: "https://api.deepseek.com/v1", api_key: "secret-key" } }, output_dir: output }));
+    const handle = await startWebServer({ port: 0, configPath });
+    try {
+      const root = `http://127.0.0.1:${handle.port}`;
+
+      const entityRes = await fetch(`${root}/api/entities`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: "shen", name: "沈砚", type: "character", aliases: [], description: "书局掌柜" }) });
+      expect(entityRes.status).toBe(200);
+
+      const recallRes = (await (await fetch(`${root}/api/recall?q=` + encodeURIComponent("沈砚 掌柜"))).json()) as { configured: boolean; engine: string; hits: Array<{ kind: string; source: string }> };
+      expect(recallRes.configured).toBe(true);
+      expect(recallRes.engine).toBe("bm25");
+      expect(recallRes.hits.length).toBeGreaterThan(0);
+      expect(["entity", "summary"]).toContain(recallRes.hits[0]!.kind);
+
+      const reviewRes = (await (await fetch(`${root}/api/reader-review`)).json()) as { configured: boolean; report: { chapters: unknown[]; averageScore: number } };
+      expect(reviewRes.configured).toBe(true);
+      expect(reviewRes.report.chapters).toHaveLength(1);
+
+      const deconstructRes = (await (await fetch(`${root}/api/deconstruct`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "第 1 章 开端\n他推开门，血光冲天，杀意涌来。然而钟声在这时响起。\n第 2 章 转折\n他赢了。突然，一道黑影扑下。" }) }).then((item) => item.json()))) as { totalChapters: number; acts: unknown[] };
+      expect(deconstructRes.totalChapters).toBe(2);
+      expect(deconstructRes.acts).toHaveLength(3);
+
+      const costRes = (await (await fetch(`${root}/api/cost-preview?chapters=12&words=3000&model=deepseek-chat`)).json()) as { totalChars: number; usd: { low: number; high: number } };
+      expect(costRes.totalChars).toBe(36000);
+      expect(costRes.usd.high).toBeGreaterThanOrEqual(costRes.usd.low);
+
+      const safetyRes = (await (await fetch(`${root}/api/safety/scan`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ chapter: 1 }) }).then((item) => item.json()))) as { clean: boolean; scannedChars: number };
+      expect(safetyRes.clean).toBe(true);
+      expect(safetyRes.scannedChars).toBeGreaterThan(10);
+
+      const badSafetyRes = (await (await fetch(`${root}/api/safety/scan`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "他写下了自杀方法。" }) }).then((item) => item.json()))) as { clean: boolean; hits: Array<{ category: string }> };
+      expect(badSafetyRes.clean).toBe(false);
+      expect(badSafetyRes.hits[0]!.category).toBe("selfHarm");
+    } finally {
+      await handle.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("imports a sillytavern character card into the entity graph", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "synchronicle-web-card-"));
+    const output = join(directory, "novel");
+    for (const dir of ["meta", "chapters"]) await mkdir(join(output, dir), { recursive: true });
+    const configPath = join(directory, "config.json");
+    await writeFile(configPath, JSON.stringify({ provider: "deepseek", model: "deepseek-chat", providers: { deepseek: { base_url: "https://api.deepseek.com/v1", api_key: "secret-key" } }, output_dir: output }));
+    const handle = await startWebServer({ port: 0, configPath });
+    try {
+      const png = makeTestCardPng();
+      const res = await fetch(`http://127.0.0.1:${handle.port}/api/entities/import-card`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pngBase64: png.toString("base64") }) });
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as { saved: boolean; name: string };
+      expect(data.saved).toBe(true);
+      expect(data.name).toBe("沈砚");
+
+      const bad = await fetch(`http://127.0.0.1:${handle.port}/api/entities/import-card`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pngBase64: Buffer.from("not-a-png").toString("base64") }) });
+      expect(bad.status).toBe(400);
+      const list = (await (await fetch(`http://127.0.0.1:${handle.port}/api/entities`)).json()) as { entities: Array<{ name: string }> };
+      expect(list.entities).toHaveLength(1);
     } finally {
       await handle.close();
       await rm(directory, { recursive: true, force: true });

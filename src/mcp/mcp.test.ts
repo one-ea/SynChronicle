@@ -33,11 +33,14 @@ describe("mcp handler", () => {
     expect(tools.result.tools.map((tool) => tool.name).sort()).toEqual([
       "synchronicle_book",
       "synchronicle_chapter",
+      "synchronicle_deconstruct",
       "synchronicle_diag",
       "synchronicle_entities",
       "synchronicle_inject",
+      "synchronicle_recall",
       "synchronicle_rewrite",
       "synchronicle_run",
+      "synchronicle_safety",
       "synchronicle_status",
       "synchronicle_steer",
     ].sort());

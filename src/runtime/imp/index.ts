@@ -8,6 +8,12 @@ const MARKER = new RegExp(`^(?:#{1,3}\\s*)?(?:第\\s*(${ARABIC}|${CHINESE})\\s*[
 
 export async function importTextFile(path: string): Promise<ImportedChapter[]> {
   const text = (await readFile(path, "utf8")).replace(/^\uFEFF/, "");
+  return splitChapters(text);
+}
+
+/** 纯文本 → 章节切分（拆书/导入共用，specs/2026-09-19-p4-competitive-parity R3）。 */
+export function splitChapters(rawText: string): ImportedChapter[] {
+  const text = rawText.replace(/^\uFEFF/, "");
   const matches = [...text.matchAll(MARKER)];
   if (!matches.length) {
     const content = text.trim();

@@ -12,6 +12,9 @@ import { FileIO } from "../store/io.js";
 import { loadAssets } from "../assets/load.js";
 import { Host } from "../runtime/host.js";
 import { buildRewritePlan } from "../runtime/rewrite.js";
+import { recall } from "../retrieval/recall.js";
+import { deconstruct } from "../runtime/deconstruct.js";
+import { scanSafety } from "../diag/safety.js";
 import type { ResolvedConfig } from "../config/schemas.js";
 
 const PROTOCOL_VERSION = "2025-06-18";
@@ -97,6 +100,9 @@ const TOOLS: McpToolSpec[] = [
   { name: "synchronicle_steer", description: "即时偏航重定向：打断当前章节生成，回滚未提交状态并携带纠偏指令立即重新续写", inputSchema: { type: "object", properties: { prompt: { type: "string", description: "偏航纠正指令" }, chapter: { type: "integer", description: "目标章节号（可选，默认当前未完成章节）" } }, required: ["prompt"], additionalProperties: false } },
   { name: "synchronicle_rewrite", description: "章节文风定向重写与去AI味优化：结合题材风格模板及AI套话负向红线生成重构版本", inputSchema: { type: "object", properties: { chapter: { type: "integer", description: "章节号" }, style: { type: "string", description: "风格（default/suspense/fantasy/romance）" }, instructions: { type: "string", description: "额外润色指令" } }, required: ["chapter"], additionalProperties: false } },
   { name: "synchronicle_entities", description: "查询或增量注册小说人物、势力与关键道具关系网络图谱", inputSchema: { type: "object", properties: { entityId: { type: "string", description: "特定实体ID或名称（可选，为空返回全量列表）" } }, additionalProperties: false } },
+  { name: "synchronicle_recall", description: "设定检索：跨实体图谱、章节摘要与伏笔线索的 RAG 检索（BM25 兜底，embedding 可选增强）", inputSchema: { type: "object", properties: { query: { type: "string", description: "检索问题或关键词" }, k: { type: "integer", description: "返回条数（默认 8）" } }, required: ["query"], additionalProperties: false } },
+  { name: "synchronicle_deconstruct", description: "拆书分析：任意小说文本反推章节结构、三幕骨架、节奏曲线与爽点峰值分布", inputSchema: { type: "object", properties: { text: { type: "string", description: "小说全文文本" } }, required: ["text"], additionalProperties: false } },
+  { name: "synchronicle_safety", description: "内容安全预检：暴力细节、色情、自残引导、赌博诈骗等模式扫描（仅报告不阻断）", inputSchema: { type: "object", properties: { chapter: { type: "integer", description: "扫描指定章节正文" }, text: { type: "string", description: "或直接提交待扫描文本" } }, additionalProperties: false } },
 ];
 
 interface InvokeDeps { loadContext(): Promise<ToolContext>; ensureHost(): Promise<HostLike>; now(): Date }
@@ -200,6 +206,33 @@ async function invoke(name: string, args: Record<string, unknown>, deps: InvokeD
     }
     const file = await ctx.store.entities.load();
     return text(JSON.stringify(file.entities, null, 2));
+  }
+  if (name === "synchronicle_recall") {
+    const ctx = await deps.loadContext();
+    if (!ctx.store) return text("configured: false（尚未配置模型）");
+    const query = typeof args.query === "string" ? args.query.trim() : "";
+    if (!query) throw new Error("query 不能为空");
+    const k = Number(args.k) > 0 ? Number(args.k) : 8;
+    const progress = await ctx.store.progress.load();
+    const embedding = (progress as { embedding?: import("../retrieval/embedding.js").EmbeddingConfig } | null)?.embedding;
+    const result = await recall(ctx.store, query, { k, embedding });
+    return text(JSON.stringify(result, null, 2));
+  }
+  if (name === "synchronicle_deconstruct") {
+    const source = typeof args.text === "string" ? args.text : "";
+    if (!source.trim()) throw new Error("text 不能为空");
+    return text(JSON.stringify(deconstruct(source), null, 2));
+  }
+  if (name === "synchronicle_safety") {
+    let source = typeof args.text === "string" ? args.text : "";
+    const chapter = Number(args.chapter) || 0;
+    if (!source.trim() && chapter > 0) {
+      const ctx = await deps.loadContext();
+      if (!ctx.store) throw new Error("尚未配置小说工作区");
+      source = await ctx.store.drafts.loadChapterText(chapter);
+    }
+    if (!source.trim()) throw new Error("提供 text 或 chapter");
+    return text(JSON.stringify(scanSafety(source), null, 2));
   }
   const injectText = typeof args.text === "string" ? args.text.trim() : "";
   if (!injectText) throw new Error("text 不能为空");
