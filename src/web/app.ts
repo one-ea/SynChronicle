@@ -312,7 +312,45 @@ export function renderWebApp(): string {
             <article class="card" aria-label="章节内容">
               <header class="chapter-head">
                 <h2 id="ch-title">选择左侧章节开始阅读</h2>
-                <div style="display:flex;gap:8px;align-items:center"><span id="ch-status" class="chip small" hidden></span><span id="ch-tone" class="chip small" hidden></span><span id="ch-words" class="meta"></span><button id="open-rewrite" class="btn btn-tonal" type="button" style="min-height:30px;padding:4px 12px;font-size:12px;" hidden>文风重构 / 去AI味</button></div>
+                <div style="display:flex;gap:8px;align-items:center"><span id="ch-status" class="chip small" hidden></span><span id="ch-tone" class="chip small" hidden></span><span id="ch-words" class="meta"></span><button id="open-rewrite" class="btn btn-tonal" type="button" style="min-height:30px;padding:4px 12px;font-size:12px;" hidden>文风重构 / 去AI味</button><button id="open-arena" class="btn btn-tonal" type="button" style="min-height:30px;padding:4px 12px;font-size:12px;" hidden>A/B 双模型竞写</button><button id="open-branch" class="btn btn-tonal" type="button" style="min-height:30px;padding:4px 12px;font-size:12px;" hidden>剧情分支</button></div>
+              </header>
+              <div id="arena-panel" class="card" style="margin:14px 0;background:var(--alpha-4);border:1px dashed var(--line);" hidden>
+                <div class="panel-head"><h4 style="margin:0">多模型同章 A/B 竞写 & 盲审对比</h4><span id="arena-status">就绪</span></div>
+                <div class="form-grid" style="gap:12px;margin-top:8px">
+                  <div class="form-row">
+                    <div class="tf"><input id="arena-model-a" placeholder=" " value="Writer-Alpha (沉稳详实)" /><label for="arena-model-a">竞写模型 A</label></div>
+                    <div class="tf"><input id="arena-model-b" placeholder=" " value="Writer-Beta (张力紧凑)" /><label for="arena-model-b">竞写模型 B</label></div>
+                  </div>
+                  <div class="actions">
+                    <small>双模型独立起草，由 Reviewer 盲审输出维度对比与胜出建议</small>
+                    <div style="display:flex;gap:8px">
+                      <button id="arena-start" class="btn btn-filled" type="button" style="min-height:32px;font-size:12px">发起竞写</button>
+                      <button id="arena-cancel" class="btn btn-text" type="button" style="min-height:32px;font-size:12px">收起</button>
+                    </div>
+                  </div>
+                </div>
+                <div id="arena-cards" class="grid" style="margin-top:14px;gap:14px" hidden>
+                  <div class="card" style="background:var(--paper)">
+                    <div class="panel-head"><b id="cand-a-title">候选 A</b><span id="cand-a-score"></span></div>
+                    <div id="cand-a-text" style="max-height:220px;overflow:auto;font-size:12.5px;line-height:1.7;color:var(--muted)"></div>
+                    <div style="margin-top:10px"><button id="adopt-a-btn" class="btn btn-tonal" type="button" style="width:100%;min-height:32px">采纳候选 A</button></div>
+                  </div>
+                  <div class="card" style="background:var(--paper)">
+                    <div class="panel-head"><b id="cand-b-title">候选 B</b><span id="cand-b-score"></span></div>
+                    <div id="cand-b-text" style="max-height:220px;overflow:auto;font-size:12.5px;line-height:1.7;color:var(--muted)"></div>
+                    <div style="margin-top:10px"><button id="adopt-b-btn" class="btn btn-tonal" type="button" style="width:100%;min-height:32px">采纳候选 B</button></div>
+                  </div>
+                </div>
+                <div id="arena-rec" class="card" style="margin-top:10px;background:var(--alpha-6);font-size:12.5px;line-height:1.6" hidden></div>
+              </div>
+              <div id="branch-panel" class="card" style="margin:14px 0;background:var(--alpha-4);border:1px dashed var(--line);" hidden>
+                <div class="panel-head"><h4 style="margin:0">剧情分支管理 (Story Forking)</h4><span id="branch-status">0 条分支</span></div>
+                <div class="rowlines" id="branch-items" style="margin:8px 0"><div class="empty">当前章节暂无分支。</div></div>
+                <div class="form-row" style="margin-top:10px">
+                  <div class="tf"><input id="new-branch-name" placeholder=" " /><label for="new-branch-name">新分支名称 (如: 决战留守if线)</label></div>
+                  <button id="create-branch-btn" class="btn btn-tonal" type="button" style="min-height:44px">创建新分支</button>
+                </div>
+              </div>
               </header>
               <div id="rewrite-panel" class="card" style="margin:14px 0;background:var(--alpha-4);border:1px dashed var(--line);" hidden>
                 <div class="panel-head"><h4 style="margin:0">AI 文风重构与去AI味</h4><span id="rewrite-status">就绪</span></div>
@@ -483,8 +521,16 @@ export function renderWebApp(): string {
           } else tone.hidden = true;
           const openRw = $('open-rewrite');
           if (openRw) openRw.hidden = !view.text;
+          const openAr = $('open-arena');
+          if (openAr) openAr.hidden = !view.text;
+          const openBr = $('open-branch');
+          if (openBr) openBr.hidden = !view.text;
           const rwPanel = $('rewrite-panel');
-          if (rwPanel) rwPanel.hidden = true; const summary = $('ch-summary'); if (view.summary) { summary.hidden = false; summary.replaceChildren(); const head = document.createElement('h4'); head.textContent = '本章摘要'; const body = document.createElement('div'); body.textContent = view.summary.summary; summary.append(head, body); if (view.summary.keyEvents.length) { const list = document.createElement('ul'); for (const item of view.summary.keyEvents) { const li = document.createElement('li'); li.textContent = item; list.append(li); } summary.append(list); } } else summary.hidden = true; const review = $('ch-review'); if (view.review && (view.review.dimensions.length || view.review.summary)) { review.hidden = false; review.replaceChildren(); const head = document.createElement('div'); head.className = 'review-head'; const title = document.createElement('h4'); title.style.margin = '0'; title.textContent = 'Editor 评审'; const verdict = document.createElement('span'); verdict.className = 'chip small ' + (view.review.verdict === 'pass' ? 'ok' : 'warn'); verdict.textContent = view.review.verdict; head.append(title, verdict); review.append(head); if (view.review.summary) { const note = document.createElement('div'); note.className = 'meta'; note.style.marginTop = '6px'; note.textContent = view.review.summary; review.append(note); } for (const dimension of view.review.dimensions) { const row = document.createElement('div'); row.className = 'dim' + (dimension.score < 70 ? ' low' : ''); const name = document.createElement('span'); name.textContent = dimension.dimension; const bar = document.createElement('div'); bar.className = 'bar'; const fill = document.createElement('i'); fill.style.setProperty('--w', Math.max(0, Math.min(100, dimension.score)) + '%'); bar.append(fill); const score = document.createElement('b'); score.style.fontWeight = '600'; score.textContent = String(dimension.score); row.append(name, bar, score); review.append(row); } } else review.hidden = true; const text = $('ch-text'); text.replaceChildren(); if (view.text) { for (const block of view.text.split(/\\n{2,}/)) { const paragraph = document.createElement('p'); paragraph.textContent = block; text.append(paragraph); } } else { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = view.status === 'pending' ? '这一章还未书写。' : '暂无正文。'; text.append(empty); } } catch { showNotice('加载章节失败。'); } }
+          if (rwPanel) rwPanel.hidden = true;
+          const arPanel = $('arena-panel');
+          if (arPanel) arPanel.hidden = true;
+          const brPanel = $('branch-panel');
+          if (brPanel) brPanel.hidden = true; const summary = $('ch-summary'); if (view.summary) { summary.hidden = false; summary.replaceChildren(); const head = document.createElement('h4'); head.textContent = '本章摘要'; const body = document.createElement('div'); body.textContent = view.summary.summary; summary.append(head, body); if (view.summary.keyEvents.length) { const list = document.createElement('ul'); for (const item of view.summary.keyEvents) { const li = document.createElement('li'); li.textContent = item; list.append(li); } summary.append(list); } } else summary.hidden = true; const review = $('ch-review'); if (view.review && (view.review.dimensions.length || view.review.summary)) { review.hidden = false; review.replaceChildren(); const head = document.createElement('div'); head.className = 'review-head'; const title = document.createElement('h4'); title.style.margin = '0'; title.textContent = 'Editor 评审'; const verdict = document.createElement('span'); verdict.className = 'chip small ' + (view.review.verdict === 'pass' ? 'ok' : 'warn'); verdict.textContent = view.review.verdict; head.append(title, verdict); review.append(head); if (view.review.summary) { const note = document.createElement('div'); note.className = 'meta'; note.style.marginTop = '6px'; note.textContent = view.review.summary; review.append(note); } for (const dimension of view.review.dimensions) { const row = document.createElement('div'); row.className = 'dim' + (dimension.score < 70 ? ' low' : ''); const name = document.createElement('span'); name.textContent = dimension.dimension; const bar = document.createElement('div'); bar.className = 'bar'; const fill = document.createElement('i'); fill.style.setProperty('--w', Math.max(0, Math.min(100, dimension.score)) + '%'); bar.append(fill); const score = document.createElement('b'); score.style.fontWeight = '600'; score.textContent = String(dimension.score); row.append(name, bar, score); review.append(row); } } else review.hidden = true; const text = $('ch-text'); text.replaceChildren(); if (view.text) { for (const block of view.text.split(/\\n{2,}/)) { const paragraph = document.createElement('p'); paragraph.textContent = block; text.append(paragraph); } } else { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = view.status === 'pending' ? '这一章还未书写。' : '暂无正文。'; text.append(empty); } } catch { showNotice('加载章节失败。'); } }
       $('settings').addEventListener('submit', async (event) => {
         event.preventDefault();
         try {
@@ -694,6 +740,114 @@ export function renderWebApp(): string {
         } catch (err) {
           showNotice(err.message || '采纳失败');
         }
+      });
+      $('open-arena')?.addEventListener('click', () => {
+        const p = $('arena-panel');
+        if (p) p.hidden = !p.hidden;
+      });
+      $('arena-cancel')?.addEventListener('click', () => {
+        const p = $('arena-panel');
+        if (p) p.hidden = true;
+      });
+      let candAText = '';
+      let candBText = '';
+      $('arena-start')?.addEventListener('click', async () => {
+        if (!currentChapter) return;
+        $('arena-status').textContent = '双模型并行创作与盲审对比中…';
+        try {
+          const res = await post('/api/chapters/' + currentChapter + '/arena', {
+            modelA: $('arena-model-a')?.value.trim(),
+            modelB: $('arena-model-b')?.value.trim(),
+          });
+          candAText = res.candidateA.text;
+          candBText = res.candidateB.text;
+          $('cand-a-title').textContent = '候选 A (' + res.candidateA.modelName + ')';
+          $('cand-a-score').textContent = res.candidateA.wordCount + '字 · AI味 ' + (res.candidateA.aitone ? res.candidateA.aitone.score : 100);
+          $('cand-a-text').textContent = res.candidateA.text;
+          $('cand-b-title').textContent = '候选 B (' + res.candidateB.modelName + ')';
+          $('cand-b-score').textContent = res.candidateB.wordCount + '字 · AI味 ' + (res.candidateB.aitone ? res.candidateB.aitone.score : 100);
+          $('cand-b-text').textContent = res.candidateB.text;
+          $('arena-cards').hidden = false;
+          const rec = $('arena-rec');
+          rec.hidden = false;
+          rec.textContent = '【评审盲审建议】' + res.recommendation;
+          $('arena-status').textContent = '竞写对比就绪 (胜出: 候选 ' + res.overallWinner + ')';
+        } catch (err) {
+          $('arena-status').textContent = '竞写失败';
+          showNotice(err.message || '竞写请求失败');
+        }
+      });
+      $('adopt-a-btn')?.addEventListener('click', async () => {
+        if (!currentChapter || !candAText) return;
+        try {
+          await post('/api/chapters/' + currentChapter + '/adopt', { text: candAText });
+          showNotice('已采纳候选 A 为第 ' + currentChapter + ' 章终稿。', 'success');
+          $('arena-panel').hidden = true;
+          await loadChapter(currentChapter);
+          void loadBookSummary();
+        } catch (err) { showNotice(err.message || '采纳失败'); }
+      });
+      $('adopt-b-btn')?.addEventListener('click', async () => {
+        if (!currentChapter || !candBText) return;
+        try {
+          await post('/api/chapters/' + currentChapter + '/adopt', { text: candBText });
+          showNotice('已采纳候选 B 为第 ' + currentChapter + ' 章终稿。', 'success');
+          $('arena-panel').hidden = true;
+          await loadChapter(currentChapter);
+          void loadBookSummary();
+        } catch (err) { showNotice(err.message || '采纳失败'); }
+      });
+      async function loadBranches(ch) {
+        try {
+          const res = await (await fetch('/api/chapters/' + ch + '/branches')).json();
+          const items = $('branch-items');
+          if (!items) return;
+          items.replaceChildren();
+          const branches = res.branches || [];
+          $('branch-status').textContent = branches.length + ' 条分支';
+          if (!branches.length) {
+            const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '当前章节暂无分支。可以在下方输入名称新建分支推演。';
+            items.append(empty);
+            return;
+          }
+          for (const b of branches) {
+            const row = document.createElement('div'); row.className = 'rowline';
+            const left = document.createElement('div');
+            const name = document.createElement('b'); name.textContent = b.name;
+            const time = document.createElement('small'); time.style.color = 'var(--muted)'; time.style.marginLeft = '8px'; time.textContent = new Date(b.createdAt).toLocaleTimeString('zh-CN');
+            left.append(name, time);
+            const btn = document.createElement('button'); btn.className = 'btn btn-text'; btn.style.minHeight = '28px'; btn.textContent = '切换/合并为主干';
+            btn.addEventListener('click', async () => {
+              try {
+                await post('/api/chapters/' + ch + '/branches/checkout', { branchId: b.id });
+                showNotice('已将分支【' + b.name + '】内容合并至主干。', 'success');
+                await loadChapter(ch);
+                void loadBookSummary();
+              } catch (err) { showNotice(err.message || '合并失败'); }
+            });
+            row.append(left, btn);
+            items.append(row);
+          }
+        } catch { /* 忽略 */ }
+      }
+      $('open-branch')?.addEventListener('click', () => {
+        const p = $('branch-panel');
+        if (p) {
+          p.hidden = !p.hidden;
+          if (!p.hidden && currentChapter) void loadBranches(currentChapter);
+        }
+      });
+      $('create-branch-btn')?.addEventListener('click', async () => {
+        if (!currentChapter) return;
+        const name = $('new-branch-name')?.value.trim();
+        if (!name) { showNotice('请输入新分支名称'); return; }
+        const id = 'br-' + Date.now().toString(36);
+        try {
+          await post('/api/chapters/' + currentChapter + '/branches', { id, name });
+          $('new-branch-name').value = '';
+          showNotice('剧情分支【' + name + '】创建成功。', 'success');
+          await loadBranches(currentChapter);
+        } catch (err) { showNotice(err.message || '创建分支失败'); }
       });
       async function loadEntities() {
         try {

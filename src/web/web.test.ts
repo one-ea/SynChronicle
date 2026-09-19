@@ -396,4 +396,53 @@ describe("WebUI", () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+
+  it("serves arena and branch management endpoints", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "synchronicle-web-arena-"));
+    const output = join(directory, "novel");
+    for (const dir of ["meta", "chapters"]) await mkdir(join(output, dir), { recursive: true });
+    await writeFile(join(output, "chapters", "01.md"), "他拔出长剑，剑尖指向地面。");
+    const configPath = join(directory, "config.json");
+    await writeFile(configPath, JSON.stringify({ provider: "deepseek", model: "deepseek-chat", providers: { deepseek: { base_url: "https://api.deepseek.com/v1", api_key: "secret-key" } }, output_dir: output }));
+    const handle = await startWebServer({ port: 0, configPath });
+    try {
+      // 1. 测试 A/B 竞写接口
+      const arenaRes = await fetch(`http://127.0.0.1:${handle.port}/api/chapters/1/arena`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ modelA: "Claude-3.7", modelB: "DeepSeek-V3" }),
+      });
+      expect(arenaRes.status).toBe(200);
+      const arenaData = (await arenaRes.json()) as { candidateA: unknown; candidateB: unknown; overallWinner: string };
+      expect(arenaData.candidateA).toBeDefined();
+      expect(arenaData.candidateB).toBeDefined();
+      expect(["A", "B", "tie"]).toContain(arenaData.overallWinner);
+
+      // 2. 测试分支创建
+      const branchRes = await fetch(`http://127.0.0.1:${handle.port}/api/chapters/1/branches`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: "alt-ending", name: "平行抉择线", notes: "尝试反转", content: "分支正文：他最终放下了剑。" }),
+      });
+      expect(branchRes.status).toBe(201);
+
+      // 3. 测试分支列表查询
+      const listRes = (await (await fetch(`http://127.0.0.1:${handle.port}/api/chapters/1/branches`)).json()) as { branches: Array<{ name: string }> };
+      expect(listRes.branches).toHaveLength(1);
+      expect(listRes.branches[0]!.name).toBe("平行抉择线");
+
+      // 4. 测试分支切换与合并至主干
+      const checkoutRes = await fetch(`http://127.0.0.1:${handle.port}/api/chapters/1/branches/checkout`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ branchId: "alt-ending" }),
+      });
+      expect(checkoutRes.status).toBe(200);
+      const mainContent = await readFile(join(output, "chapters", "01.md"), "utf8");
+      expect(mainContent).toBe("分支正文：他最终放下了剑。");
+    } finally {
+      await handle.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
 });

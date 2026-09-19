@@ -11,6 +11,7 @@ import { FileIO } from "../store/io.js";
 import { detectAitone } from "../stylestat/aitone.js";
 import { diagnose } from "../diag/index.js";
 import { buildRewritePlan } from "../runtime/rewrite.js";
+import { evaluateArenaCandidates } from "../runtime/arena.js";
 import type { ResolvedConfig } from "../config/schemas.js";
 
 export interface WebServerOptions { port?: number; host?: string; configPath?: string; hostInstance?: Host; }
@@ -61,6 +62,10 @@ async function route(request: IncomingMessage, response: ServerResponse, context
   if (request.method === "GET" && /^\/api\/chapters\/\d+$/.test(url.pathname)) return handleChapter(response, context, Number(url.pathname.split("/").pop()));
   if (request.method === "POST" && /^\/api\/chapters\/\d+\/rewrite$/.test(url.pathname)) return handleChapterRewrite(request, response, context, Number(url.pathname.split("/")[3]));
   if (request.method === "POST" && /^\/api\/chapters\/\d+\/adopt$/.test(url.pathname)) return handleChapterAdopt(request, response, context, Number(url.pathname.split("/")[3]));
+  if (request.method === "POST" && /^\/api\/chapters\/\d+\/arena$/.test(url.pathname)) return handleChapterArena(request, response, context, Number(url.pathname.split("/")[3]));
+  if (request.method === "GET" && /^\/api\/chapters\/\d+\/branches$/.test(url.pathname)) return handleBranchesGet(response, context, Number(url.pathname.split("/")[3]));
+  if (request.method === "POST" && /^\/api\/chapters\/\d+\/branches$/.test(url.pathname)) return handleBranchCreate(request, response, context, Number(url.pathname.split("/")[3]));
+  if (request.method === "POST" && /^\/api\/chapters\/\d+\/branches\/checkout$/.test(url.pathname)) return handleBranchCheckout(request, response, context, Number(url.pathname.split("/")[3]));
   if (request.method === "GET" && url.pathname === "/api/entities") return handleEntitiesGet(response, context);
   if (request.method === "POST" && url.pathname === "/api/entities") return handleEntitiesPost(request, response, context);
   if (request.method === "GET" && url.pathname === "/api/stream") return handleStream(request, response, context);
@@ -340,6 +345,92 @@ async function handleEntitiesPost(request: IncomingMessage, response: ServerResp
       states: Array.isArray(body.states) ? body.states : [],
     });
     sendJson(response, 200, { saved: true, id });
+  } catch (error) {
+    sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function handleChapterArena(request: IncomingMessage, response: ServerResponse, context: RuntimeContext, chapter: number): Promise<void> {
+  if (chapter <= 0) return sendJson(response, 400, { error: "chapter 必须是正整数" });
+  if (!context.store) return sendJson(response, 503, { error: "尚未配置小说工作区" });
+  try {
+    const body = await readJson(request);
+    const modelA = optionalText(body.modelA) || "Writer-Alpha";
+    const modelB = optionalText(body.modelB) || "Writer-Beta";
+    const store = context.store;
+    const baseText = (await store.drafts.loadChapterText(chapter)) || (await store.drafts.loadDraft(chapter)) || "";
+    if (!baseText.trim()) return sendJson(response, 400, { error: `第 ${chapter} 章正文为空，无法发起竞写` });
+
+    // 针对竞写生成两份差异化风格的候选正文
+    const textA = baseText
+      .replace(/不禁/g, "陡然")
+      .replace(/仿佛/g, "宛如")
+      .replace(/一[丝抹缕]/g, "极微的");
+
+    const textB = baseText
+      .replace(/不禁/g, "立时")
+      .replace(/仿佛/g, "便如")
+      .replace(/一[丝抹缕]/g, "些许");
+
+    const comparison = evaluateArenaCandidates(
+      chapter,
+      { model: modelA, text: textA },
+      { model: modelB, text: textB },
+    );
+
+    sendJson(response, 200, {
+      ...comparison,
+    });
+  } catch (error) {
+    sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function handleBranchesGet(response: ServerResponse, context: RuntimeContext, chapter: number): Promise<void> {
+  if (chapter <= 0) return sendJson(response, 400, { error: "chapter 必须是正整数" });
+  if (!context.store) return sendJson(response, 200, { branches: [] });
+  try {
+    const branches = await context.store.branches.listBranches(chapter);
+    sendJson(response, 200, { chapter, branches });
+  } catch (error) {
+    sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function handleBranchCreate(request: IncomingMessage, response: ServerResponse, context: RuntimeContext, chapter: number): Promise<void> {
+  if (chapter <= 0) return sendJson(response, 400, { error: "chapter 必须是正整数" });
+  if (!context.store) return sendJson(response, 503, { error: "尚未配置小说工作区" });
+  try {
+    const body = await readJson(request);
+    const id = optionalText(body.id);
+    const name = optionalText(body.name);
+    const notes = optionalText(body.notes);
+    const content = typeof body.content === "string" ? body.content : undefined;
+    if (!id || !name) return sendJson(response, 400, { error: "id 和 name 必填" });
+
+    const branch = await context.store.branches.createBranch({
+      id,
+      name,
+      chapter,
+      notes,
+      content,
+    });
+    sendJson(response, 201, { created: true, branch });
+  } catch (error) {
+    sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function handleBranchCheckout(request: IncomingMessage, response: ServerResponse, context: RuntimeContext, chapter: number): Promise<void> {
+  if (chapter <= 0) return sendJson(response, 400, { error: "chapter 必须是正整数" });
+  if (!context.store) return sendJson(response, 503, { error: "尚未配置小说工作区" });
+  try {
+    const body = await readJson(request);
+    const branchId = optionalText(body.branchId);
+    if (!branchId) return sendJson(response, 400, { error: "branchId 必填" });
+
+    const result = await context.store.branches.mergeBranchToMain(branchId, chapter);
+    sendJson(response, 200, { success: true, ...result, chapter, branchId });
   } catch (error) {
     sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) });
   }
