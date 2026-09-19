@@ -81,6 +81,19 @@ export function renderWebApp(): string {
       .tabbar button[aria-current="page"] { color: var(--heat-100); background: var(--heat-8); box-shadow: inset 0 0 0 1px var(--heat-20); font-weight: 600; }
       .main { min-width: 0; max-width: 1160px; width: 100%; margin: 0 auto; padding: var(--space-5) var(--space-5) 64px; }
       .page[hidden] { display: none; }
+      .stage-rail { display: flex; align-items: center; gap: 6px; max-width: 1160px; margin: 0 auto; padding: 14px var(--space-5) 0; overflow-x: auto; }
+      .stage-rail .stg { display: inline-flex; align-items: center; padding: 4px 12px; border-radius: 999px; border: 1px solid var(--line); color: var(--faint); font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+      .stage-rail .stg.done { color: var(--success); border-color: rgba(66, 195, 102, .45); }
+      .stage-rail .stg.current { color: var(--heat-100); background: var(--heat-8); border-color: var(--heat-20); }
+      .stage-rail .stg-arrow { color: var(--line-strong); font-size: 11px; flex: none; }
+      .subtabs { display: flex; gap: 4px; margin-bottom: 18px; padding: 3px; border-radius: 12px; background: var(--alpha-4); width: fit-content; }
+      .subtabs button { min-height: 32px; padding: 4px 14px; border: 0; border-radius: 9px; background: transparent; color: var(--muted); font-size: 12.5px; font-weight: 500; }
+      .subtabs button.active { background: var(--paper); color: var(--ink); box-shadow: var(--shadow-sm); font-weight: 600; }
+      .sub[hidden] { display: none; }
+      .queue-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 2px; border-bottom: 1px solid var(--line-faint); font-size: 13px; }
+      .queue-row:last-child { border-bottom: 0; }
+      .queue-row.critical span { color: var(--error); font-weight: 600; }
+      .queue-row.warn span { font-weight: 600; }
       .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-5); flex-wrap: wrap; }
       .page-head h1 { font-size: clamp(20px, 2.2vw, 24px); }
       .page-head .meta { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
@@ -276,31 +289,22 @@ export function renderWebApp(): string {
       </div>
     </header>
     <div id="progress" class="progress" role="progressbar" aria-label="引擎运行中" hidden><span></span></div>
+    <div class="stage-rail" id="stage-rail" aria-label="书的生命周期"></div>
     <div class="admin">
       <aside class="side" aria-label="主导航">
         <div class="side-label">工作区</div>
         <nav class="side-nav">
-          <button type="button" data-view="overview" title="创作概览" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><rect x="13" y="13" width="7" height="7" rx="2"/></svg><span class="nv-t">创作概览</span></button>
-        </nav>
-        <div class="side-label">内容</div>
-        <nav class="side-nav">
-          <button type="button" data-view="studio" title="写作台"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="5" height="15" rx="1.5"/><rect x="9.5" y="4.5" width="5" height="15" rx="1.5"/><path d="M16.5 6l3.2.9-2.9 10.9"/></svg><span class="nv-t">写作台</span></button>
-          <button type="button" data-view="prep" title="创作准备"><span class="nv-t">创作准备</span></button>
-          <button type="button" data-view="reader" title="章节与大纲"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6.2C10.4 4.5 8 4 4 4v13.5c4 0 6.4.5 8 2.3 1.6-1.8 4-2.3 8-2.3V4c-4 0-6.4.5-8 2.2z"/><path d="M12 6.2v13.6"/></svg><span class="nv-t">章节与大纲</span><span class="nav-count" id="nav-count-chapters" hidden></span></button>
-          <button type="button" data-view="entities" title="人物图谱"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="12" cy="18" r="3"/><line x1="8.5" y1="7.5" x2="15.5" y2="7.5"/><line x1="7.5" y1="8.5" x2="10.5" y2="15.5"/><line x1="16.5" y1="8.5" x2="13.5" y2="15.5"/></svg><span class="nv-t">人物图谱</span><span class="nav-count" id="nav-count-entities" hidden></span></button>
-          <button type="button" data-view="records" title="运行记录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h9"/></svg><span class="nv-t">运行记录</span></button>
-        </nav>
-        <div class="side-label">管理</div>
-        <nav class="side-nav">
-          <button type="button" data-view="settings" title="配置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 8h9M17.5 8H20M4 16h3M11.5 16H20"/><circle cx="15" cy="8" r="2.4"/><circle cx="9" cy="16" r="2.4"/></svg><span class="nv-t">配置</span></button>
+          <button type="button" data-view="cockpit" title="驾驶台" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><rect x="13" y="13" width="7" height="7" rx="2"/></svg><span class="nv-t">驾驶台</span></button>
+          <button type="button" data-view="manuscript" title="书稿"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6.2C10.4 4.5 8 4 4 4v13.5c4 0 6.4.5 8 2.3 1.6-1.8 4-2.3 8-2.3V4c-4 0-6.4.5-8 2.2z"/><path d="M12 6.2v13.6"/></svg><span class="nv-t">书稿</span><span class="nav-count" id="nav-count-chapters" hidden></span></button>
+          <button type="button" data-view="world" title="设定库"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.7 3.8 9S14.5 18.4 12 21c-2.5-2.6-3.8-5.7-3.8-9S9.5 5.6 12 3z"/></svg><span class="nv-t">设定库</span><span class="nav-count" id="nav-count-entities" hidden></span></button>
+          <button type="button" data-view="system" title="系统"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h9M17.5 8H20M4 16h3M11.5 16H20"/><circle cx="15" cy="8" r="2.4"/><circle cx="9" cy="16" r="2.4"/></svg><span class="nv-t">系统</span></button>
         </nav>
         <div class="side-foot">Local runtime<br />作品、配置与运行记录均保存在本机。</div>
       </aside>
       <main class="main">
-        <div id="advice-bar" aria-live="polite"></div>
-        <section class="page" data-page="overview" aria-label="创作概览">
+        <section class="page" data-page="cockpit" aria-label="驾驶台">
           <div class="page-head">
-            <div><h1>创作概览</h1><p class="meta">从一个 brief 开始，持续推进你的故事。</p></div>
+            <div><h1>驾驶台</h1><p class="meta">一本书的完整流水线：准备、前提大纲、逐章写作、完本与发布。</p></div>
             <div class="head-actions" id="runtime-actions" hidden><button id="resume" class="btn btn-tonal" type="button">恢复上一轮</button><button id="new-run" class="btn btn-text" type="button">新建 brief</button></div>
           </div>
           <div class="stat-row">
@@ -309,8 +313,16 @@ export function renderWebApp(): string {
             <div class="stat-split"><div class="stat-top">输入 tokens<code>prompt</code></div><b id="input">0</b></div>
             <div class="stat-split"><div class="stat-top">输出 tokens<code>output</code></div><b id="output">0</b></div>
           </div>
-          <div class="card" style="margin-bottom:20px"><div class="panel-head"><h3>进化引擎</h3><button class="btn btn-text" id="evolution-distill" type="button">蒸馏经验</button></div><div class="rowlines" id="evolution-list"><div class="empty">暂无跨章经验。</div></div></div>
-          <div class="card" style="margin-bottom:20px"><div class="panel-head"><h3>发布到书城</h3><span>公开阅读</span></div><div class="form-row"><input id="publish-title" placeholder="书名" /><input id="publish-tags" placeholder="标签，逗号分隔" /></div><textarea id="publish-synopsis" placeholder="作品简介" style="width:100%;margin-top:12px"></textarea><select id="publish-visibility"><option value="public">公开</option><option value="unlisted">仅链接</option><option value="private">私密</option></select><button class="btn btn-filled" id="publish-submit" type="button">发布 / 更新</button></div>
+          <div class="card" id="decision-card" style="margin-bottom:20px">
+            <div class="panel-head"><h3>待决策</h3><span id="queue-count">0 项</span></div>
+            <div id="advice-bar" aria-live="polite"></div>
+            <div id="ap-checkpoint" hidden>
+              <div class="tf" style="margin-top:10px"><textarea id="ap-proposal" style="min-height:110px;font-size:12.5px" readonly></textarea><label for="ap-proposal">AI 提案（可全选复制）</label></div>
+              <div class="tf" style="margin-top:8px"><textarea id="ap-tweak" style="min-height:56px" placeholder=" "></textarea><label for="ap-tweak">微调意见（留空直接放行；前提阶段微调将覆写前提）</label></div>
+              <div class="actions" style="margin-top:10px"><small id="ap-hint">检查点等待中。</small><div style="display:flex;gap:8px"><button id="ap-tweak-btn" class="btn btn-tonal" type="button" style="min-height:32px;font-size:12px">提交微调并继续</button><button id="ap-proceed" class="btn btn-filled" type="button" style="min-height:32px;font-size:12px">直接放行</button></div></div>
+            </div>
+            <div class="empty" id="queue-clear" hidden>自动驾驶未启动。</div>
+          </div>
           <div class="grid">
             <section class="stack">
               <div class="card hero">
@@ -329,106 +341,20 @@ export function renderWebApp(): string {
               <div class="card" id="autopilot-card">
                 <div class="panel-head"><h3 class="section-title" style="margin:0">自动驾驶</h3><span id="ap-phase" class="pill muted">未启动</span></div>
                 <div class="rowlines" id="ap-stats" hidden></div>
-                <div id="ap-checkpoint" hidden>
-                  <div class="tf" style="margin-top:10px"><textarea id="ap-proposal" style="min-height:110px;font-size:12.5px" readonly></textarea><label for="ap-proposal">AI 提案（可全选复制）</label></div>
-                  <div class="tf" style="margin-top:8px"><textarea id="ap-tweak" style="min-height:56px" placeholder=" "></textarea><label for="ap-tweak">微调意见（留空直接放行；前提阶段微调将覆写前提）</label></div>
-                  <div class="actions" style="margin-top:10px"><small id="ap-hint">检查点等待中。</small><div style="display:flex;gap:8px"><button id="ap-tweak-btn" class="btn btn-tonal" type="button" style="min-height:32px;font-size:12px">提交微调并继续</button><button id="ap-proceed" class="btn btn-filled" type="button" style="min-height:32px;font-size:12px">直接放行</button></div></div>
-                </div>
                 <div class="form-row" style="margin-top:10px" id="ap-launcher">
                   <div class="tf"><input id="ap-idea" placeholder=" " /><label for="ap-idea">一句话想法（AI 全程接管）</label></div>
                   <div class="tf"><input id="ap-params" placeholder=" " value="75分 / 重写2次 / 两站检查点" /><label for="ap-params">门禁参数（分数/重写/检查点）</label></div>
                 </div>
                 <div class="actions" style="margin-top:10px" id="ap-controls"><small>前提/大纲两站微调，其余全自动：写作→编辑打分→达标采纳。</small><div style="display:flex;gap:8px"><button id="ap-start" class="btn btn-filled" type="button" style="min-height:32px;font-size:12px">开启自动驾驶</button><button id="ap-pause" class="btn btn-tonal" type="button" style="min-height:32px;font-size:12px" hidden>暂停</button><button id="ap-resume" class="btn btn-text" type="button" style="min-height:32px;font-size:12px" hidden>继续</button></div></div>
               </div>
-              <div class="card">
-                <h3 class="section-title">连接引擎</h3>
-                <form id="settings" class="form-grid" data-testid="config-form">
-                  <div>
-                    <label class="helper" style="margin:0 0 6px 2px;font-size:12px;color:var(--muted)">接口协议类型</label>
-                    <div class="seg" role="radiogroup" aria-label="协议类型">
-                      <label><input type="radio" name="protocol-type" value="openai" checked /><span>OpenAI 兼容</span></label>
-                      <label><input type="radio" name="protocol-type" value="anthropic" /><span>Anthropic</span></label>
-                      <label><input type="radio" name="protocol-type" value="google" /><span>Gemini</span></label>
-                    </div>
-                  </div>
-                  <div class="form-row">
-                    <div>
-                      <div class="tf"><input id="base-url" placeholder=" " required /><label for="base-url">接口地址 (Base URL)</label></div>
-                      <small class="helper">如 https://api.openai.com/v1 或中转端点</small>
-                    </div>
-                    <div>
-                      <div class="tf"><input id="api-key" type="password" placeholder=" " /><label for="api-key">API Key</label></div>
-                      <small class="helper">密钥仅保存在本机</small>
-                    </div>
-                  </div>
-                  <div>
-                    <div class="tf"><input id="model-input" placeholder=" " required /><label for="model-input">模型名称 (Model)</label></div>
-                    <small class="helper">如 gpt-4o, claude-3-7-sonnet, deepseek-chat, gemini-2.5-flash</small>
-                  </div>
-                  <div class="actions"><small>保存后即可开始创作。</small><button class="btn btn-tonal" type="submit">保存连接配置</button></div>
-                </form>
-              </div>
-              <div class="card">
-                <h3 class="section-title">导入与导出</h3>
-                <div class="form-grid">
-                  <div class="seg" role="radiogroup" aria-label="导出格式">
-                    <label><input type="radio" name="export-format" value="txt" checked /><span>TXT</span></label>
-                    <label><input type="radio" name="export-format" value="epub" /><span>EPUB</span></label>
-                  </div>
-                  <div class="actions"><small>导出全部已完成章节到作品目录。</small><button id="export-run" class="btn btn-tonal" type="button">导出全书</button></div>
-                  <div class="tf"><input id="import-path" placeholder=" " /><label for="import-path">导入文件路径（本机绝对路径）</label></div>
-                  <div class="actions"><small>按「第 N 章」标记切分并反推入库。</small><button id="import-run" class="btn btn-tonal" type="button">从文件导入</button></div>
-                </div>
-              </div>
             </section>
             <aside class="stack">
-              <div class="card">
-                <div class="panel-head"><h3>项目宪法</h3><span id="constitution-count">0 条</span></div>
-                <div class="rowlines" id="constitution-rows"><div class="empty">尚未设置锁定规则。</div></div>
-                <div class="form-row" style="margin-top:10px">
-                  <div class="tf"><input id="constitution-rule" placeholder=" " /><label for="constitution-rule">新增规则（世界/代价/禁写）</label></div>
-                  <div class="tf"><input id="constitution-secret" placeholder=" " /><label for="constitution-secret">秘密|揭晓时点</label></div>
-                </div>
-                <div class="actions" style="margin-top:10px"><small>宪法自动注入每轮生成提示词。</small><button id="constitution-add" class="btn btn-tonal" type="button">添加</button></div>
-              </div>
-              <div class="card">
-                <div class="panel-head"><h3>设定检索</h3><span id="recall-engine">RAG</span></div>
-                <div class="steer-row"><div class="tf"><input id="recall-query" placeholder=" " /><label for="recall-query">检索设定 / 伏笔 / 摘要</label></div><button id="recall-run" class="btn btn-tonal" type="button">检索</button></div>
-                <div class="rowlines" id="recall-results" style="margin-top:8px"><div class="empty">输入关键词检索实体图谱、章节摘要与伏笔线索。</div></div>
-                <div class="actions" style="margin-top:10px"><small>把检索结果注入下一轮生成上下文。</small><button id="recall-inject" class="btn btn-text" type="button" hidden>注入上下文</button></div>
-              </div>
-              <div class="card">
-                <div class="panel-head"><h3>成本预估</h3><span id="cost-model">—</span></div>
-                <div class="rowlines" id="cost-rows"><div class="empty">尚未配置模型。</div></div>
-              </div>
-              <div class="card">
-                <div class="panel-head"><h3>素材库</h3><span id="material-count">0 条</span></div>
-                <div class="seg" role="radiogroup" aria-label="素材类型">
-                  <label><input type="radio" name="material-type" value="line" checked /><span>桥段</span></label>
-                  <label><input type="radio" name="material-type" value="setting" /><span>设定</span></label>
-                  <label><input type="radio" name="material-type" value="trope" /><span>套路</span></label>
-                  <label><input type="radio" name="material-type" value="other" /><span>其他</span></label>
-                </div>
-                <div class="tf" style="margin-top:10px"><input id="material-title" placeholder=" " /><label for="material-title">素材标题</label></div>
-                <div class="tf" style="margin-top:8px"><textarea id="material-content" style="min-height:64px" placeholder=" "></textarea><label for="material-content">素材内容（桥段/设定/金句）</label></div>
-                <div class="actions" style="margin-top:10px"><small>素材会进入设定检索语料。</small><button id="material-save" class="btn btn-tonal" type="button">保存素材</button></div>
-                <div class="rowlines" id="material-list" style="margin-top:6px"><div class="empty">暂无素材。</div></div>
-              </div>
-              <div class="card">
-                <div class="panel-head"><h3>书架（多书管理）</h3><span id="bookshelf-count">0 本</span></div>
-                <div class="rowlines" id="bookshelf-rows"><div class="empty">尚未配置模型，先连接引擎。</div></div>
-                <div class="steer-row" style="margin-top:10px"><div class="tf"><input id="new-book-title" placeholder=" " /><label for="new-book-title">新书名（独立工作区）</label></div><button id="book-create" class="btn btn-tonal" type="button">新建书</button></div>
-              </div>
-              <div class="card">
-                <div class="panel-head"><h3>技能包市场</h3><span id="skillpack-count">0 启用</span></div>
-                <div class="rowlines" id="skillpack-rows"><div class="empty">尚未配置模型，先连接引擎。</div></div>
-                <div class="tf" style="margin-top:10px"><input id="skillpack-name" placeholder=" " /><label for="skillpack-name">自定义包名称</label></div>
-                <div class="tf" style="margin-top:8px"><textarea id="skillpack-techniques" style="min-height:64px" placeholder=" "></textarea><label for="skillpack-techniques">写作技法（每行一条）</label></div>
-                <div class="actions" style="margin-top:10px"><small>启用的技法随宪法注入每轮生成。</small><button id="skillpack-create" class="btn btn-tonal" type="button">创建自定义包</button></div>
-              </div>
-              <div class="card">
-                <div class="panel-head"><h3>本书内容</h3><span id="book-phase">—</span></div>
-                <div class="rowlines" id="book-rows"><div class="empty">尚未配置模型，先连接引擎。</div></div>
+              <div class="card" id="prep-card">
+                <div class="panel-head"><h3>创作准备</h3><span id="prep-stage">—</span></div>
+                <div class="feed" id="prep-messages" style="max-height:220px"><div class="empty">新建会话后开始对话，轮数由你决定，全程留痕。</div></div>
+                <div class="steer-row" style="margin-top:10px"><input id="prep-input" placeholder="说说你的想法" /><button class="btn btn-filled" id="prep-send" type="button">发送</button></div>
+                <div class="actions" style="margin-top:8px"><button id="prep-new" class="btn btn-text" type="button">新建会话</button><button class="btn btn-tonal" id="prep-advance" type="button">进入下一阶段</button><button class="btn btn-filled" id="prep-confirm" type="button" hidden>确认结束并蒸馏</button><button class="btn btn-text" id="prep-autopilot" type="button" hidden>交给自动驾驶</button></div>
+                <div id="prep-list" class="rowlines" style="margin-top:6px"></div>
               </div>
               <div class="card" id="live-card" hidden>
                 <div class="panel-head"><h3>正在书写</h3><span id="live-state">生成中</span></div>
@@ -438,15 +364,19 @@ export function renderWebApp(): string {
                 <div class="panel-head"><h3>最近活动</h3><span id="event-count">0 条</span></div>
                 <div id="feed" class="feed" role="log" aria-live="polite"><div class="empty">暂无运行记录。</div></div>
               </div>
-              <div class="card" id="user-admin" hidden>
-                <div class="panel-head"><h3>用户管理</h3><span>admin</span></div>
-                <form id="user-create" class="form-grid"><input id="user-name" placeholder="新用户名" minlength="2" maxlength="32" required /><input id="user-password" type="password" placeholder="初始密码（至少 8 位）" minlength="8" required /><button class="btn btn-tonal" type="submit">创建 writer</button></form>
-                <div class="rowlines" id="user-list"></div>
-              </div>
             </aside>
           </div>
         </section>
-        <section class="page" data-page="reader" aria-label="章节与大纲" hidden>
+        <section class="page" data-page="manuscript" aria-label="书稿" hidden>
+          <div class="page-head">
+            <div><h1>书稿</h1><p class="meta">写作台、章节大纲与运行记录——正文相关的一切。</p></div>
+          </div>
+          <div class="subtabs" role="tablist" aria-label="书稿视图">
+            <button type="button" data-sub-view="studio" class="active">写作台</button>
+            <button type="button" data-sub-view="reader">章节与大纲</button>
+            <button type="button" data-sub-view="records">记录与反思</button>
+          </div>
+          <div class="sub" data-sub="reader" hidden>
           <div class="page-head"><div><h1>章节与大纲</h1><p class="meta">卷弧章三层结构与章节质量详情。</p></div><div class="head-actions"><button id="reader-review-btn" class="btn btn-tonal" type="button">读者评审</button><button id="golden-btn" class="btn btn-tonal" type="button">黄金三章</button><button id="platform-btn" class="btn btn-tonal" type="button">平台责编</button><button id="editor-btn" class="btn btn-tonal" type="button">编辑审稿</button><button id="brainstorm-btn" class="btn btn-tonal" type="button">脑暴</button><button id="deconstruct-btn" class="btn btn-tonal" type="button">拆书分析</button></div></div>
           <div id="reader-review-panel" class="card" style="margin-bottom:18px;background:var(--alpha-4);border:1px dashed var(--line);" hidden>
             <div class="panel-head"><h4 style="margin:0">读者模拟评分与对抗评审</h4><span id="review-avg">—</span></div>
@@ -569,8 +499,8 @@ export function renderWebApp(): string {
               <div id="ch-text" class="chapter-text"><div class="empty">章节正文将在这里展示。</div></div>
             </article>
           </div>
-        </section>
-        <section class="page" data-page="studio" aria-label="写作台" hidden>
+        </div>
+        <div class="sub" data-sub="studio" hidden>
           <div class="page-head">
             <div><h1>三栏写作台</h1><p class="meta">目录 · 正文 · 工具同屏，编辑即归档版本。</p></div>
             <div class="head-actions"><span id="studio-book-name" class="meta">—</span></div>
@@ -603,10 +533,30 @@ export function renderWebApp(): string {
               </div>
             </aside>
           </div>
+        </div>
+        <div class="sub" data-sub="records" hidden>
+          <div class="card" style="margin-bottom:18px"><div class="panel-head"><h3>进化引擎</h3><button class="btn btn-text" id="evolution-distill" type="button">蒸馏经验</button></div><div class="rowlines" id="evolution-list"><div class="empty">暂无跨章经验。</div></div></div>
+          <div class="page-head"><div><h1>运行记录</h1><p class="meta">事件时间线与运行诊断。</p></div></div>
+          <div class="stack">
+            <div class="card">
+              <div class="panel-head"><h3>事件时间线</h3><span id="tl-count">0 条</span></div>
+              <div id="timeline" class="feed tall" role="log" aria-live="polite"><div class="empty">暂无事件。</div></div>
+            </div>
+            <div class="card">
+              <div class="panel-head"><h3>运行诊断</h3><span id="diag-count"></span></div>
+              <div style="display:flex;gap:8px;margin-bottom:6px"><button id="diag-run" class="btn btn-tonal" type="button" style="min-height:34px">运行诊断</button></div>
+              <div class="rowlines" id="diag-findings"><div class="empty">点击「运行诊断」检查工件完整性与节奏红线。</div></div>
+            </div>
+            <div class="card">
+              <div class="panel-head"><h3>反思候选</h3><span id="reflection-count"></span></div>
+              <div class="rowlines" id="reflection-list"><div class="empty">暂无反思暂存会话——创作运行后会在这里展示各轮候选。</div></div>
+            </div>
+          </div>
+        </div>
         </section>
-        <section class="page" data-page="entities" aria-label="人物图谱" hidden>
+        <section class="page" data-page="world" aria-label="设定库" hidden>
           <div class="page-head">
-            <div><h1>人物与势力图谱</h1><p class="meta">追踪出场角色性格羁绊、势力归属与心境动态弧度。</p></div>
+            <div><h1>设定库</h1><p class="meta">人物势力、项目宪法、素材与技能包——注入每轮生成的全部设定。</p></div>
             <div class="head-actions"><label class="btn btn-text" for="card-file-input" style="cursor:pointer">导入角色卡</label><input id="card-file-input" type="file" accept="image/png" hidden /><button id="add-entity-btn" class="btn btn-tonal" type="button">新建人物/势力</button></div>
           </div>
           <div id="add-entity-modal" class="card" style="margin-bottom:16px;border:1px dashed var(--line)" hidden>
@@ -642,36 +592,54 @@ export function renderWebApp(): string {
                 <div class="steer-row"><div class="tf"><input id="chat-input" placeholder=" " /><label for="chat-input">对角色说话…</label></div><button id="chat-send" class="btn btn-filled" type="button" style="min-height:36px;font-size:12px">发送</button></div>
                 <div class="actions" style="margin-top:8px"><small>应答由实体卡驱动；提示词可复制给任意对话模型。</small><button id="chat-copy-prompt" class="btn btn-text" type="button">复制提示词</button></div>
               </div>
+              <div class="card">
+                <div class="panel-head"><h3>项目宪法</h3><span id="constitution-count">0 条</span></div>
+                <div class="rowlines" id="constitution-rows"><div class="empty">尚未设置锁定规则。</div></div>
+                <div class="form-row" style="margin-top:10px">
+                  <div class="tf"><input id="constitution-rule" placeholder=" " /><label for="constitution-rule">新增规则（世界/代价/禁写）</label></div>
+                  <div class="tf"><input id="constitution-secret" placeholder=" " /><label for="constitution-secret">秘密|揭晓时点</label></div>
+                </div>
+                <div class="actions" style="margin-top:10px"><small>宪法自动注入每轮生成提示词。</small><button id="constitution-add" class="btn btn-tonal" type="button">添加</button></div>
+              </div>
             </section>
             <aside class="stack">
               <div class="card">
                 <div class="panel-head"><h3>关系网络 & 羁绊</h3><span id="relations-count">0 条</span></div>
                 <div class="rowlines" id="relations-list"><div class="empty">暂无关系连线。</div></div>
               </div>
+              <div class="card">
+                <div class="panel-head"><h3>技能包市场</h3><span id="skillpack-count">0 启用</span></div>
+                <div class="rowlines" id="skillpack-rows"><div class="empty">尚未配置模型，先连接引擎。</div></div>
+                <div class="tf" style="margin-top:10px"><input id="skillpack-name" placeholder=" " /><label for="skillpack-name">自定义包名称</label></div>
+                <div class="tf" style="margin-top:8px"><textarea id="skillpack-techniques" style="min-height:64px" placeholder=" "></textarea><label for="skillpack-techniques">写作技法（每行一条）</label></div>
+                <div class="actions" style="margin-top:10px"><small>启用的技法随宪法注入每轮生成。</small><button id="skillpack-create" class="btn btn-tonal" type="button">创建自定义包</button></div>
+              </div>
+              <div class="card">
+                <div class="panel-head"><h3>素材库</h3><span id="material-count">0 条</span></div>
+                <div class="seg" role="radiogroup" aria-label="素材类型">
+                  <label><input type="radio" name="material-type" value="line" checked /><span>桥段</span></label>
+                  <label><input type="radio" name="material-type" value="setting" /><span>设定</span></label>
+                  <label><input type="radio" name="material-type" value="trope" /><span>套路</span></label>
+                  <label><input type="radio" name="material-type" value="other" /><span>其他</span></label>
+                </div>
+                <div class="tf" style="margin-top:10px"><input id="material-title" placeholder=" " /><label for="material-title">素材标题</label></div>
+                <div class="tf" style="margin-top:8px"><textarea id="material-content" style="min-height:64px" placeholder=" "></textarea><label for="material-content">素材内容（桥段/设定/金句）</label></div>
+                <div class="actions" style="margin-top:10px"><small>素材会进入设定检索语料。</small><button id="material-save" class="btn btn-tonal" type="button">保存素材</button></div>
+                <div class="rowlines" id="material-list" style="margin-top:6px"><div class="empty">暂无素材。</div></div>
+              </div>
+              <div class="card">
+                <div class="panel-head"><h3>设定检索</h3><span id="recall-engine">RAG</span></div>
+                <div class="steer-row"><div class="tf"><input id="recall-query" placeholder=" " /><label for="recall-query">检索设定 / 伏笔 / 摘要</label></div><button id="recall-run" class="btn btn-tonal" type="button">检索</button></div>
+                <div class="rowlines" id="recall-results" style="margin-top:8px"><div class="empty">输入关键词检索实体图谱、章节摘要与伏笔线索。</div></div>
+                <div class="actions" style="margin-top:10px"><small>把检索结果注入下一轮生成上下文。</small><button id="recall-inject" class="btn btn-text" type="button" hidden>注入上下文</button></div>
+              </div>
             </aside>
           </div>
         </section>
-        <section class="page" data-page="records" aria-label="运行记录" hidden>
-          <div class="page-head"><div><h1>运行记录</h1><p class="meta">事件时间线与运行诊断。</p></div></div>
-          <div class="stack">
-            <div class="card">
-              <div class="panel-head"><h3>事件时间线</h3><span id="tl-count">0 条</span></div>
-              <div id="timeline" class="feed tall" role="log" aria-live="polite"><div class="empty">暂无事件。</div></div>
-            </div>
-            <div class="card">
-              <div class="panel-head"><h3>运行诊断</h3><span id="diag-count"></span></div>
-              <div style="display:flex;gap:8px;margin-bottom:6px"><button id="diag-run" class="btn btn-tonal" type="button" style="min-height:34px">运行诊断</button></div>
-              <div class="rowlines" id="diag-findings"><div class="empty">点击「运行诊断」检查工件完整性与节奏红线。</div></div>
-            </div>
-            <div class="card">
-              <div class="panel-head"><h3>反思候选</h3><span id="reflection-count"></span></div>
-              <div class="rowlines" id="reflection-list"><div class="empty">暂无反思暂存会话——创作运行后会在这里展示各轮候选。</div></div>
-            </div>
-          </div>
-        </section>
-        <section class="page" data-page="settings" aria-label="配置" hidden>
-          <div class="page-head"><div><h1>配置</h1><p class="meta">模型与运行参数管理（密钥仅显示是否已设置）。</p></div></div>
+        <section class="page" data-page="system" aria-label="系统" hidden>
+          <div class="page-head"><div><h1>系统</h1><p class="meta">模型连接、书籍管理、发布与账号。</p></div></div>
           <div class="grid">
+            <section class="stack">
             <div class="card">
               <h3 class="section-title">核心配置</h3>
               <form id="settings-form" class="form-grid">
@@ -684,27 +652,84 @@ export function renderWebApp(): string {
                 <div class="actions"><small>保存前会做完整校验，失败保持原值。</small><button class="btn btn-tonal" type="submit">保存配置</button></div>
               </form>
             </div>
+              <div class="card">
+                <h3 class="section-title">连接引擎</h3>
+                <form id="settings" class="form-grid" data-testid="config-form">
+                  <div>
+                    <label class="helper" style="margin:0 0 6px 2px;font-size:12px;color:var(--muted)">接口协议类型</label>
+                    <div class="seg" role="radiogroup" aria-label="协议类型">
+                      <label><input type="radio" name="protocol-type" value="openai" checked /><span>OpenAI 兼容</span></label>
+                      <label><input type="radio" name="protocol-type" value="anthropic" /><span>Anthropic</span></label>
+                      <label><input type="radio" name="protocol-type" value="google" /><span>Gemini</span></label>
+                    </div>
+                  </div>
+                  <div class="form-row">
+                    <div>
+                      <div class="tf"><input id="base-url" placeholder=" " required /><label for="base-url">接口地址 (Base URL)</label></div>
+                      <small class="helper">如 https://api.openai.com/v1 或中转端点</small>
+                    </div>
+                    <div>
+                      <div class="tf"><input id="api-key" type="password" placeholder=" " /><label for="api-key">API Key</label></div>
+                      <small class="helper">密钥仅保存在本机</small>
+                    </div>
+                  </div>
+                  <div>
+                    <div class="tf"><input id="model-input" placeholder=" " required /><label for="model-input">模型名称 (Model)</label></div>
+                    <small class="helper">如 gpt-4o, claude-3-7-sonnet, deepseek-chat, gemini-2.5-flash</small>
+                  </div>
+                  <div class="actions"><small>保存后即可开始创作。</small><button class="btn btn-tonal" type="submit">保存连接配置</button></div>
+                </form>
+              </div>
+              <div class="card">
+                <h3 class="section-title">导入与导出</h3>
+                <div class="form-grid">
+                  <div class="seg" role="radiogroup" aria-label="导出格式">
+                    <label><input type="radio" name="export-format" value="txt" checked /><span>TXT</span></label>
+                    <label><input type="radio" name="export-format" value="epub" /><span>EPUB</span></label>
+                  </div>
+                  <div class="actions"><small>导出全部已完成章节到作品目录。</small><button id="export-run" class="btn btn-tonal" type="button">导出全书</button></div>
+                  <div class="tf"><input id="import-path" placeholder=" " /><label for="import-path">导入文件路径（本机绝对路径）</label></div>
+                  <div class="actions"><small>按「第 N 章」标记切分并反推入库。</small><button id="import-run" class="btn btn-tonal" type="button">从文件导入</button></div>
+                </div>
+              </div>
+            </section>
             <aside class="stack">
               <div class="card">
                 <div class="panel-head"><h3>当前生效</h3><span id="settings-state">未加载</span></div>
                 <div class="rowlines" id="settings-view"><div class="empty">加载中…</div></div>
               </div>
+              <div class="card">
+                <div class="panel-head"><h3>书架（多书管理）</h3><span id="bookshelf-count">0 本</span></div>
+                <div class="rowlines" id="bookshelf-rows"><div class="empty">尚未配置模型，先连接引擎。</div></div>
+                <div class="steer-row" style="margin-top:10px"><div class="tf"><input id="new-book-title" placeholder=" " /><label for="new-book-title">新书名（独立工作区）</label></div><button id="book-create" class="btn btn-tonal" type="button">新建书</button></div>
+              </div>
+              <div class="card">
+                <div class="panel-head"><h3>本书内容</h3><span id="book-phase">—</span></div>
+                <div class="rowlines" id="book-rows"><div class="empty">尚未配置模型，先连接引擎。</div></div>
+              </div>
+              <div class="card">
+                <div class="panel-head"><h3>发布到书城</h3><span>公开阅读</span></div>
+                <div class="form-row"><input id="publish-title" placeholder="书名" /><input id="publish-tags" placeholder="标签，逗号分隔" /></div><textarea id="publish-synopsis" placeholder="作品简介" style="width:100%;margin-top:12px"></textarea><select id="publish-visibility"><option value="public">公开</option><option value="unlisted">仅链接</option><option value="private">私密</option></select><button class="btn btn-filled" id="publish-submit" type="button">发布 / 更新</button>
+              </div>
+              <div class="card" id="user-admin" hidden>
+                <div class="panel-head"><h3>用户管理</h3><span>admin</span></div>
+                <form id="user-create" class="form-grid"><input id="user-name" placeholder="新用户名" minlength="2" maxlength="32" required /><input id="user-password" type="password" placeholder="初始密码（至少 8 位）" minlength="8" required /><button class="btn btn-tonal" type="submit">创建 writer</button></form>
+                <div class="rowlines" id="user-list"></div>
+              </div>
+              <div class="card">
+                <div class="panel-head"><h3>成本预估</h3><span id="cost-model">—</span></div>
+                <div class="rowlines" id="cost-rows"><div class="empty">尚未配置模型。</div></div>
+              </div>
             </aside>
           </div>
-        </section>
-        <section class="page" data-page="prep" aria-label="创作准备" hidden>
-          <div class="page-head"><div><h1>创作准备</h1><p class="meta">轮数由你决定，全部对话会持续留痕。</p></div><button class="btn btn-tonal" id="prep-new" type="button">新建会话</button></div>
-          <div class="grid"><div class="card"><div class="feed tall" id="prep-messages"><div class="empty">新建会话后开始对话。</div></div><div class="steer-row"><input id="prep-input" placeholder="说说你的想法" /><button class="btn btn-filled" id="prep-send" type="button">发送</button></div></div><aside class="stack"><div class="card"><div class="panel-head"><h3>阶段</h3><span id="prep-stage">—</span></div><button class="btn btn-tonal" id="prep-advance" type="button">进入下一阶段</button><button class="btn btn-filled" id="prep-confirm" type="button" hidden>确认结束并蒸馏</button><button class="btn btn-text" id="prep-autopilot" type="button" hidden>交给自动驾驶</button></div><div class="card"><div id="prep-list" class="rowlines"></div></div></aside></div>
         </section>
       </main>
     </div>
     <nav class="tabbar" aria-label="移动端主导航">
-      <button type="button" data-view="overview" title="创作概览"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><rect x="13" y="13" width="7" height="7" rx="2"/></svg><span>概览</span></button>
-      <button type="button" data-view="studio" title="写作台"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="5" height="15" rx="1.5"/><rect x="9.5" y="4.5" width="5" height="15" rx="1.5"/><path d="M16.5 6l3.2.9-2.9 10.9"/></svg><span>写作台</span></button>
-      <button type="button" data-view="reader" title="章节与大纲"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6.2C10.4 4.5 8 4 4 4v13.5c4 0 6.4.5 8 2.3 1.6-1.8 4-2.3 8-2.3V4c-4 0-6.4.5-8 2.2z"/><path d="M12 6.2v13.6"/></svg><span>章节</span></button>
-      <button type="button" data-view="entities" title="人物图谱"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="12" cy="18" r="3"/><line x1="8.5" y1="7.5" x2="15.5" y2="7.5"/><line x1="7.5" y1="8.5" x2="10.5" y2="15.5"/><line x1="16.5" y1="8.5" x2="13.5" y2="15.5"/></svg><span>图谱</span></button>
-      <button type="button" data-view="records" title="运行记录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h9"/></svg><span>记录</span></button>
-      <button type="button" data-view="settings" title="配置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 8h9M17.5 8H20M4 16h3M11.5 16H20"/><circle cx="15" cy="8" r="2.4"/><circle cx="9" cy="16" r="2.4"/></svg><span>配置</span></button>
+      <button type="button" data-view="cockpit" title="驾驶台"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><rect x="13" y="13" width="7" height="7" rx="2"/></svg><span>驾驶台</span></button>
+      <button type="button" data-view="manuscript" title="书稿"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6.2C10.4 4.5 8 4 4 4v13.5c4 0 6.4.5 8 2.3 1.6-1.8 4-2.3 8-2.3V4c-4 0-6.4.5-8 2.2z"/><path d="M12 6.2v13.6"/></svg><span>书稿</span></button>
+      <button type="button" data-view="world" title="设定库"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.7 3.8 9S14.5 18.4 12 21c-2.5-2.6-3.8-5.7-3.8-9S9.5 5.6 12 3z"/></svg><span>设定</span></button>
+      <button type="button" data-view="system" title="系统"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h9M17.5 8H20M4 16h3M11.5 16H20"/><circle cx="15" cy="8" r="2.4"/><circle cx="9" cy="16" r="2.4"/></svg><span>系统</span></button>
     </nav>
     <div id="notice" role="alert"></div>
     <script>
@@ -742,7 +767,15 @@ export function renderWebApp(): string {
       $('auth-form').addEventListener('submit', async (event) => { event.preventDefault(); const submit = $('auth-submit'); submit.disabled = true; try { const response = await fetch('/api/auth/' + authMode, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: $('auth-name').value.trim(), password: $('auth-password').value }) }); const data = await response.json(); if (!response.ok) { if (response.status === 401 && authMode === 'login') { const setup = await fetch('/api/auth/setup', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: $('auth-name').value.trim(), password: $('auth-password').value }) }); if (setup.status === 201) { $('auth-title').textContent = '管理员已初始化'; $('auth-copy').textContent = '再次提交即可登录控制台。'; return; } } throw new Error(data.error || '认证失败'); } $('auth-gate').hidden = true; await detectAuth(); await refresh(); } catch (error) { showNotice(error.message || '认证失败'); } finally { submit.disabled = false; } });
       void detectAuth();
       function applyStatus(data) { currentState = data.snapshot?.runtimeState || (data.configured ? 'idle' : 'setup'); const ready = Boolean(data.configured); const active = currentState === 'running'; const status = $('runtime-status'); status.dataset.state = data.error ? 'error' : currentState; status.querySelector('span').textContent = data.error ? '服务异常' : (stateLabels[currentState] || currentState); $('progress').hidden = !active; $('state').textContent = currentState; $('state').dataset.state = currentState; $('model').textContent = data.snapshot?.model || '—'; $('input').textContent = formatNumber(data.snapshot?.usage?.inputTokens); $('output').textContent = formatNumber(data.snapshot?.usage?.outputTokens); $('prompt').disabled = !ready || active || currentState === 'closed'; $('run').disabled = !ready || active || currentState === 'closed'; $('run').textContent = active ? '创作进行中…' : currentState === 'paused' ? '继续创作' : '开始创作'; $('steering-panel').classList.toggle('show', ready); $('runtime-actions').hidden = !ready || !['paused', 'completed'].includes(currentState); $('resume').hidden = currentState !== 'paused'; if (!active) $('live-state').textContent = '本轮已完成'; if (data.events) { eventsBuf = data.events; renderEvents(eventsBuf); } }
-      function renderAdvice(items) { const target = $('advice-bar'); if (!target) return; target.replaceChildren(); for (const item of items || []) { const row = document.createElement('div'); row.className = 'announce'; const text = document.createElement('span'); text.textContent = item.message; const dismiss = document.createElement('button'); dismiss.className = 'btn btn-text'; dismiss.type = 'button'; dismiss.textContent = '忽略'; dismiss.addEventListener('click', async () => { await post('/api/advice/dismiss', { id: item.id }); row.remove(); }); row.append(text, dismiss); target.append(row); } }
+      function renderAdvice(items) { const target = $('advice-bar'); if (!target) return; target.replaceChildren(); for (const item of items || []) { const row = document.createElement('div'); row.className = 'queue-row ' + (item.severity || 'info'); const text = document.createElement('span'); text.textContent = item.message; const dismiss = document.createElement('button'); dismiss.className = 'btn btn-text'; dismiss.type = 'button'; dismiss.textContent = '忽略'; dismiss.addEventListener('click', async () => { await post('/api/advice/dismiss', { id: item.id }); row.remove(); updateQueueMeta(); }); row.append(text, dismiss); target.append(row); } updateQueueMeta(); }
+      const STAGES = ['准备', '前提/大纲', '逐章写作', '完本', '书城'];
+      let prepActive = false; let lastAp = null; let lastBookPhase = ''; let shelfCount = -1;
+      function renderStageRail() { const rail = $('stage-rail'); if (!rail) return; let index = -1; if (lastAp && ['premise', 'premise-review', 'outline', 'outline-review'].includes(lastAp.phase)) index = 1; else if (lastAp && ['writing', 'chapter-review'].includes(lastAp.phase)) index = 2; else if (lastAp && lastAp.phase === 'complete') index = 3; else if (lastBookPhase === 'complete') index = 3; else if (lastBookPhase === 'writing') index = 2; else if (lastBookPhase === 'premise' || lastBookPhase === 'outline') index = 1; else if (prepActive) index = 0; rail.replaceChildren(); STAGES.forEach((label, i) => { if (i) { const arrow = document.createElement('span'); arrow.className = 'stg-arrow'; arrow.textContent = '→'; rail.append(arrow); } const stg = document.createElement('span'); const done = (index >= 0 && i < index) || (i === 4 && shelfCount > 0); stg.className = 'stg' + (i === index ? ' current' : done ? ' done' : ''); stg.textContent = label; rail.append(stg); }); }
+      function updateQueueMeta() { const target = $('queue-count'); if (!target) return; const advices = $('advice-bar') ? $('advice-bar').children.length : 0; const checkpoint = $('ap-checkpoint') && !$('ap-checkpoint').hidden; const total = advices + (checkpoint ? 1 : 0); target.textContent = total + ' 项'; const clear = $('queue-clear'); if (!clear) return; clear.hidden = total > 0; clear.textContent = lastAp && ['premise', 'outline', 'writing'].includes(lastAp.phase) ? ('流水线运行中：正在写第 ' + (lastAp.currentChapter || '…') + ' 章，一切正常。') : '自动驾驶未启动。用右侧「创作准备」聊出 brief，或在下方直接开启。'; }
+      function showSub(sub) { document.querySelectorAll('.sub').forEach((el) => { el.hidden = el.dataset.sub !== sub; }); document.querySelectorAll('[data-sub-view]').forEach((button) => { button.classList.toggle('active', button.dataset.subView === sub); }); if (sub === 'reader') void loadBook(); if (sub === 'studio') void loadStudio(); }
+      document.querySelectorAll('[data-sub-view]').forEach((button) => button.addEventListener('click', () => showSub(button.dataset.subView)));
+      void fetch('/api/shelf').then((response) => response.json()).then((data) => { shelfCount = (data.entries || []).length; renderStageRail(); }).catch(() => undefined);
+      renderStageRail();
       async function refresh() { try { applyStatus(await (await fetch('/api/status')).json()); } catch { $('runtime-status').dataset.state = 'error'; $('runtime-status').querySelector('span').textContent = '本地服务未连接'; showNotice('无法连接本地服务，请确认 SynChronicle 仍在运行。'); } }
       function appendDelta(value) { if (value === RUN_END) { $('live-state').textContent = '本轮已完成'; return; } $('live-card').hidden = false; $('live-state').textContent = '生成中'; const el = $('live-text'); el.textContent = (el.textContent + value).slice(-4000); el.scrollTop = el.scrollHeight; }
       let sseErrored = false; let pollTimer = 0;
@@ -752,12 +785,12 @@ export function renderWebApp(): string {
       es.addEventListener('runtime', (e) => pushEvent(JSON.parse(e.data)));
       es.addEventListener('delta', (e) => appendDelta(JSON.parse(e.data).value));
       es.onerror = () => { if (sseErrored) { es.close(); startPolling(); } sseErrored = true; };
-      function showView(view) { document.querySelectorAll('.page').forEach((page) => { page.hidden = page.dataset.page !== view; }); document.querySelectorAll('[data-view]').forEach((button) => { if (button.dataset.view === view) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current'); }); if (view === 'reader') void loadBook(); if (view === 'studio') void loadStudio(); if (view === 'prep') void loadPrepList(); }
+      function showView(view) { document.querySelectorAll('.page').forEach((page) => { page.hidden = page.dataset.page !== view; }); document.querySelectorAll('[data-view]').forEach((button) => { if (button.dataset.view === view) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current'); }); if (view === 'cockpit') { void loadBookSummary(); void loadPrepList(); void refreshAutopilot(); } if (view === 'manuscript') showSub('studio'); if (view === 'world') { void loadEntities(); void loadConstitution(); void loadSkillPacks(); void loadMaterials(); } if (view === 'system') { void loadSettings(); void loadBookshelf(); } }
       document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => showView(button.dataset.view)));
       function flatten(book) { const rows = []; for (const volume of book.volumes) for (const arc of volume.arcs) for (const chapter of arc.chapters) rows.push(chapter); return rows; }
       function pickTargetChapter(rows) { return rows.find((row) => row.status === 'in-progress') || [...rows].reverse().find((row) => row.status === 'completed') || rows[0]; }
       function rowPill(label, count, tone) { const pill = document.createElement('span'); pill.className = 'pill ' + tone; pill.textContent = count + ' ' + label; return pill; }
-      async function loadBookSummary() { const box = $('book-rows'); try { const data = await (await fetch('/api/book')).json(); if (!data.configured || !data.book) { box.replaceChildren(); const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '尚未配置模型，先连接引擎。'; box.append(empty); $('book-phase').textContent = '—'; return; } const book = data.book; const rows = flatten(book); const done = rows.filter((row) => row.status === 'completed').length; const rewrite = rows.filter((row) => row.status === 'rewrite').length; const pending = rows.length - done - rewrite; box.replaceChildren(); const rowA = document.createElement('div'); rowA.className = 'rowline'; const labelA = document.createElement('span'); labelA.textContent = '章节进度'; const pills = document.createElement('div'); pills.className = 'pills'; pills.append(rowPill('已完成', done, 'ok'), rowPill('待写', pending, 'muted')); if (rewrite) pills.append(rowPill('待重写', rewrite, 'bad')); rowA.append(labelA, pills); const rowB = document.createElement('div'); rowB.className = 'rowline'; const labelB = document.createElement('span'); labelB.textContent = '全书字数'; const valueB = document.createElement('span'); valueB.style.fontWeight = '700'; valueB.style.fontSize = '15px'; valueB.textContent = formatNumber(book.totalWordCount); rowB.append(labelB, valueB); const rowC = document.createElement('div'); rowC.className = 'rowline'; const labelC = document.createElement('span'); labelC.textContent = '阅读前台'; const link = document.createElement('a'); link.href = '/read'; link.className = 'btn btn-text'; link.style.minHeight = '32px'; link.textContent = '打开 /read'; rowC.append(labelC, link); box.append(rowA, rowB, rowC); $('book-phase').textContent = phaseLabels[book.phase] || book.phase; const navChapters = $('nav-count-chapters'); if (navChapters) { navChapters.textContent = rows.length + '章'; navChapters.hidden = rows.length === 0; } } catch { /* 保持现有内容 */ } }
+      async function loadBookSummary() { const box = $('book-rows'); try { const data = await (await fetch('/api/book')).json(); if (!data.configured || !data.book) { box.replaceChildren(); const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '尚未配置模型，先连接引擎。'; box.append(empty); $('book-phase').textContent = '—'; lastBookPhase = ''; renderStageRail(); return; } const book = data.book; lastBookPhase = book.phase; renderStageRail(); const rows = flatten(book); const done = rows.filter((row) => row.status === 'completed').length; const rewrite = rows.filter((row) => row.status === 'rewrite').length; const pending = rows.length - done - rewrite; box.replaceChildren(); const rowA = document.createElement('div'); rowA.className = 'rowline'; const labelA = document.createElement('span'); labelA.textContent = '章节进度'; const pills = document.createElement('div'); pills.className = 'pills'; pills.append(rowPill('已完成', done, 'ok'), rowPill('待写', pending, 'muted')); if (rewrite) pills.append(rowPill('待重写', rewrite, 'bad')); rowA.append(labelA, pills); const rowB = document.createElement('div'); rowB.className = 'rowline'; const labelB = document.createElement('span'); labelB.textContent = '全书字数'; const valueB = document.createElement('span'); valueB.style.fontWeight = '700'; valueB.style.fontSize = '15px'; valueB.textContent = formatNumber(book.totalWordCount); rowB.append(labelB, valueB); const rowC = document.createElement('div'); rowC.className = 'rowline'; const labelC = document.createElement('span'); labelC.textContent = '阅读前台'; const link = document.createElement('a'); link.href = '/read'; link.className = 'btn btn-text'; link.style.minHeight = '32px'; link.textContent = '打开 /read'; rowC.append(labelC, link); box.append(rowA, rowB, rowC); $('book-phase').textContent = phaseLabels[book.phase] || book.phase; const navChapters = $('nav-count-chapters'); if (navChapters) { navChapters.textContent = rows.length + '章'; navChapters.hidden = rows.length === 0; } } catch { /* 保持现有内容 */ } }
       function treeEmpty(message) { $('outline-tree').replaceChildren(); const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = message; $('outline-tree').append(empty); $('book-progress').textContent = '—'; }
       async function loadBook() { try { const data = await (await fetch('/api/book')).json(); if (!data.configured || !data.book) { $('book-title').textContent = '大纲'; treeEmpty('尚未配置模型，先在概览页连接引擎。'); return; } const book = data.book; $('book-title').textContent = book.novelName || '大纲'; $('book-progress').textContent = book.completedChapters.length + '/' + (book.totalChapters || flatten(book).length) + ' 章'; const tree = $('outline-tree'); tree.replaceChildren(); const rows = flatten(book); if (!rows.length) { treeEmpty('尚未开始创作，提交 brief 后这里会长出大纲。'); return; } for (const volume of book.volumes) { const vol = document.createElement('div'); vol.className = 'vol'; vol.textContent = '第 ' + volume.index + ' 卷 · ' + (volume.title || '未命名'); tree.append(vol); for (const arc of volume.arcs) { const arcLabel = document.createElement('div'); arcLabel.className = 'arc'; arcLabel.textContent = ' ' + (arc.title || '弧') + (arc.goal ? ' — ' + arc.goal : ''); tree.append(arcLabel); for (const chapter of arc.chapters) { const row = document.createElement('button'); row.type = 'button'; row.className = 'trow'; row.dataset.chapter = String(chapter.chapter); row.setAttribute('role', 'treeitem'); const dot = document.createElement('i'); dot.className = 'dot s-' + chapter.status; dot.setAttribute('aria-hidden', 'true'); const label = document.createElement('span'); label.textContent = chapter.chapter + '. ' + chapter.title; const words = document.createElement('small'); words.textContent = chapter.wordCount ? formatNumber(chapter.wordCount) + ' 字' : ''; row.append(dot, label, words); row.addEventListener('click', () => selectChapter(chapter.chapter)); tree.append(row); } } } const target = pickTargetChapter(rows); if (target) selectChapter(target.chapter); } catch { treeEmpty('加载大纲失败，请稍后重试。'); } }
       let currentChapter = 0;
@@ -768,11 +801,12 @@ export function renderWebApp(): string {
       async function refreshAutopilot() {
         try {
           const res = await (await fetch('/api/autopilot')).json();
-          if (!res.configured || !res.state) { $('ap-phase').textContent = '未配置'; return; }
+          if (!res.configured || !res.state) { $('ap-phase').textContent = '未配置'; lastAp = null; renderStageRail(); updateQueueMeta(); return; }
           renderAutopilot(res.state);
         } catch { /* 静默 */ }
       }
       function renderAutopilot(state) {
+        lastAp = state; renderStageRail(); updateQueueMeta();
         const phase = $('ap-phase');
         if (!phase) return;
         phase.textContent = apPhaseLabels[state.phase] || state.phase;
@@ -848,14 +882,14 @@ export function renderWebApp(): string {
       void loadEvolution();
       $('publish-submit').addEventListener('click', async () => { try { const books = await (await fetch('/api/books')).json(); const active = (books.books || []).find((book) => book.active); if (!active) throw new Error('没有激活书籍'); await post('/api/publish', { bookId: active.id, title: $('publish-title').value.trim() || active.title, synopsis: $('publish-synopsis').value.trim(), tags: $('publish-tags').value.split(/[,，]/).map((item) => item.trim()).filter(Boolean), visibility: $('publish-visibility').value }); showNotice('已发布到书城。', 'success'); } catch (error) { showNotice(error.message || '发布失败'); } });
       let prepCurrent = null; let prepBrief = '';
-      async function loadPrepList() { const data = await (await fetch('/api/prep')).json(); const list = $('prep-list'); list.replaceChildren(); for (const session of data.sessions || []) { const button = document.createElement('button'); button.className = 'btn btn-text'; button.textContent = (session.title || '未命名准备') + ' · ' + session.stage + ' · ' + session.rounds + '轮'; button.addEventListener('click', () => loadPrep(session.id)); list.append(button); } }
+      async function loadPrepList() { const data = await (await fetch('/api/prep')).json(); prepActive = (data.sessions || []).some((session) => session.status === 'active'); renderStageRail(); const list = $('prep-list'); list.replaceChildren(); for (const session of data.sessions || []) { const button = document.createElement('button'); button.className = 'btn btn-text'; button.textContent = (session.title || '未命名准备') + ' · ' + session.stage + ' · ' + session.rounds + '轮'; button.addEventListener('click', () => loadPrep(session.id)); list.append(button); } }
       async function loadPrep(id) { const data = await (await fetch('/api/prep/' + encodeURIComponent(id))).json(); prepCurrent = data.session; renderPrep(); }
       function renderPrep() { const box = $('prep-messages'); box.replaceChildren(); for (const message of prepCurrent.messages) { const row = document.createElement('div'); row.className = 'event'; const who = document.createElement('time'); who.textContent = message.role === 'user' ? '你' : 'AI'; const text = document.createElement('span'); text.textContent = message.content; row.append(who, text); box.append(row); } $('prep-stage').textContent = prepCurrent.stage; $('prep-advance').hidden = prepCurrent.stage === 'ready' || prepCurrent.status !== 'active'; $('prep-confirm').hidden = prepCurrent.stage !== 'ready' || prepCurrent.status !== 'active'; }
       $('prep-new').addEventListener('click', async () => { const data = await post('/api/prep', { title: '新书准备' }); prepCurrent = data.session; renderPrep(); await loadPrepList(); });
       $('prep-send').addEventListener('click', async () => { if (!prepCurrent) return showNotice('先新建准备会话'); const text = $('prep-input').value.trim(); if (!text) return; const data = await post('/api/prep/' + encodeURIComponent(prepCurrent.id) + '/chat', { text: text }); prepCurrent = data.session; $('prep-input').value = ''; renderPrep(); });
       $('prep-advance').addEventListener('click', async () => { const data = await post('/api/prep/' + encodeURIComponent(prepCurrent.id) + '/advance'); prepCurrent = data.session; renderPrep(); });
       $('prep-confirm').addEventListener('click', async () => { const data = await post('/api/prep/' + encodeURIComponent(prepCurrent.id) + '/confirm'); prepBrief = data.brief; prepCurrent.status = 'confirmed'; $('prep-autopilot').hidden = false; renderPrep(); });
-      $('prep-autopilot').addEventListener('click', async () => { await apAction('start', { idea: prepBrief, checkpoint: 'premise-outline', scoreThreshold: 75, maxRewrites: 2 }); showView('overview'); });
+      $('prep-autopilot').addEventListener('click', async () => { await apAction('start', { idea: prepBrief, checkpoint: 'premise-outline', scoreThreshold: 75, maxRewrites: 2 }); showView('cockpit'); });
       async function loadChapter(chapter) { try { const data = await fetchChapter(chapter); if (!data.configured || !data.chapter) { $('ch-title').textContent = '尚未配置模型'; return; } const view = data.chapter; $('ch-title').textContent = view.title || ('第 ' + chapter + ' 章'); const chip = $('ch-status'); chip.hidden = false; chip.textContent = chapterLabels[view.status] || view.status; chip.dataset.state = view.status === 'rewrite' ? 'error' : view.status === 'completed' ? 'idle' : 'running';           $('ch-words').textContent = (view.source === 'draft' ? '草稿 · ' : '') + formatNumber(view.wordCount) + ' 字';
           const tone = $('ch-tone');
           if (view.aitone && view.aitone.score < 100) {
@@ -983,7 +1017,7 @@ export function renderWebApp(): string {
           $('settings-state').textContent = '已加载';
         } catch { view.replaceChildren(); const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '加载失败。'; view.append(empty); }
       }
-      document.querySelectorAll('[data-view="settings"]').forEach((button) => button.addEventListener('click', () => void loadSettings()));
+      document.querySelectorAll('[data-view="system"]').forEach((button) => button.addEventListener('click', () => void loadSettings()));
       $('settings-form').addEventListener('submit', async (event) => {
         event.preventDefault();
         const roles = {};
@@ -1890,7 +1924,7 @@ export function renderWebApp(): string {
           showNotice(err.message || '保存失败');
         }
       });
-      document.querySelectorAll('[data-view="entities"]').forEach((button) => button.addEventListener('click', () => void loadEntities()));
+      document.querySelectorAll('[data-view="world"]').forEach((button) => button.addEventListener('click', () => void loadEntities()));
       refresh();
       loadCostPreview();
       loadMaterials();

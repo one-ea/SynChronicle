@@ -112,7 +112,7 @@ describe("WebUI", () => {
   it("renders a studio shell with a prompt and live status regions", () => {
     const html = renderWebApp();
     expect(html).toContain("SynChronicle");
-    expect(html).toContain("创作概览");
+    expect(html).toContain("驾驶台");
     expect(html).toContain("data-testid=\"runtime-status\"");
     expect(html).toContain("/api/run");
     expect(html).toContain("data-testid=\"config-form\"");
@@ -121,7 +121,7 @@ describe("WebUI", () => {
     expect(html).toContain("--heat-100");
     expect(html).toContain("--btn-radius");
     expect(html).toContain('data-theme="system"');
-    expect(html).toContain('data-page="reader"');
+    expect(html).toContain('data-page="manuscript"');
     expect(html).toContain('new EventSource');
     expect(html).toContain('role="tree"');
   });
@@ -146,7 +146,7 @@ describe("WebUI", () => {
     expect(html).not.toContain("@media (max-width: 560px)");
     expect(html).toContain('class="tabbar"');
     expect(html).toContain('aria-label="移动端主导航"');
-    const tabbarViews = ["overview", "reader", "entities", "records", "settings"];
+    const tabbarViews = ["cockpit", "manuscript", "world", "system"];
     for (const view of tabbarViews) expect(html).toContain(`data-view="${view}" title=`);
     expect(Buffer.byteLength(html, "utf8")).toBeLessThan(148562 + 30 * 1024);
   });
@@ -764,14 +764,18 @@ describe("WebUI", () => {
 
   it("renders the p7 shell with studio rail, bookshelf and skill pack market", () => {
     const html = renderWebApp();
-    expect(html).toContain('data-page="studio"');
+    expect(html).toContain('data-sub="studio"');
     expect(html).toContain("三栏写作台");
     expect(html).toContain(".studio-rail");
     expect(html).toContain("studio-editor");
-    expect(html).toContain('data-view="studio" title=');
+    expect(html).toContain('data-view="manuscript" title=');
     expect(html).toContain("书架（多书管理）");
     expect(html).toContain("技能包市场");
     expect(html).toContain("版本时光机");
+    expect(html).toContain('data-page="world"');
+    expect(html).toContain('data-page="system"');
+    expect(html).toContain('id="stage-rail"');
+    expect(html).toContain('id="decision-card"');
     expect(html).not.toContain("innerHTML =");
   });
 
