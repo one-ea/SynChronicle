@@ -1213,7 +1213,7 @@ export function renderWebApp(): string {
           recallSnippetText = '';
           if (!res.hits?.length) { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '无命中，换个关键词试试。'; box.append(empty); $('recall-inject').hidden = true; return; }
           for (const hit of res.hits) {
-            recallSnippetText += '[' + hit.kind + '] ' + hit.source + ' — ' + hit.snippet + '\n';
+            recallSnippetText += '[' + hit.kind + '] ' + hit.source + ' — ' + hit.snippet + String.fromCharCode(10);
             const row = document.createElement('div'); row.className = 'rowline';
             const left = document.createElement('div');
             const pill = document.createElement('span'); pill.className = 'pill ' + (hit.kind === 'entity' ? 'ok' : hit.kind === 'foreshadow' ? 'warn' : 'muted'); pill.textContent = hit.kind;
@@ -1229,7 +1229,7 @@ export function renderWebApp(): string {
       $('recall-inject')?.addEventListener('click', async () => {
         if (!recallSnippetText) return;
         try {
-          await post('/api/inject', { text: '[设定检索结果]\n' + recallSnippetText.trim() });
+          await post('/api/inject', { text: '[设定检索结果]' + String.fromCharCode(10) + recallSnippetText.trim() });
           showNotice('检索结果已注入，将在下一轮生成时生效。', 'success');
         } catch (err) { showNotice(err.message || '注入失败'); }
       });
@@ -1306,10 +1306,10 @@ export function renderWebApp(): string {
           for (const volume of book.book.volumes) for (const arc of volume.arcs) for (const chapter of arc.chapters) {
             if (chapter.status === 'pending' || !chapter.wordCount) continue;
             const detail = await (await fetch('/api/chapters/' + chapter.chapter)).json();
-            if (detail.chapter?.text) parts.push('第 ' + chapter.chapter + ' 章 ' + (chapter.title || '') + '\n' + detail.chapter.text);
+            if (detail.chapter?.text) parts.push('第 ' + chapter.chapter + ' 章 ' + (chapter.title || '') + String.fromCharCode(10) + detail.chapter.text);
           }
           if (!parts.length) { box.replaceChildren(); const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '暂无可分析的已写章节。'; box.append(empty); return; }
-          const res = await post('/api/deconstruct', { text: parts.join('\n\n') });
+          const res = await post('/api/deconstruct', { text: parts.join(String.fromCharCode(10) + String.fromCharCode(10)) });
           $('deconstruct-meta').textContent = res.totalChapters + ' 章 · ' + formatNumber(res.totalWords) + ' 字';
           box.replaceChildren();
           const acts = res.acts.map((act) => act.act + ' ' + Math.round(act.ratio * 100) + '%').join(' → ');
@@ -1460,7 +1460,7 @@ export function renderWebApp(): string {
         } catch { box.replaceChildren(); }
       });
       let chatEntityId = '';
-      let chatHistory: Array<{ role: 'user' | 'character'; text: string }> = [];
+      let chatHistory = [];
       function openEntityChat(entity) {
         chatEntityId = entity.id;
         chatHistory = [];
@@ -1512,12 +1512,12 @@ export function renderWebApp(): string {
           const constitution = res.constitution;
           box.replaceChildren();
           if (!constitution) { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '尚未配置小说工作区。'; box.append(empty); $('constitution-count').textContent = '0 条'; return; }
-          const entries: Array<[string, string]> = [
-            ...constitution.worldRules.map((rule) => ['世界规则', rule] as [string, string]),
-            ...constitution.abilityCosts.map((rule) => ['能力代价', rule] as [string, string]),
-            ...constitution.forbiddenInfo.map((rule) => ['禁写信息', rule] as [string, string]),
-            ...constitution.characterBoundaries.map((rule) => ['行为边界', rule] as [string, string]),
-            ...constitution.secretReveals.map((item) => ['秘密计划', item.secret + ' → ' + item.revealAt] as [string, string]),
+          const entries = [
+            ...constitution.worldRules.map((rule) => ['世界规则', rule]),
+            ...constitution.abilityCosts.map((rule) => ['能力代价', rule]),
+            ...constitution.forbiddenInfo.map((rule) => ['禁写信息', rule]),
+            ...constitution.characterBoundaries.map((rule) => ['行为边界', rule]),
+            ...constitution.secretReveals.map((item) => ['秘密计划', item.secret + ' → ' + item.revealAt]),
           ];
           $('constitution-count').textContent = entries.length + ' 条';
           if (!entries.length) { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '尚未设置锁定规则。'; box.append(empty); return; }
@@ -1685,7 +1685,7 @@ export function renderWebApp(): string {
       }
       $('skillpack-create')?.addEventListener('click', async () => {
         const name = $('skillpack-name')?.value.trim();
-        const techniques = ($('skillpack-techniques')?.value || '').split('\n').map((line) => line.trim()).filter(Boolean);
+        const techniques = ($('skillpack-techniques')?.value || '').split(String.fromCharCode(10)).map((line) => line.trim()).filter(Boolean);
         if (!name) { showNotice('请填写技能包名称'); return; }
         if (!techniques.length) { showNotice('至少填写一条写作技法（每行一条）'); return; }
         try {

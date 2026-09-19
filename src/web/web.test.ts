@@ -187,6 +187,13 @@ describe("WebUI", () => {
     expect(html).toContain("prefers-reduced-motion: reduce");
   });
 
+  it("emits syntactically valid inline application javascript", () => {
+    const html = renderWebApp();
+    const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1] ?? "");
+    expect(scripts.length).toBeGreaterThan(1);
+    expect(() => new Function(scripts.at(-1)!)).not.toThrow();
+  });
+
   it("serves the WebUI and health endpoint without a model configuration", async () => {
     const handle = await startWebServer({ port: 0, configPath: "/tmp/synchronicle-test-missing-config.json", auth: false });
     try {

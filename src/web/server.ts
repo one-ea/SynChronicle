@@ -111,6 +111,7 @@ async function route(request: IncomingMessage, response: ServerResponse, context
   const url = new URL(request.url ?? "/", "http://localhost");
   if (request.method === "GET" && url.pathname === "/") return send(response, 200, renderWebApp(), "text/html; charset=utf-8");
   if (request.method === "GET" && url.pathname === "/read") return send(response, 200, renderReadApp(), "text/html; charset=utf-8");
+  if (request.method === "GET" && url.pathname === "/favicon.ico") { response.writeHead(204); response.end(); return; }
   if (request.method === "GET" && url.pathname === "/api/health") return sendJson(response, 200, { ok: true });
   if (request.method === "GET" && url.pathname === "/api/shelf") return handleShelfList(response, context);
   if (request.method === "GET" && /^\/api\/shelf\/[^/]+$/.test(url.pathname)) return handleShelfBook(response, context, decodeURIComponent(url.pathname.split("/")[3] ?? ""));
