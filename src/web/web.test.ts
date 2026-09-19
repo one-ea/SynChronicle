@@ -170,7 +170,7 @@ describe("WebUI", () => {
     expect(html).toContain("书城");
     expect(html).toContain("/api/shelf");
     expect(html).toContain("className='chapter-text'");
-    expect(html).toContain("clamp(15px,2.5vw,18px)");
+    expect(html).toContain("clamp(15px,2vw,17px)");
     expect(html).toContain("@media(max-width:700px)");
     expect(Buffer.byteLength(html, "utf8")).toBeLessThan(15070 + 30 * 1024);
   });
