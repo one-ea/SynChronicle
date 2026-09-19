@@ -27,6 +27,51 @@ function makeTestCardPng(): Buffer {
 }
 
 describe("WebUI", () => {
+  it("protects private APIs with setup, login, csrf, and logout", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "synchronicle-web-auth-"));
+    const configPath = join(directory, "config.json");
+    const output = join(directory, "novel");
+    await writeFile(configPath, JSON.stringify({ provider: "deepseek", model: "deepseek-chat", providers: { deepseek: { base_url: "https://api.deepseek.com/v1" } }, output_dir: output }));
+    const handle = await startWebServer({ port: 0, configPath });
+    try {
+      const root = `http://127.0.0.1:${handle.port}`;
+      expect((await fetch(`${root}/api/status`)).status).toBe(401);
+      const setup = await fetch(`${root}/api/auth/setup`, { method: "POST", headers: { "content-type": "application/json", "x-requested-with": "fetch" }, body: JSON.stringify({ name: "admin", password: "test-password" }) });
+      expect(setup.status).toBe(201);
+      expect((await fetch(`${root}/api/auth/setup`, { method: "POST", headers: { "content-type": "application/json", "x-requested-with": "fetch" }, body: JSON.stringify({ name: "second", password: "test-password" }) })).status).toBe(403);
+      const login = await fetch(`${root}/api/auth/login`, { method: "POST", headers: { "content-type": "application/json", "x-requested-with": "fetch" }, body: JSON.stringify({ name: "admin", password: "test-password" }) });
+      expect(login.status).toBe(200);
+      const cookie = login.headers.get("set-cookie")!.split(";")[0];
+      expect((await fetch(`${root}/api/auth/me`, { headers: { cookie } })).status).toBe(200);
+      expect((await fetch(`${root}/api/config`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: "{}" })).status).toBe(403);
+      expect((await fetch(`${root}/api/config`, { method: "POST", headers: { cookie, "content-type": "application/json", "x-requested-with": "fetch" }, body: "{}" })).status).toBe(400);
+      const logout = await fetch(`${root}/api/auth/logout`, { method: "POST", headers: { cookie, "x-requested-with": "fetch" } });
+      expect(logout.status).toBe(200);
+      expect(logout.headers.get("set-cookie")).toContain("Max-Age=0");
+      expect((await fetch(`${root}/api/status`)).status).toBe(401);
+    } finally {
+      await handle.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("locks login after five failed attempts", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "synchronicle-web-auth-lock-"));
+    const configPath = join(directory, "config.json");
+    await writeFile(configPath, JSON.stringify({ provider: "deepseek", model: "deepseek-chat", providers: { deepseek: { base_url: "https://api.deepseek.com/v1" } }, output_dir: join(directory, "novel") }));
+    const handle = await startWebServer({ port: 0, configPath });
+    try {
+      const root = `http://127.0.0.1:${handle.port}`;
+      const headers = { "content-type": "application/json", "x-requested-with": "fetch" };
+      await fetch(`${root}/api/auth/setup`, { method: "POST", headers, body: JSON.stringify({ name: "admin", password: "test-password" }) });
+      for (let attempt = 0; attempt < 5; attempt += 1) expect((await fetch(`${root}/api/auth/login`, { method: "POST", headers, body: JSON.stringify({ name: "admin", password: "wrong-password" }) })).status).toBe(401);
+      expect((await fetch(`${root}/api/auth/login`, { method: "POST", headers, body: JSON.stringify({ name: "admin", password: "test-password" }) })).status).toBe(429);
+    } finally {
+      await handle.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("renders a studio shell with a prompt and live status regions", () => {
     const html = renderWebApp();
     expect(html).toContain("SynChronicle");
@@ -107,7 +152,7 @@ describe("WebUI", () => {
   });
 
   it("serves the WebUI and health endpoint without a model configuration", async () => {
-    const handle = await startWebServer({ port: 0, configPath: "/tmp/synchronicle-test-missing-config.json" });
+    const handle = await startWebServer({ port: 0, configPath: "/tmp/synchronicle-test-missing-config.json", auth: false });
     try {
       const root = await fetch(`http://127.0.0.1:${handle.port}/`);
       expect(root.status).toBe(200);
@@ -128,7 +173,7 @@ describe("WebUI", () => {
   it("saves a custom provider configuration through the WebUI", async () => {
     const directory = await mkdtemp(join(tmpdir(), "synchronicle-web-config-"));
     const configPath = join(directory, "config.json");
-    const handle = await startWebServer({ port: 0, configPath });
+    const handle = await startWebServer({ port: 0, configPath, auth: false });
     try {
       const saved = await fetch(`http://127.0.0.1:${handle.port}/api/config`, {
         method: "POST",
@@ -157,7 +202,7 @@ describe("WebUI", () => {
     await writeFile(join(output, "outline.json"), JSON.stringify([{ chapter: 1, title: "开端", core_event: "e", hook: "h", scenes: [] }, { chapter: 2, title: "发展", core_event: "e2", hook: "", scenes: [] }]));
     const configPath = join(directory, "config.json");
     await writeFile(configPath, JSON.stringify({ provider: "deepseek", model: "deepseek-chat", providers: { deepseek: { base_url: "https://api.deepseek.com/v1" } }, output_dir: output }));
-    const handle = await startWebServer({ port: 0, configPath });
+    const handle = await startWebServer({ port: 0, configPath, auth: false });
     try {
       const json = async (path: string): Promise<any> => JSON.parse(await (await fetch(`http://127.0.0.1:${handle.port}${path}`)).text());
       const book = await json("/api/book");
@@ -185,7 +230,7 @@ describe("WebUI", () => {
   });
 
   it("streams snapshot as the first SSE event", async () => {
-    const handle = await startWebServer({ port: 0, configPath: "/tmp/synchronicle-test-missing-config.json" });
+    const handle = await startWebServer({ port: 0, configPath: "/tmp/synchronicle-test-missing-config.json", auth: false });
     try {
       const response = await fetch(`http://127.0.0.1:${handle.port}/api/stream`);
       expect(response.headers.get("content-type")).toContain("text/event-stream");
@@ -225,7 +270,7 @@ describe("WebUI", () => {
     ] }));
     const configPath = join(directory, "config.json");
     await writeFile(configPath, JSON.stringify({ provider: "deepseek", model: "deepseek-chat", providers: { deepseek: { base_url: "https://api.deepseek.com/v1" } }, output_dir: output }));
-    const handle = await startWebServer({ port: 0, configPath });
+    const handle = await startWebServer({ port: 0, configPath, auth: false });
     try {
       const json = async (path: string): Promise<any> => JSON.parse(await (await fetch(`http://127.0.0.1:${handle.port}${path}`)).text());
       const list = await json("/api/reflection");
@@ -261,7 +306,7 @@ describe("WebUI", () => {
     await writeFile(configPath, JSON.stringify({ provider: "deepseek", model: "deepseek-chat", providers: { deepseek: { base_url: "https://api.deepseek.com/v1" } }, output_dir: output }));
     const source = join(directory, "source.txt");
     await writeFile(source, "第 1 章 导入章名\n\n这是导入的正文内容。\n");
-    const handle = await startWebServer({ port: 0, configPath });
+    const handle = await startWebServer({ port: 0, configPath, auth: false });
     try {
       const json = async (path: string): Promise<any> => JSON.parse(await (await fetch(`http://127.0.0.1:${handle.port}${path}`)).text());
       const exported = await json("/api/status").then(async () => JSON.parse(await (await fetch(`http://127.0.0.1:${handle.port}/api/export`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ format: "txt" }) })).text()));
@@ -284,7 +329,7 @@ describe("WebUI", () => {
     const directory = await mkdtemp(join(tmpdir(), "synchronicle-web-settings-"));
     const configPath = join(directory, "config.json");
     await writeFile(configPath, JSON.stringify({ provider: "deepseek", model: "deepseek-chat", providers: { deepseek: { base_url: "https://api.deepseek.com/v1", api_key: "secret-key" } }, output_dir: join(directory, "novel") }));
-    const handle = await startWebServer({ port: 0, configPath });
+    const handle = await startWebServer({ port: 0, configPath, auth: false });
     try {
       const json = async (path: string): Promise<any> => JSON.parse(await (await fetch(`http://127.0.0.1:${handle.port}${path}`)).text());
       const initial = await json("/api/settings");
@@ -312,7 +357,7 @@ describe("WebUI", () => {
   });
 
   it("serves the read front without a model configuration", async () => {
-    const handle = await startWebServer({ port: 0, configPath: "/tmp/synchronicle-test-missing-config.json" });
+    const handle = await startWebServer({ port: 0, configPath: "/tmp/synchronicle-test-missing-config.json", auth: false });
     try {
       const read = await fetch(`http://127.0.0.1:${handle.port}/read`);
       expect(read.status).toBe(200);
@@ -329,7 +374,7 @@ describe("WebUI", () => {
     await writeFile(join(output, "meta", "progress.json"), JSON.stringify({ novel_name: "测试", phase: "writing", current_chapter: 8, total_chapters: 12, completed_chapters: [1, 2, 3, 4, 5, 6, 7], total_word_count: 100, strand_history: ["感情", "支线", "主线", "主线", "主线", "主线", "主线", "主线"], flow: "writing", pending_rewrites: [] }));
     const configPath = join(directory, "config.json");
     await writeFile(configPath, JSON.stringify({ provider: "deepseek", model: "deepseek-chat", providers: { deepseek: { base_url: "https://api.deepseek.com/v1" } }, output_dir: output }));
-    const handle = await startWebServer({ port: 0, configPath });
+    const handle = await startWebServer({ port: 0, configPath, auth: false });
     try {
       const data = await (async () => JSON.parse(await (await fetch(`http://127.0.0.1:${handle.port}/api/diag`)).text()))();
       expect(data.configured).toBe(true);
@@ -353,6 +398,7 @@ describe("WebUI", () => {
     const handle = await startWebServer({
       port: 0,
       configPath,
+      auth: false,
       hostInstance: {
         steer: async (options: { prompt: string; targetChapter?: number }) => {
           steerPayload = options;
@@ -390,7 +436,7 @@ describe("WebUI", () => {
     await writeFile(join(output, "chapters", "01.md"), "他不禁皱起了眉，仿佛暴风雨降临一般，心中有一丝绝望。");
     const configPath = join(directory, "config.json");
     await writeFile(configPath, JSON.stringify({ provider: "deepseek", model: "deepseek-chat", providers: { deepseek: { base_url: "https://api.deepseek.com/v1", api_key: "secret-key" } }, output_dir: output }));
-    const handle = await startWebServer({ port: 0, configPath });
+    const handle = await startWebServer({ port: 0, configPath, auth: false });
     try {
       const res = await fetch(`http://127.0.0.1:${handle.port}/api/chapters/1/rewrite`, {
         method: "POST",
@@ -428,7 +474,7 @@ describe("WebUI", () => {
     for (const dir of ["meta", "chapters"]) await mkdir(join(output, dir), { recursive: true });
     const configPath = join(directory, "config.json");
     await writeFile(configPath, JSON.stringify({ provider: "deepseek", model: "deepseek-chat", providers: { deepseek: { base_url: "https://api.deepseek.com/v1", api_key: "secret-key" } }, output_dir: output }));
-    const handle = await startWebServer({ port: 0, configPath });
+    const handle = await startWebServer({ port: 0, configPath, auth: false });
     try {
       const getInitial = await fetch(`http://127.0.0.1:${handle.port}/api/entities`);
       expect(getInitial.status).toBe(200);
@@ -467,7 +513,7 @@ describe("WebUI", () => {
     await writeFile(join(output, "meta", "progress.json"), JSON.stringify({ novel_name: "测试", phase: "writing", current_chapter: 2, total_chapters: 12, completed_chapters: [1], total_word_count: 30, chapter_word_counts: { "1": 30 } }));
     const configPath = join(directory, "config.json");
     await writeFile(configPath, JSON.stringify({ provider: "deepseek", model: "deepseek-chat", providers: { deepseek: { base_url: "https://api.deepseek.com/v1", api_key: "secret-key" } }, output_dir: output }));
-    const handle = await startWebServer({ port: 0, configPath });
+    const handle = await startWebServer({ port: 0, configPath, auth: false });
     try {
       const root = `http://127.0.0.1:${handle.port}`;
 
@@ -511,7 +557,7 @@ describe("WebUI", () => {
     for (const dir of ["meta", "chapters"]) await mkdir(join(output, dir), { recursive: true });
     const configPath = join(directory, "config.json");
     await writeFile(configPath, JSON.stringify({ provider: "deepseek", model: "deepseek-chat", providers: { deepseek: { base_url: "https://api.deepseek.com/v1", api_key: "secret-key" } }, output_dir: output }));
-    const handle = await startWebServer({ port: 0, configPath });
+    const handle = await startWebServer({ port: 0, configPath, auth: false });
     try {
       const png = makeTestCardPng();
       const res = await fetch(`http://127.0.0.1:${handle.port}/api/entities/import-card`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pngBase64: png.toString("base64") }) });
@@ -539,7 +585,7 @@ describe("WebUI", () => {
     await writeFile(join(output, "meta", "progress.json"), JSON.stringify({ novel_name: "测试", phase: "writing", current_chapter: 2, total_chapters: 10, completed_chapters: [1], total_word_count: 30, chapter_word_counts: { "1": 30 } }));
     const configPath = join(directory, "config.json");
     await writeFile(configPath, JSON.stringify({ provider: "deepseek", model: "deepseek-chat", providers: { deepseek: { base_url: "https://api.deepseek.com/v1", api_key: "secret-key" } }, output_dir: output }));
-    const handle = await startWebServer({ port: 0, configPath });
+    const handle = await startWebServer({ port: 0, configPath, auth: false });
     try {
       const root = `http://127.0.0.1:${handle.port}`;
 
@@ -590,7 +636,7 @@ describe("WebUI", () => {
     await writeFile(join(output, "meta", "progress.json"), JSON.stringify({ novel_name: "测试", phase: "writing", current_chapter: 2, total_chapters: 10, completed_chapters: [1], total_word_count: 30, chapter_word_counts: { "1": 30 } }));
     const configPath = join(directory, "config.json");
     await writeFile(configPath, JSON.stringify({ provider: "deepseek", model: "deepseek-chat", providers: { deepseek: { base_url: "https://api.deepseek.com/v1", api_key: "secret-key" } }, output_dir: output }));
-    const handle = await startWebServer({ port: 0, configPath });
+    const handle = await startWebServer({ port: 0, configPath, auth: false });
     try {
       const root = `http://127.0.0.1:${handle.port}`;
 
@@ -633,7 +679,7 @@ describe("WebUI", () => {
     await writeFile(join(output, "chapters", "01.md"), "他拔出长剑，剑尖指向地面。");
     const configPath = join(directory, "config.json");
     await writeFile(configPath, JSON.stringify({ provider: "deepseek", model: "deepseek-chat", providers: { deepseek: { base_url: "https://api.deepseek.com/v1", api_key: "secret-key" } }, output_dir: output }));
-    const handle = await startWebServer({ port: 0, configPath });
+    const handle = await startWebServer({ port: 0, configPath, auth: false });
     try {
       // 1. 测试 A/B 竞写接口
       const arenaRes = await fetch(`http://127.0.0.1:${handle.port}/api/chapters/1/arena`, {
@@ -696,7 +742,7 @@ describe("WebUI", () => {
     await writeFile(join(output, "meta", "progress.json"), JSON.stringify({ novel_name: "主书", phase: "writing", current_chapter: 2, total_chapters: 10, completed_chapters: [1], total_word_count: 16, chapter_word_counts: { "1": 16 } }));
     const configPath = join(directory, "config.json");
     await writeFile(configPath, JSON.stringify({ provider: "deepseek", model: "deepseek-chat", providers: { deepseek: { base_url: "https://api.deepseek.com/v1", api_key: "secret-key" } }, output_dir: output }));
-    const handle = await startWebServer({ port: 0, configPath });
+    const handle = await startWebServer({ port: 0, configPath, auth: false });
     try {
       const root = `http://127.0.0.1:${handle.port}`;
       const json = async (path: string, init?: RequestInit): Promise<any> => JSON.parse(await (await fetch(`${root}${path}`, init)).text());
@@ -771,7 +817,7 @@ describe("WebUI", () => {
     const configPath = join(directory, "config.json");
     await writeFile(configPath, JSON.stringify({ provider: "mock", model: "mock", providers: { mock: { api_key: "test" } }, output_dir: output }));
     const hostInstance = await Host.new({ provider: "mock", model: "mock", providers: { mock: { api_key: "test" } }, output_dir: output }, {}, { agent: { run: async function* () { /* 离线空流 */ }(), abort() {}, close() {} } as never });
-    const handle = await startWebServer({ port: 0, configPath, hostInstance });
+    const handle = await startWebServer({ port: 0, configPath, hostInstance, auth: false });
     try {
       const root = `http://127.0.0.1:${handle.port}`;
       const json = async (path: string, init?: RequestInit): Promise<any> => JSON.parse(await (await fetch(`${root}${path}`, init)).text());

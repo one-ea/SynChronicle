@@ -198,6 +198,13 @@ export function renderWebApp(): string {
       #notice.show { opacity: 1; transform: none; }
       #notice::before { content: ""; flex: none; width: 9px; height: 9px; border-radius: 50%; background: #ff8b5e; }
       #notice[data-tone="success"]::before { background: #42c366; }
+      .auth-gate { position: fixed; inset: 0; z-index: 300; display: grid; place-items: center; padding: 24px; background: var(--bg); }
+      .auth-gate[hidden] { display: none; }
+      .auth-card { width: min(420px, 100%); border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--paper); padding: 32px; box-shadow: var(--shadow-xl); }
+      .auth-card h1 { margin-bottom: 8px; font-size: 24px; }
+      .auth-card p { margin: 0 0 22px; color: var(--muted); }
+      .auth-card form { display: grid; gap: 14px; }
+      .auth-card input { width: 100%; min-height: 44px; padding: 0 13px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper); }
       :root.dark #notice { background: #1f1f1f; border: 1px solid #333; }
       @media (min-width: 768px) and (max-width: 1023px) {
         .admin { grid-template-columns: 72px minmax(0, 1fr); }
@@ -244,6 +251,17 @@ export function renderWebApp(): string {
     </style>
   </head>
   <body>
+    <section class="auth-gate" id="auth-gate" aria-live="polite">
+      <div class="auth-card">
+        <h1 id="auth-title">登录 SynChronicle</h1>
+        <p id="auth-copy">使用创作账号进入控制台。</p>
+        <form id="auth-form">
+          <input id="auth-name" autocomplete="username" minlength="2" maxlength="32" placeholder="用户名" required />
+          <input id="auth-password" type="password" autocomplete="current-password" minlength="8" placeholder="密码" required />
+          <button class="btn btn-filled" id="auth-submit" type="submit">登录</button>
+        </form>
+      </div>
+    </section>
     <header class="topbar">
       <a class="brand" href="#" aria-label="SynChronicle 控制台">S<em>—</em><small>本地创作控制台</small></a>
       <div class="topbar-right">
@@ -699,7 +717,13 @@ export function renderWebApp(): string {
       function renderEvents(events) { const feed = $('feed'); feed.replaceChildren(); $('event-count').textContent = events.length + ' 条'; const timeline = $('timeline'); timeline.replaceChildren(); $('tl-count').textContent = events.length + ' 条'; if (!events.length) { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '暂无运行记录。'; feed.append(empty); const empty2 = document.createElement('div'); empty2.className = 'empty'; empty2.textContent = '暂无事件。'; timeline.append(empty2); return; } const recent = events.slice(-50).reverse(); for (const target of [feed, timeline]) recent.forEach((event) => { const item = document.createElement('div'); item.className = 'event'; const time = document.createElement('time'); time.textContent = new Date(event.time || Date.now()).toLocaleTimeString('zh-CN'); const message = document.createElement('span'); message.textContent = String(event.message || event.summary || event.type || ''); item.append(time, message); target.append(item); }); }
       let eventsBuf = [];
       function pushEvent(event) { eventsBuf = [...eventsBuf.slice(-49), event]; renderEvents(eventsBuf); }
+      const nativeFetch = window.fetch.bind(window);
+      window.fetch = function(path, options) { const next = Object.assign({}, options || {}); const headers = new Headers(next.headers || {}); headers.set('x-requested-with', 'fetch'); next.headers = headers; return nativeFetch(path, next).then((response) => { if (response.status === 401 && String(path).indexOf('/api/auth/') !== 0) $('auth-gate').hidden = false; return response; }); };
       async function post(path, body) { const response = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) }); const data = await response.json(); if (!response.ok) throw new Error(data.error || '操作失败'); return data; }
+      let authMode = 'login';
+      async function detectAuth() { const response = await fetch('/api/auth/me'); if (response.ok) { $('auth-gate').hidden = true; return; } $('auth-gate').hidden = false; }
+      $('auth-form').addEventListener('submit', async (event) => { event.preventDefault(); try { const response = await fetch('/api/auth/' + authMode, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: $('auth-name').value.trim(), password: $('auth-password').value }) }); const data = await response.json(); if (!response.ok) { if (response.status === 401 && authMode === 'login') { const setup = await fetch('/api/auth/setup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: $('auth-name').value.trim(), password: $('auth-password').value }) }); if (setup.status === 201) { authMode = 'login'; $('auth-title').textContent = '管理员已初始化'; $('auth-copy').textContent = '再次提交即可登录控制台。'; return; } } throw new Error(data.error || '认证失败'); } location.reload(); } catch (error) { showNotice(error.message || '认证失败'); } });
+      void detectAuth();
       function applyStatus(data) { currentState = data.snapshot?.runtimeState || (data.configured ? 'idle' : 'setup'); const ready = Boolean(data.configured); const active = currentState === 'running'; const status = $('runtime-status'); status.dataset.state = data.error ? 'error' : currentState; status.querySelector('span').textContent = data.error ? '服务异常' : (stateLabels[currentState] || currentState); $('progress').hidden = !active; $('state').textContent = currentState; $('state').dataset.state = currentState; $('model').textContent = data.snapshot?.model || '—'; $('input').textContent = formatNumber(data.snapshot?.usage?.inputTokens); $('output').textContent = formatNumber(data.snapshot?.usage?.outputTokens); $('prompt').disabled = !ready || active || currentState === 'closed'; $('run').disabled = !ready || active || currentState === 'closed'; $('run').textContent = active ? '创作进行中…' : currentState === 'paused' ? '继续创作' : '开始创作'; $('steering-panel').classList.toggle('show', ready); $('runtime-actions').hidden = !ready || !['paused', 'completed'].includes(currentState); $('resume').hidden = currentState !== 'paused'; if (!active) $('live-state').textContent = '本轮已完成'; if (data.events) { eventsBuf = data.events; renderEvents(eventsBuf); } }
       async function refresh() { try { applyStatus(await (await fetch('/api/status')).json()); } catch { $('runtime-status').dataset.state = 'error'; $('runtime-status').querySelector('span').textContent = '本地服务未连接'; showNotice('无法连接本地服务，请确认 SynChronicle 仍在运行。'); } }
       function appendDelta(value) { if (value === RUN_END) { $('live-state').textContent = '本轮已完成'; return; } $('live-card').hidden = false; $('live-state').textContent = '生成中'; const el = $('live-text'); el.textContent = (el.textContent + value).slice(-4000); el.scrollTop = el.scrollHeight; }

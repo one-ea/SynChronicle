@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { mkdir, readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { randomBytes } from "node:crypto";
 import { loadAssets } from "../assets/load.js";
 import { defaultConfigPath, fillDefaults, loadConfig, needsSetup, saveConfig } from "../config/index.js";
 import { validateConfig } from "../config/validate.js";
@@ -31,29 +32,33 @@ import { AutopilotSettingsSchema, AutopilotStateSchema, type AutopilotSettings }
 import { BOOKSHELF_PATH, BookshelfFileSchema, createBookId, emptyBookshelf, normalizeTitle, resolveBooksRoot, type BookMeta, type BookshelfFile } from "../domain/bookshelf.js";import { BUILTIN_SKILL_PACKS, type SkillPack } from "../domain/skillpack.js";
 import { VERSION_SOURCES, countWords } from "../store/versions.js";
 import type { ResolvedConfig } from "../config/schemas.js";
+import { validatePassword, type UserRecord } from "../domain/user.js";
+import { AuthStore, LoginRateLimiter, authenticate, clearSessionCookie, hashPassword, issueToken, sessionCookie, verifyPassword, type SessionUser } from "./auth.js";
 
-export interface WebServerOptions { port?: number; host?: string; configPath?: string; hostInstance?: Host; }
+export interface WebServerOptions { port?: number; host?: string; configPath?: string; hostInstance?: Host; auth?: boolean; }
 export interface WebServerHandle { port: number; close(): Promise<void>; }
-interface RuntimeContext { host?: Host; store?: Store; config?: ResolvedConfig; configured: boolean; configPath: string; error?: string; bookRoot?: string; bookshelf?: BookshelfFile; autopilot?: AutopilotRunner; }
+interface RuntimeContext { host?: Host; store?: Store; config?: ResolvedConfig; configured: boolean; configPath: string; error?: string; bookRoot?: string; bookshelf?: BookshelfFile; autopilot?: AutopilotRunner; user?: SessionUser; authEnabled: boolean; authStore: AuthStore; rateLimiter: LoginRateLimiter; }
 
 export async function startWebServer(options: WebServerOptions = {}): Promise<WebServerHandle> {
-  const context = await loadRuntime(options.configPath);
+  const context = await loadRuntime(options.configPath, options.auth !== false);
   if (options.hostInstance) context.host = options.hostInstance;
   const server = createServer((request, response) => void route(request, response, context));
   const port = await listen(server, options.port ?? 3000, options.host ?? "127.0.0.1");
   return { port, close: () => close(server, context.host) };
 }
 
-async function loadRuntime(configPath?: string): Promise<RuntimeContext> {
+async function loadRuntime(configPath?: string, authEnabled = true): Promise<RuntimeContext> {
   const targetPath = configPath || defaultConfigPath();
+  const fallbackRoot = dirname(targetPath);
   try {
-    if (await needsSetup(configPath)) return { configured: false, configPath: targetPath };
+    if (await needsSetup(configPath)) return { configured: false, configPath: targetPath, authEnabled, authStore: new AuthStore(fallbackRoot), rateLimiter: new LoginRateLimiter() };
     const config = await loadConfig(configPath);
-    const context: RuntimeContext = { config, configured: true, configPath: targetPath };
+    const root = resolveBooksRoot(config.output_dir ?? "output/novel");
+    const context: RuntimeContext = { config, configured: true, configPath: targetPath, authEnabled, authStore: new AuthStore(root), rateLimiter: new LoginRateLimiter() };
     await activateInitialBook(context, config);
     return context;
   } catch (error) {
-    return { configured: false, configPath: targetPath, error: error instanceof Error ? error.message : String(error) };
+    return { configured: false, configPath: targetPath, error: error instanceof Error ? error.message : String(error), authEnabled, authStore: new AuthStore(fallbackRoot), rateLimiter: new LoginRateLimiter() };
   }
 }
 
@@ -85,11 +90,24 @@ function fallbackDirName(outputDir: string): string {
 }
 
 async function route(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
-  response.setHeader("access-control-allow-origin", "*");
   const url = new URL(request.url ?? "/", "http://localhost");
   if (request.method === "GET" && url.pathname === "/") return send(response, 200, renderWebApp(), "text/html; charset=utf-8");
   if (request.method === "GET" && url.pathname === "/read") return send(response, 200, renderReadApp(), "text/html; charset=utf-8");
   if (request.method === "GET" && url.pathname === "/api/health") return sendJson(response, 200, { ok: true });
+  if (request.method === "POST" && url.pathname === "/api/auth/setup") return handleAuthSetup(request, response, context);
+  if (request.method === "POST" && url.pathname === "/api/auth/login") return handleAuthLogin(request, response, context);
+  if (context.authEnabled) {
+    const user = await authenticate(request, context.authStore);
+    if (!user) return sendJson(response, 401, { error: "未登录" });
+    context.user = user;
+    if (request.method !== "GET" && request.headers["x-requested-with"] !== "fetch") return sendJson(response, 403, { error: "请求缺少安全标识" });
+  }
+  if (request.method === "POST" && url.pathname === "/api/auth/logout") return handleAuthLogout(response);
+  if (request.method === "GET" && url.pathname === "/api/auth/me") return sendJson(response, 200, { user: context.user ?? null });
+  return dispatchRoute(request, response, context, url);
+}
+
+async function dispatchRoute(request: IncomingMessage, response: ServerResponse, context: RuntimeContext, url: URL): Promise<void> {
   if (request.method === "GET" && url.pathname === "/api/status") return sendJson(response, 200, await status(context));
   if (request.method === "GET" && url.pathname === "/api/events") return sendJson(response, 200, context.host ? { events: await context.host.replayQueue() } : { events: [] });
   if (request.method === "POST" && url.pathname === "/api/config") return handleConfig(request, response, context);
@@ -158,6 +176,47 @@ async function route(request: IncomingMessage, response: ServerResponse, context
   }
   if (request.method === "GET" && url.pathname === "/api/stream") return handleStream(request, response, context);
   sendJson(response, 404, { error: "Not found" });
+}
+
+async function handleAuthSetup(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
+  try {
+    const file = await context.authStore.loadUsers();
+    if (file.users.length) return sendJson(response, 403, { error: "管理员已经初始化" });
+    const body = await readJson(request);
+    const name = textField(body.name, "用户名");
+    if (name.length < 2 || name.length > 32) return sendJson(response, 400, { error: "用户名需为 2 至 32 位" });
+    const password = typeof body.password === "string" ? body.password : "";
+    const passwordError = validatePassword(password);
+    if (passwordError) return sendJson(response, 400, { error: passwordError });
+    const credentials = hashPassword(password);
+    const user: UserRecord = { id: `u-${randomBytes(6).toString("hex")}`, name, role: "admin", ...credentials, createdAt: new Date().toISOString(), disabled: false };
+    await context.authStore.saveUsers([user]);
+    sendJson(response, 201, { created: true });
+  } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
+}
+
+async function handleAuthLogin(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
+  const client = request.socket.remoteAddress ?? "unknown";
+  if (context.rateLimiter.isLocked(client)) return sendJson(response, 429, { error: "登录失败次数过多，请 15 分钟后重试" });
+  try {
+    const body = await readJson(request);
+    const name = optionalText(body.name);
+    const password = typeof body.password === "string" ? body.password : "";
+    const user = (await context.authStore.loadUsers()).users.find((candidate) => candidate.name === name && !candidate.disabled);
+    if (!user || !verifyPassword(password, user.salt, user.hash)) {
+      context.rateLimiter.fail(client);
+      return sendJson(response, 401, { error: "用户名或密码错误" });
+    }
+    context.rateLimiter.success(client);
+    const sessionUser: SessionUser = { id: user.id, name: user.name, role: user.role };
+    response.setHeader("set-cookie", sessionCookie(issueToken(user.id, await context.authStore.secret())));
+    sendJson(response, 200, { user: sessionUser });
+  } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
+}
+
+function handleAuthLogout(response: ServerResponse): void {
+  response.setHeader("set-cookie", clearSessionCookie());
+  sendJson(response, 200, { ok: true });
 }
 
 type ChapterStatus = "completed" | "in-progress" | "pending" | "rewrite";
