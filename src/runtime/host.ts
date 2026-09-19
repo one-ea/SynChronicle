@@ -7,6 +7,8 @@ import { buildCoordinator } from "../agents/build.js";
 import { AsyncQueue } from "./asyncQueue.js";
 import { RuntimeStream } from "./stream.js";
 import { buildResumePrompt } from "./resume.js";
+import { renderConstitutionText } from "./constitution.js";
+import { emptyConstitution } from "../domain/constitution.js";
 import { errorEvent, reflectionEvent, systemEvent } from "./observer.js";
 import { importTextFile } from "./imp/index.js";
 import { exportNovel, type ExportOptions } from "./exp/index.js";
@@ -111,7 +113,9 @@ export class Host {
     this.runController = controller;
     this.emit(systemEvent(label));
     const injections = await this.consumeInjections();
-    const finalPrompt = injections.length ? `${injections.map(text => `[用户干预] ${text}`).join("\n\n")}\n\n${prompt}` : prompt;
+    const loadedConstitution = await this.store.constitution.load().catch(() => null);
+    const constitutionText = renderConstitutionText(loadedConstitution ?? emptyConstitution());
+    const finalPrompt = `${constitutionText ? constitutionText + "\n\n" : ""}${injections.length ? `${injections.map(text => `[用户干预] ${text}`).join("\n\n")}\n\n` : ""}${prompt}`;
     try {
       const stream = this.agent.run(finalPrompt, controller.signal);
       for await (const delta of stream) {

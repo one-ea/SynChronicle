@@ -581,6 +581,50 @@ describe("WebUI", () => {
     }
   });
 
+  it("serves p6 consistency and platform endpoints", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "synchronicle-web-p6-"));
+    const output = join(directory, "novel");
+    for (const dir of ["meta", "chapters"]) await mkdir(join(output, dir), { recursive: true });
+    await writeFile(join(output, "chapters", "01.md"), "沈砚推开书局的门。“这么晚还来？”他忽然想起十年前的雨夜。突然，钟声响了。");
+    await writeFile(join(output, "meta", "progress.json"), JSON.stringify({ novel_name: "测试", phase: "writing", current_chapter: 2, total_chapters: 10, completed_chapters: [1], total_word_count: 30, chapter_word_counts: { "1": 30 } }));
+    const configPath = join(directory, "config.json");
+    await writeFile(configPath, JSON.stringify({ provider: "deepseek", model: "deepseek-chat", providers: { deepseek: { base_url: "https://api.deepseek.com/v1", api_key: "secret-key" } }, output_dir: output }));
+    const handle = await startWebServer({ port: 0, configPath });
+    try {
+      const root = `http://127.0.0.1:${handle.port}`;
+
+      const postConst = (await (await fetch(`${root}/api/constitution`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ worldRules: ["灵力使用必须付出寿命代价"], forbiddenInfo: ["主角身世第三卷前不得揭晓"], secretReveals: [{ secret: "父亲失踪真相", revealAt: "第 42 章" }] }) }).then((item) => item.json()))) as { saved: boolean; constitution: { worldRules: string[] } };
+      expect(postConst.saved).toBe(true);
+      expect(postConst.constitution.worldRules).toHaveLength(1);
+      const getConst = (await (await fetch(`${root}/api/constitution`)).json()) as { constitution: { forbiddenInfo: string[] } };
+      expect(getConst.constitution.forbiddenInfo).toHaveLength(1);
+
+      const recallConst = (await (await fetch(`${root}/api/recall?q=` + encodeURIComponent("寿命代价"))).json()) as { hits: Array<{ kind: string }> };
+      expect(recallConst.hits[0]!.kind).toBe("constitution");
+
+      const foreshadowRes = (await (await fetch(`${root}/api/foreshadows`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: "key", title: "旧钟楼钥匙", type: "chekhov", plantedChapter: 1, missedRecoveries: 3 }) }).then((item) => item.json()))) as { saved: boolean; missedRecoveries: number };
+      expect(foreshadowRes.saved).toBe(true);
+      expect(foreshadowRes.missedRecoveries).toBe(3);
+      const foreshadowList = (await (await fetch(`${root}/api/foreshadows`)).json()) as { items: Array<{ type: string }> };
+      expect(foreshadowList.items[0]!.type).toBe("chekhov");
+      const diagRes = (await (await fetch(`${root}/api/diag`)).json()) as { report: { findings: Array<{ rule: string }> } };
+      expect(diagRes.report.findings.some((finding) => finding.rule === "ForeshadowEscalation.critical")).toBe(true);
+
+      const platformRes = (await (await fetch(`${root}/api/platform-review?platform=qidian`)).json()) as { configured: boolean; report: { platform: string; dimensions: Record<string, number>; overall: number } };
+      expect(platformRes.configured).toBe(true);
+      expect(platformRes.report.platform).toBe("qidian");
+      expect(platformRes.report.dimensions.openingHook).toBeGreaterThanOrEqual(0);
+
+      const fingerprintRes = (await (await fetch(`${root}/api/ai-fingerprint?chapter=1`)).json()) as { configured: boolean; fingerprint: { riskScore: number }; amplitude: unknown; advice: string };
+      expect(fingerprintRes.configured).toBe(true);
+      expect(fingerprintRes.fingerprint.riskScore).toBeGreaterThanOrEqual(0);
+      expect(fingerprintRes.advice).toContain("改写幅度");
+    } finally {
+      await handle.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("serves arena and branch management endpoints", async () => {
     const directory = await mkdtemp(join(tmpdir(), "synchronicle-web-arena-"));
     const output = join(directory, "novel");

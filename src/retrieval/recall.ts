@@ -8,7 +8,7 @@ import type { Store } from "../store/index.js";
  * embedding 可用则向量优先，失败回落 BM25。零新增依赖。
  */
 
-export type RecallKind = "entity" | "summary" | "foreshadow" | "material";
+export type RecallKind = "entity" | "summary" | "foreshadow" | "material" | "constitution";
 
 export interface RecallDoc { id: number; kind: RecallKind; source: string; text: string }
 export interface RecallHit { kind: RecallKind; source: string; score: number; snippet: string }
@@ -49,31 +49,56 @@ export async function buildRecallCorpus(store: Store): Promise<RecallDoc[]> {
   for (const material of materials.materials) {
     docs.push({ id: docs.length, kind: "material", source: material.title, text: `[素材:${material.type}] ${material.title}: ${material.content} ${material.tags.join(" ")}` });
   }
+
+  const constitution = await store.constitution.load().catch(() => null);
+  if (constitution) {
+    const groups: Array<[string, string[]]> = [["世界规则", constitution.worldRules], ["能力代价", constitution.abilityCosts], ["禁写信息", constitution.forbiddenInfo], ["人物行为边界", constitution.characterBoundaries]];
+    for (const [label, rules] of groups) for (const rule of rules) docs.push({ id: docs.length, kind: "constitution", source: label, text: `[宪法:${label}] ${rule}` });
+    for (const reveal of constitution.secretReveals) docs.push({ id: docs.length, kind: "constitution", source: "秘密揭晓计划", text: `[宪法:秘密] 「${reveal.secret}」计划于${reveal.revealAt}揭晓` });
+  }
+
+  const foreshadowStore = (store as Store & { foreshadows?: { load(): Promise<{ items: Array<{ title: string; description: string; type: string; stage: string }> }> } }).foreshadows;
+  if (foreshadowStore) {
+    const tracks = (await foreshadowStore.load().catch(() => ({ items: [] }))).items;
+    for (const track of tracks) docs.push({ id: docs.length, kind: "foreshadow", source: track.title, text: `[伏笔:${track.type}] ${track.title}: ${track.description} 状态:${track.stage}` });
+  }
   return docs;
 }
 
 export interface RecallOptions { k?: number; embedding?: EmbeddingConfig }
 
-export async function recall(store: Store, query: string, options: RecallOptions = {}): Promise<{ engine: "embedding" | "bm25"; hits: RecallHit[] }> {
+export async function recall(store: Store, query: string, options: RecallOptions = {}): Promise<{ engine: "embedding" | "bm25" | "rrf"; hits: RecallHit[] }> {
   const k = options.k ?? 8;
   const corpus = await buildRecallCorpus(store);
   if (!corpus.length || !query.trim()) return { engine: "bm25", hits: [] };
+
+  const decorate = (hit: { id: number; score: number }): RecallHit => { const doc = corpus[hit.id]!; return { kind: doc.kind, source: doc.source, score: Math.round(hit.score * 1000) / 1000, snippet: clip(doc.text) }; };
 
   if (options.embedding?.api_key) {
     try {
       const vectors = await embedTexts(options.embedding, [...corpus.map((doc) => doc.text), query]);
       const queryVector = vectors[vectors.length - 1]!;
-      const hits = corpus
-        .map((doc, index) => ({ doc, score: Math.round(cosineSimilarity(queryVector, vectors[index]!) * 1000) / 1000 }))
+      const vectorRanked = corpus
+        .map((doc, index) => ({ id: doc.id, score: cosineSimilarity(queryVector, vectors[index]!) }))
         .filter((hit) => hit.score > 0)
         .sort((a, b) => b.score - a.score)
-        .slice(0, k)
-        .map((hit) => ({ kind: hit.doc.kind, source: hit.doc.source, score: hit.score, snippet: clip(hit.doc.text) }));
-      if (hits.length) return { engine: "embedding", hits };
+        .slice(0, k * 2);
+      const bm25Ranked = bm25Search(corpus.map((doc) => ({ id: doc.id, text: doc.text })), query, k * 2);
+      if (vectorRanked.length || bm25Ranked.length) {
+        // RRF 融合：score = Σ 1/(60 + rank)，双路召回按倒数排名合并
+        const fused = new Map<number, number>();
+        for (const [index, hit] of vectorRanked.entries()) fused.set(hit.id, (fused.get(hit.id) ?? 0) + 1 / (60 + index + 1));
+        for (const [index, hit] of bm25Ranked.entries()) fused.set(hit.id, (fused.get(hit.id) ?? 0) + 1 / (60 + index + 1));
+        const hits = [...fused.entries()]
+          .map(([id, score]) => ({ id, score }))
+          .sort((a, b) => b.score - a.score)
+          .slice(0, k)
+          .map(decorate);
+        if (hits.length) return { engine: "rrf", hits };
+      }
     } catch { /* 嵌入失败回落 BM25 */ }
   }
 
-  const hits = bm25Search(corpus.map((doc) => ({ id: doc.id, text: doc.text })), query, k)
-    .map((hit) => { const doc = corpus[hit.id]!; return { kind: doc.kind, source: doc.source, score: Math.round(hit.score * 1000) / 1000, snippet: clip(doc.text) }; });
+  const hits = bm25Search(corpus.map((doc) => ({ id: doc.id, text: doc.text })), query, k).map(decorate);
   return { engine: "bm25", hits };
 }

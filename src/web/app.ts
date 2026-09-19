@@ -333,6 +333,15 @@ export function renderWebApp(): string {
             </section>
             <aside class="stack">
               <div class="card">
+                <div class="panel-head"><h3>项目宪法</h3><span id="constitution-count">0 条</span></div>
+                <div class="rowlines" id="constitution-rows"><div class="empty">尚未设置锁定规则。</div></div>
+                <div class="form-row" style="margin-top:10px">
+                  <div class="tf"><input id="constitution-rule" placeholder=" " /><label for="constitution-rule">新增规则（世界/代价/禁写）</label></div>
+                  <div class="tf"><input id="constitution-secret" placeholder=" " /><label for="constitution-secret">秘密|揭晓时点</label></div>
+                </div>
+                <div class="actions" style="margin-top:10px"><small>宪法自动注入每轮生成提示词。</small><button id="constitution-add" class="btn btn-tonal" type="button">添加</button></div>
+              </div>
+              <div class="card">
                 <div class="panel-head"><h3>设定检索</h3><span id="recall-engine">RAG</span></div>
                 <div class="steer-row"><div class="tf"><input id="recall-query" placeholder=" " /><label for="recall-query">检索设定 / 伏笔 / 摘要</label></div><button id="recall-run" class="btn btn-tonal" type="button">检索</button></div>
                 <div class="rowlines" id="recall-results" style="margin-top:8px"><div class="empty">输入关键词检索实体图谱、章节摘要与伏笔线索。</div></div>
@@ -371,7 +380,7 @@ export function renderWebApp(): string {
           </div>
         </section>
         <section class="page" data-page="reader" aria-label="章节与大纲" hidden>
-          <div class="page-head"><div><h1>章节与大纲</h1><p class="meta">卷弧章三层结构与章节质量详情。</p></div><div class="head-actions"><button id="reader-review-btn" class="btn btn-tonal" type="button">读者评审</button><button id="golden-btn" class="btn btn-tonal" type="button">黄金三章</button><button id="editor-btn" class="btn btn-tonal" type="button">编辑审稿</button><button id="brainstorm-btn" class="btn btn-tonal" type="button">脑暴</button><button id="deconstruct-btn" class="btn btn-tonal" type="button">拆书分析</button></div></div>
+          <div class="page-head"><div><h1>章节与大纲</h1><p class="meta">卷弧章三层结构与章节质量详情。</p></div><div class="head-actions"><button id="reader-review-btn" class="btn btn-tonal" type="button">读者评审</button><button id="golden-btn" class="btn btn-tonal" type="button">黄金三章</button><button id="platform-btn" class="btn btn-tonal" type="button">平台责编</button><button id="editor-btn" class="btn btn-tonal" type="button">编辑审稿</button><button id="brainstorm-btn" class="btn btn-tonal" type="button">脑暴</button><button id="deconstruct-btn" class="btn btn-tonal" type="button">拆书分析</button></div></div>
           <div id="reader-review-panel" class="card" style="margin-bottom:18px;background:var(--alpha-4);border:1px dashed var(--line);" hidden>
             <div class="panel-head"><h4 style="margin:0">读者模拟评分与对抗评审</h4><span id="review-avg">—</span></div>
             <div id="review-rows" class="rowlines" style="margin-top:8px"></div>
@@ -403,6 +412,15 @@ export function renderWebApp(): string {
             <div class="actions" style="margin-top:10px"><small>同 seed 可复现，产出可入库复用。</small><button id="brainstorm-run" class="btn btn-filled" type="button" style="min-height:32px;font-size:12px">生成 8 条</button></div>
             <div class="rowlines" id="brainstorm-rows" style="margin-top:8px"></div>
           </div>
+          <div id="platform-panel" class="card" style="margin-bottom:18px;background:var(--alpha-4);border:1px dashed var(--line);" hidden>
+            <div class="panel-head"><h4 style="margin:0">平台责编（5 维签约打分）</h4>
+              <div class="seg" role="radiogroup" aria-label="平台">
+                <label><input type="radio" name="platform-type" value="fanqie" checked /><span>番茄</span></label>
+                <label><input type="radio" name="platform-type" value="qidian" /><span>起点</span></label>
+              </div>
+            </div>
+            <div id="platform-rows" class="rowlines" style="margin-top:8px"></div>
+          </div>
           <div class="reader">
             <aside class="card tree-card" aria-label="大纲树">
               <div class="panel-head"><h3 id="book-title">大纲</h3><span id="book-progress">—</span></div>
@@ -411,7 +429,7 @@ export function renderWebApp(): string {
             <article class="card" aria-label="章节内容">
               <header class="chapter-head">
                 <h2 id="ch-title">选择左侧章节开始阅读</h2>
-                <div style="display:flex;gap:8px;align-items:center"><span id="ch-status" class="chip small" hidden></span><span id="ch-tone" class="chip small" hidden></span><span id="ch-words" class="meta"></span><button id="safety-btn" class="btn btn-tonal" type="button" style="min-height:30px;padding:4px 12px;font-size:12px;" hidden>安全扫描</button><button id="open-rewrite" class="btn btn-tonal" type="button" style="min-height:30px;padding:4px 12px;font-size:12px;" hidden>文风重构 / 去AI味</button><button id="open-arena" class="btn btn-tonal" type="button" style="min-height:30px;padding:4px 12px;font-size:12px;" hidden>A/B 双模型竞写</button><button id="open-branch" class="btn btn-tonal" type="button" style="min-height:30px;padding:4px 12px;font-size:12px;" hidden>剧情分支</button></div>
+                <div style="display:flex;gap:8px;align-items:center"><span id="ch-status" class="chip small" hidden></span><span id="ch-tone" class="chip small" hidden></span><span id="ch-words" class="meta"></span><button id="safety-btn" class="btn btn-tonal" type="button" style="min-height:30px;padding:4px 12px;font-size:12px;" hidden>安全扫描</button><button id="fingerprint-btn" class="btn btn-tonal" type="button" style="min-height:30px;padding:4px 12px;font-size:12px;" hidden>AI 痕迹</button><button id="open-rewrite" class="btn btn-tonal" type="button" style="min-height:30px;padding:4px 12px;font-size:12px;" hidden>文风重构 / 去AI味</button><button id="open-arena" class="btn btn-tonal" type="button" style="min-height:30px;padding:4px 12px;font-size:12px;" hidden>A/B 双模型竞写</button><button id="open-branch" class="btn btn-tonal" type="button" style="min-height:30px;padding:4px 12px;font-size:12px;" hidden>剧情分支</button></div>
               </header>
               <div id="arena-panel" class="card" style="margin:14px 0;background:var(--alpha-4);border:1px dashed var(--line);" hidden>
                 <div class="panel-head"><h4 style="margin:0">多模型同章 A/B 竞写 & 盲审对比</h4><span id="arena-status">就绪</span></div>
@@ -639,6 +657,8 @@ export function renderWebApp(): string {
            if (openBr) openBr.hidden = !view.text;
            const sfBtn = $('safety-btn');
            if (sfBtn) sfBtn.hidden = !view.text;
+           const fpBtn = $('fingerprint-btn');
+           if (fpBtn) fpBtn.hidden = !view.text;
           const rwPanel = $('rewrite-panel');
           if (rwPanel) rwPanel.hidden = true;
           const arPanel = $('arena-panel');
@@ -1266,6 +1286,119 @@ export function renderWebApp(): string {
           showNotice('角色提示词已复制到剪贴板（也可粘贴到任意对话模型使用）。', 'success');
         } catch (err) { showNotice(err.message || '复制失败'); }
       });
+      async function loadConstitution() {
+        const box = $('constitution-rows');
+        if (!box) return;
+        try {
+          const res = await (await fetch('/api/constitution')).json();
+          const constitution = res.constitution;
+          box.replaceChildren();
+          if (!constitution) { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '尚未配置小说工作区。'; box.append(empty); $('constitution-count').textContent = '0 条'; return; }
+          const entries: Array<[string, string]> = [
+            ...constitution.worldRules.map((rule) => ['世界规则', rule] as [string, string]),
+            ...constitution.abilityCosts.map((rule) => ['能力代价', rule] as [string, string]),
+            ...constitution.forbiddenInfo.map((rule) => ['禁写信息', rule] as [string, string]),
+            ...constitution.characterBoundaries.map((rule) => ['行为边界', rule] as [string, string]),
+            ...constitution.secretReveals.map((item) => ['秘密计划', item.secret + ' → ' + item.revealAt] as [string, string]),
+          ];
+          $('constitution-count').textContent = entries.length + ' 条';
+          if (!entries.length) { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '尚未设置锁定规则。'; box.append(empty); return; }
+          for (const [label, rule] of entries) {
+            const row = document.createElement('div'); row.className = 'rowline';
+            const left = document.createElement('div');
+            const pill = document.createElement('span'); pill.className = 'pill warn'; pill.textContent = label;
+            const text = document.createElement('small'); text.style.marginLeft = '6px'; text.style.color = 'var(--muted)'; text.textContent = rule;
+            left.append(pill, text);
+            box.append(row);
+            row.append(left);
+          }
+        } catch { box.replaceChildren(); }
+      }
+      $('constitution-add')?.addEventListener('click', async () => {
+        const rule = $('constitution-rule')?.value.trim();
+        const secret = $('constitution-secret')?.value.trim();
+        if (!rule && !secret) { showNotice('填写规则或秘密'); return; }
+        try {
+          const current = await (await fetch('/api/constitution')).json();
+          const constitution = current.constitution || { worldRules: [], abilityCosts: [], forbiddenInfo: [], secretReveals: [], characterBoundaries: [] };
+          const body = { ...constitution };
+          if (rule) {
+            if (rule.includes('禁') || rule.includes('不得')) body.forbiddenInfo = [...body.forbiddenInfo, rule];
+            else if (rule.includes('代价') || rule.includes('消耗')) body.abilityCosts = [...body.abilityCosts, rule];
+            else body.worldRules = [...body.worldRules, rule];
+          }
+          if (secret && secret.includes('|')) {
+            const [secretText, revealAt] = secret.split('|');
+            body.secretReveals = [...body.secretReveals, { secret: secretText.trim(), revealAt: (revealAt || '未定').trim() }];
+          }
+          await post('/api/constitution', body);
+          if ($('constitution-rule')) $('constitution-rule').value = '';
+          if ($('constitution-secret')) $('constitution-secret').value = '';
+          showNotice('宪法规则已保存，将自动注入每轮生成。', 'success');
+          await loadConstitution();
+        } catch (err) { showNotice(err.message || '保存失败'); }
+      });
+      $('platform-btn')?.addEventListener('click', async () => {
+        const panel = $('platform-panel');
+        const box = $('platform-rows');
+        if (!panel || !box) return;
+        panel.hidden = !panel.hidden;
+        if (panel.hidden) return;
+        await renderPlatformReview(box);
+      });
+      document.querySelectorAll('input[name="platform-type"]').forEach((input) => input.addEventListener('change', async () => {
+        const box = $('platform-rows');
+        if (box && $('platform-panel') && !$('platform-panel').hidden) await renderPlatformReview(box);
+      }));
+      async function renderPlatformReview(box) {
+        const platform = document.querySelector('input[name="platform-type"]:checked')?.value || 'fanqie';
+        try {
+          const res = await (await fetch('/api/platform-review?platform=' + platform)).json();
+          box.replaceChildren();
+          if (!res.configured || !res.report) { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '尚未配置工作区。'; box.append(empty); return; }
+          const report = res.report;
+          const dimLabel = { openingHook: '开篇钩子', mainline: '主线清晰', thrill: '爽点密度', pacing: '节奏紧凑', endingSuspense: '结尾悬念' };
+          const head = document.createElement('div'); head.className = 'rowline';
+          const overall = document.createElement('span'); overall.replaceChildren();
+          overall.textContent = '综合签约分 ' + report.overall + '（' + report.verdict + '）';
+          overall.style.fontWeight = '700';
+          head.append(overall);
+          box.append(head);
+          for (const [key, value] of Object.entries(report.dimensions)) {
+            const line = document.createElement('div'); line.className = 'rowline';
+            const left = document.createElement('span'); left.textContent = dimLabel[key] || key;
+            const right = document.createElement('div'); right.className = 'pills';
+            const scorePill = document.createElement('span'); scorePill.className = 'pill ' + (value >= 70 ? 'ok' : value >= 40 ? 'muted' : 'bad'); scorePill.textContent = String(value);
+            const weight = document.createElement('small'); weight.style.color = 'var(--faint)'; weight.textContent = '权重 ' + Math.round(report.weights[key] * 100) + '%';
+            right.append(scorePill, weight);
+            line.append(left, right);
+            box.append(line);
+          }
+          for (const finding of report.findings) {
+            const line = document.createElement('div'); line.className = 'rowline';
+            const left = document.createElement('span'); left.textContent = '⚠ ' + finding.check + '：' + finding.evidence;
+            line.append(left);
+            box.append(line);
+          }
+          if (report.missing.length) {
+            const line = document.createElement('div'); line.className = 'rowline';
+            const left = document.createElement('small'); left.style.color = 'var(--faint)'; left.textContent = '缺失维度：' + report.missing.join('、');
+            line.append(left);
+            box.append(line);
+          }
+        } catch { box.replaceChildren(); }
+      }
+      $('fingerprint-btn')?.addEventListener('click', async () => {
+        if (!currentChapter) return;
+        try {
+          const res = await (await fetch('/api/ai-fingerprint?chapter=' + currentChapter)).json();
+          if (!res.configured || !res.fingerprint) { showNotice(err0(res)); return; }
+          const f = res.fingerprint;
+          const level = f.riskScore >= 60 ? 'warn' : 'success';
+          showNotice('第 ' + currentChapter + ' 章 AI 痕迹风险 ' + f.riskScore + '/100（排比 ' + f.signals.parallelism + ' · 工整 ' + f.signals.uniformity + ' · 模板 ' + f.signals.templated + ' · 陈词 ' + f.signals.summaryCliche + '）。' + res.advice, level);
+        } catch (err) { showNotice(err.message || '扫描失败'); }
+      });
+      function err0(res) { return res.error || '扫描失败'; }
       async function loadEntities() {
         try {
           const res = await (await fetch('/api/entities')).json();
@@ -1343,6 +1476,7 @@ export function renderWebApp(): string {
       refresh();
       loadCostPreview();
       loadMaterials();
+      loadConstitution();
       loadBookSummary();
     </script>
   </body>

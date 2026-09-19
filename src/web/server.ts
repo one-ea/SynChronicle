@@ -20,6 +20,8 @@ import { brainstorm, BRAINSTORM_TYPES, type BrainstormType } from "../runtime/br
 import { characterReply, type ChatTurn } from "../domain/chatchar.js";
 import { goldenReviewFromStore } from "../diag/golden.js";
 import { editorReview } from "../diag/editorreview.js";
+import { platformReviewFromStore, type Platform } from "../diag/platformreview.js";
+import { fingerprintScan, rewriteAmplitude } from "../diag/aifingerprint.js";
 import { buildRewritePlan } from "../runtime/rewrite.js";
 import { evaluateArenaCandidates } from "../runtime/arena.js";
 import type { ResolvedConfig } from "../config/schemas.js";
@@ -93,6 +95,16 @@ async function route(request: IncomingMessage, response: ServerResponse, context
   if (request.method === "POST" && url.pathname === "/api/character-chat") return handleCharacterChat(request, response, context);
   if (request.method === "GET" && url.pathname === "/api/golden-review") return handleGoldenReview(response, context);
   if (request.method === "GET" && url.pathname === "/api/editor-review") return handleEditorReview(response, context);
+  if (url.pathname === "/api/constitution") {
+    if (request.method === "GET") return handleConstitutionGet(response, context);
+    if (request.method === "POST") return handleConstitutionPost(request, response, context);
+  }
+  if (request.method === "GET" && url.pathname === "/api/platform-review") return handlePlatformReview(response, context, url);
+  if (request.method === "GET" && url.pathname === "/api/ai-fingerprint") return handleAiFingerprint(response, context, url);
+  if (url.pathname === "/api/foreshadows") {
+    if (request.method === "GET") return handleForeshadowsGet(response, context);
+    if (request.method === "POST") return handleForeshadowsPost(request, response, context);
+  }
   if (request.method === "GET" && url.pathname === "/api/stream") return handleStream(request, response, context);
   sendJson(response, 404, { error: "Not found" });
 }
@@ -499,6 +511,102 @@ async function handleEditorReview(response: ServerResponse, context: RuntimeCont
     sendJson(response, 200, { configured: true, report: await editorReview(context.store) });
   } catch (error) {
     sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function handleConstitutionGet(response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.store) return sendJson(response, 200, { configured: false, constitution: null });
+  try {
+    const constitution = await context.store.constitution.load().catch(() => null);
+    sendJson(response, 200, { configured: true, constitution: constitution ?? null });
+  } catch (error) {
+    sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function handleConstitutionPost(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.store) return sendJson(response, 503, { error: "尚未配置小说工作区" });
+  try {
+    const body = await readJson(request);
+    const pickRules = (value: unknown): string[] | undefined => Array.isArray(value) ? value.map(String).map((item) => item.trim()).filter(Boolean) : undefined;
+    const current = (await context.store.constitution.load().catch(() => null)) ?? { worldRules: [], abilityCosts: [], forbiddenInfo: [], secretReveals: [], characterBoundaries: [] };
+    const next = {
+      worldRules: pickRules(body.worldRules) ?? current.worldRules,
+      abilityCosts: pickRules(body.abilityCosts) ?? current.abilityCosts,
+      forbiddenInfo: pickRules(body.forbiddenInfo) ?? current.forbiddenInfo,
+      secretReveals: Array.isArray(body.secretReveals) ? body.secretReveals.filter((item): item is { secret: string; revealAt: string } => typeof item === "object" && item !== null && typeof item.secret === "string" && typeof item.revealAt === "string") : current.secretReveals,
+      characterBoundaries: pickRules(body.characterBoundaries) ?? current.characterBoundaries,
+    };
+    await context.store.constitution.save(next);
+    sendJson(response, 200, { saved: true, constitution: next });
+  } catch (error) {
+    sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function handlePlatformReview(response: ServerResponse, context: RuntimeContext, url: URL): Promise<void> {
+  if (!context.store) return sendJson(response, 200, { configured: false, report: null });
+  const platform = (url.searchParams.get("platform") === "qidian" ? "qidian" : "fanqie") as Platform;
+  try {
+    sendJson(response, 200, { configured: true, report: await platformReviewFromStore(context.store, platform) });
+  } catch (error) {
+    sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function handleAiFingerprint(response: ServerResponse, context: RuntimeContext, url: URL): Promise<void> {
+  if (!context.store) return sendJson(response, 200, { configured: false, report: null });
+  try {
+    const chapter = Number(url.searchParams.get("chapter")) || 0;
+    if (!chapter) return sendJson(response, 400, { error: "chapter 必填" });
+    const final = await context.store.drafts.loadChapterText(chapter);
+    if (!final) return sendJson(response, 404, { error: `第 ${chapter} 章暂无正文` });
+    const fingerprint = fingerprintScan(final);
+    const draft = await context.store.drafts.loadDraft(chapter);
+    const amplitude = fingerprint && draft ? rewriteAmplitude(draft, final) : null;
+    sendJson(response, 200, { configured: true, chapter, fingerprint, amplitude, advice: amplitude ? (amplitude.compliant ? "人工改写幅度达标（≥30%），建议如实申报 AI 使用" : "人工改写幅度未达 30% 合规线，建议继续人工润色") : "无 AI 草稿可比对，无法计算改写幅度" });
+  } catch (error) {
+    sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function handleForeshadowsGet(response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.store) return sendJson(response, 200, { configured: false, items: [] });
+  try {
+    const file = await context.store.foreshadows.load();
+    sendJson(response, 200, { configured: true, ...file });
+  } catch (error) {
+    sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function handleForeshadowsPost(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.store) return sendJson(response, 503, { error: "尚未配置小说工作区" });
+  try {
+    const body = await readJson(request);
+    const id = optionalText(body.id);
+    const title = optionalText(body.title);
+    if (!id || !title) return sendJson(response, 400, { error: "id 和 title 必填" });
+    const file = await context.store.foreshadows.load();
+    const existing = file.items.find((item) => item.id === id);
+    const missedRecoveries = typeof body.missedRecoveries === "number" ? Math.max(0, Math.floor(body.missedRecoveries)) : existing?.missedRecoveries ?? 0;
+    const stage = (optionalText(body.stage) || existing?.stage || "planted") as "planted" | "hinted" | "misled" | "resolved";
+    const type = (optionalText(body.type) || existing?.type || "mystery") as "mystery" | "secret" | "worldview" | "tension" | "prophecy" | "chekhov" | "unfinished" | "identity";
+    await context.store.foreshadows.upsert({
+      id,
+      title,
+      description: optionalText(body.description) ?? existing?.description ?? "",
+      type,
+      stage,
+      plantedChapter: Number(body.plantedChapter) || existing?.plantedChapter || 1,
+      lastUpdatedChapter: Number(body.lastUpdatedChapter) || existing?.lastUpdatedChapter,
+      resolvedChapter: Number(body.resolvedChapter) || existing?.resolvedChapter,
+      urgency: (optionalText(body.urgency) || existing?.urgency || "medium") as "low" | "medium" | "high" | "critical",
+      missedRecoveries,
+    });
+    sendJson(response, 200, { saved: true, id, missedRecoveries });
+  } catch (error) {
+    sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) });
   }
 }
 

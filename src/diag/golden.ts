@@ -16,7 +16,7 @@ export interface GoldenReport { reviewed: number; missing: number[]; chapters: G
 
 function clamp(value: number): number { return Math.max(0, Math.min(100, Math.round(value))); }
 
-function openingHookScore(text: string): number {
+export function openingHookScore(text: string): number {
   const head = text.slice(0, 300);
   const marks = (head.match(/[？?]|突然|竟|赫然|就在这时|下一刻|然而/g) ?? []).length;
   const dialogue = (head.match(/[“"][^”"]{2,}[”"]/g) ?? []).length;
