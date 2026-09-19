@@ -89,3 +89,32 @@ export class QuotaDao {
     return { ok: true, amountUsd: Number(row.amount_usd) };
   }
 }
+
+export interface AuditRow { id?: number; actor_id: string; action: string; target: string; detail: string | null; created_at: string; }
+export interface ReportRow { id?: number; entry_id: string; note: string | null; status: string; handled_by: string | null; created_at: string; }
+
+export class AuditDao {
+  constructor(private readonly db: SqlDatabase) {}
+  async log(actorId: string, action: string, target: string, detail?: unknown): Promise<void> {
+    await this.db.run("INSERT INTO audit_logs (actor_id, action, target, detail, created_at) VALUES (?, ?, ?, ?, ?)", [actorId, action, target, detail === undefined ? null : JSON.stringify(detail), new Date().toISOString()]);
+  }
+  async list(limit = 100): Promise<AuditRow[]> { return this.db.all<AuditRow>("SELECT id, actor_id, action, target, detail, created_at FROM audit_logs ORDER BY id DESC LIMIT ?", [limit]); }
+}
+
+export class ReportsDao {
+  constructor(private readonly db: SqlDatabase) {}
+  async create(entryId: string, note: string): Promise<void> {
+    await this.db.run("INSERT INTO reports (entry_id, note, status, handled_by, created_at) VALUES (?, ?, 'open', NULL, ?)", [entryId, note, new Date().toISOString()]);
+  }
+  async list(status?: string): Promise<ReportRow[]> {
+    return status
+      ? this.db.all<ReportRow>("SELECT id, entry_id, note, status, handled_by, created_at FROM reports WHERE status = ? ORDER BY id DESC LIMIT 100", [status])
+      : this.db.all<ReportRow>("SELECT id, entry_id, note, status, handled_by, created_at FROM reports ORDER BY id DESC LIMIT 100");
+  }
+  async handle(id: number, handledBy: string, status: string): Promise<boolean> {
+    const row = await this.db.get<{ id: number }>("SELECT id FROM reports WHERE id = ?", [id]);
+    if (!row) return false;
+    await this.db.run("UPDATE reports SET status = ?, handled_by = ? WHERE id = ?", [status, handledBy, id]);
+    return true;
+  }
+}

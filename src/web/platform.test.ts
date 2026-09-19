@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { startWebServer } from "../web/server.js";
 import { openDatabase, ensureSchema } from "../db/sql.js";
 import { UsersDao } from "../db/users.js";
+import { SqlKV } from "../db/kv.js";
 
 function seed(dir: string, mode: "selfhost" | "commercial"): Promise<string> {
   const configPath = join(dir, "config.json");
@@ -143,5 +144,53 @@ describe("p10-a platform registration", () => {
       const afterModels: any = await (await fetch(`${root}/api/models`, { headers: writerHeaders })).json();
       expect(afterModels.models.length).toBe(0);
     } finally { await handle.close(); await rm(dir, { recursive: true, force: true }); }
+  });
+
+  it("blocks unsafe publishing in commercial mode and handles reports with audit trail", async () => {
+    const previousKey = process.env.MASTER_KEY;
+    process.env.MASTER_KEY = "d".repeat(64);
+    const dir = await mkdtemp(join(tmpdir(), "p10-e-compliance-"));
+    const configPath = join(dir, "config.json");
+    await writeFile(configPath, JSON.stringify({ provider: "deepseek", model: "deepseek-chat", providers: { deepseek: { base_url: "https://api.deepseek.com/v1" } }, output_dir: join(dir, "output", "novel") }));
+    const dbUrl = `sqlite:${join(dir, "test.db")}`;
+    const db = await openDatabase(dbUrl);
+    await ensureSchema(db);
+    const kv = new SqlKV(db);
+    const outputRoot = join(dir, "output");
+    const bookAbs = join(outputRoot, "novel");
+    await kv.set(`${outputRoot}/bookshelf.json`, JSON.stringify({ books: [{ id: "novel", title: "危险之书", createdAt: "t", updatedAt: "t", ownerId: "" }], activeId: "novel", updatedAt: "t" }));
+    await kv.set(`${bookAbs}/meta/progress.json`, JSON.stringify({ novel_name: "危险之书", phase: "writing", current_chapter: 2, total_chapters: 2, completed_chapters: [1], total_word_count: 20, chapter_word_counts: { "1": 20 }, in_progress_chapter: 0, flow: "writing", pending_rewrites: [] }));
+    await kv.set(`${bookAbs}/chapters/01.md`, "他描述了详细的自杀方法与割腕教程。");
+    await db.close();
+    const handle = await startWebServer({ port: 0, configPath, storage: "db", dbUrl, mode: "commercial" });
+    try {
+      const root = `http://127.0.0.1:${handle.port}`;
+      const headers = { "content-type": "application/json", "x-requested-with": "fetch" };
+      await fetch(`${root}/api/auth/setup`, { method: "POST", headers, body: JSON.stringify({ name: "admin", password: "test-password" }) });
+      const login = await fetch(`${root}/api/auth/login`, { method: "POST", headers, body: JSON.stringify({ name: "admin", password: "test-password" }) });
+      const cookie = login.headers.get("set-cookie")!.split(";")[0];
+      const authed = { ...headers, cookie };
+
+      const blocked = await fetch(`${root}/api/publish`, { method: "POST", headers: authed, body: JSON.stringify({ bookId: "novel", title: "危险之书" }) });
+      const blockedBody: any = await blocked.json();
+      expect(blocked.status).toBe(422);
+      expect(blockedBody.findings.length).toBeGreaterThan(0);
+
+      const db2 = await openDatabase(dbUrl);
+      await ensureSchema(db2);
+      await new SqlKV(db2).set(`${bookAbs}/chapters/01.md`, "温和的故事开始了。");
+      await db2.close();
+      const published: any = await (await fetch(`${root}/api/publish`, { method: "POST", headers: authed, body: JSON.stringify({ bookId: "novel", title: "安全之书" }) })).json();
+      expect(published.entry.aigcLabel).toBe(true);
+
+      const report = await fetch(`${root}/api/reports`, { method: "POST", headers, body: JSON.stringify({ entryId: "novel", note: "内容涉嫌违规" }) });
+      expect(report.status).toBe(201);
+      const list: any = await (await fetch(`${root}/api/admin/reports?status=open`, { headers: { cookie } })).json();
+      expect(list.reports).toHaveLength(1);
+      const takedown = await fetch(`${root}/api/admin/reports/${list.reports[0].id}/handle`, { method: "POST", headers: authed, body: JSON.stringify({ action: "takedown" }) });
+      expect(takedown.status).toBe(200);
+      const shelf: any = await (await fetch(`${root}/api/shelf`)).json();
+      expect(shelf.entries.some((entry: { id: string }) => entry.id === "novel")).toBe(false);
+    } finally { await handle.close(); await rm(dir, { recursive: true, force: true }); if (previousKey === undefined) delete process.env.MASTER_KEY; else process.env.MASTER_KEY = previousKey; }
   });
 });

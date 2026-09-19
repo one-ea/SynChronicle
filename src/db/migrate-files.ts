@@ -1,5 +1,5 @@
 import { readdir, readFile, stat } from "node:fs/promises";
-import { join, posix } from "node:path";
+import { join, posix, resolve } from "node:path";
 import { UsersFileSchema, type UserRecord } from "../domain/user.js";
 import { SqlKV } from "./kv.js";
 import { UsersDao, type UserRow } from "./users.js";
@@ -32,12 +32,13 @@ export async function migrateFiles(booksRoot: string, dbUrl: string): Promise<Mi
     const kv = new SqlKV(db);
     const users = new UsersDao(db);
     const stats: MigrationStats = { filesImported: 0, filesSkipped: 0, usersImported: 0, usersSkipped: 0 };
+    const absoluteRoot = resolve(booksRoot);
     const files = await walk(booksRoot);
     for (const rel of files.sort()) {
-      const key = posix.normalize(rel);
+      const key = posix.join(absoluteRoot, posix.normalize(rel));
       const content = await readFile(join(booksRoot, rel), "utf8").catch(() => null);
       if (content === null) continue;
-      if (key === "users.json") {
+      if (posix.normalize(rel) === "users.json") {
         const parsed = UsersFileSchema.safeParse(JSON.parse(content));
         if (!parsed.success) continue;
         const existingIds = new Set((await users.list()).map((row) => row.id));
@@ -62,19 +63,21 @@ export async function verifyMigration(booksRoot: string, dbUrl: string): Promise
   try {
     await ensureSchema(db);
     const kv = new SqlKV(db);
-    const fsFiles = (await walk(booksRoot)).map((rel) => posix.normalize(rel)).filter((key) => key !== "users.json");
-    const dbKeys = (await kv.list("")).filter((key) => key !== "users.json" && key !== "kv_files");
-    const shelfKey = "bookshelf.json";
+    const absoluteRoot = resolve(booksRoot);
+    const fsFiles = (await walk(booksRoot)).map((rel) => posix.normalize(rel)).filter((rel) => rel !== "users.json");
+    const dbKeys = (await kv.list("")).filter((key) => key.startsWith(`${absoluteRoot}/`) && key !== "users.json");
+    const shelfKey = `${absoluteRoot}/bookshelf.json`;
     const report: VerifyReport = { ok: true, files: { fs: fsFiles.length, db: dbKeys.length }, books: { fs: 0, db: 0 }, chapters: { fs: 0, db: 0 }, words: { fs: 0, db: 0 } };
     const shelfRaw = await kv.get(shelfKey);
     const shelf = shelfRaw ? JSON.parse(shelfRaw) as { books?: Array<{ id: string }> } : null;
     const bookIds = shelf?.books?.map((book) => book.id) ?? [];
     report.books.db = bookIds.length;
-    const fsShelfFile = fsFiles.includes(shelfKey) ? JSON.parse(await readFile(join(booksRoot, shelfKey), "utf8")) as { books?: Array<{ id: string }> } : null;
+    const fsShelfFile = fsFiles.includes("bookshelf.json") ? JSON.parse(await readFile(join(booksRoot, "bookshelf.json"), "utf8")) as { books?: Array<{ id: string }> } : null;
     report.books.fs = fsShelfFile?.books?.length ?? 0;
     for (const bookId of bookIds) {
-      report.chapters.db += await chapterCount(kv, `${bookId}/meta/progress.json`);
-      report.words.db += await wordTotal(kv, `${bookId}/meta/progress.json`);
+      const progressKey = `${absoluteRoot}/${bookId}/meta/progress.json`;
+      report.chapters.db += await chapterCount(kv, progressKey);
+      report.words.db += await wordTotal(kv, progressKey);
       const fsProgress = join(booksRoot, bookId, "meta", "progress.json");
       if (await stat(fsProgress).then(() => true, () => false)) {
         const progress = JSON.parse(await readFile(fsProgress, "utf8")) as { completed_chapters?: number[]; total_word_count?: number };

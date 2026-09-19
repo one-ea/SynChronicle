@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { mkdir } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import { loadAssets } from "../assets/load.js";
 import { defaultConfigPath, fillDefaults, loadConfig, needsSetup, saveConfig } from "../config/index.js";
@@ -45,12 +45,13 @@ import { SqlKV } from "../db/kv.js";
 import { setStoreBackend } from "../store/io.js";
 import { PlatformCrypto, maskKey } from "../platform/crypto.js";
 import { ChannelsDao, QuotaDao, type ChannelRow } from "../platform/dao.js";
+import { AuditDao, ReportsDao } from "../platform/dao.js";
 import { HostPool } from "../platform/hostpool.js";
 
 export type PlatformMode = "selfhost" | "commercial";
 export interface WebServerOptions { port?: number; host?: string; configPath?: string; hostInstance?: Host; auth?: boolean; storage?: "fs" | "db"; dbUrl?: string; mode?: PlatformMode; }
 export interface WebServerHandle { port: number; close(): Promise<void>; }
-interface RuntimeContext { host?: Host; store?: Store; config?: ResolvedConfig; configured: boolean; configPath: string; error?: string; bookRoot?: string; bookshelf?: BookshelfFile; autopilot?: AutopilotRunner; user?: SessionUser; authEnabled: boolean; authStore: AuthStore; rateLimiter: LoginRateLimiter; registerLimiter: LoginRateLimiter; mode: PlatformMode; storageMode: "fs" | "db"; db?: SqlDatabase; usersDao?: UsersDao; channelsDao?: ChannelsDao; quotaDao?: QuotaDao; crypto?: PlatformCrypto; pool?: HostPool; }
+interface RuntimeContext { host?: Host; store?: Store; config?: ResolvedConfig; configured: boolean; configPath: string; error?: string; bookRoot?: string; bookshelf?: BookshelfFile; autopilot?: AutopilotRunner; user?: SessionUser; authEnabled: boolean; authStore: AuthStore; rateLimiter: LoginRateLimiter; registerLimiter: LoginRateLimiter; mode: PlatformMode; storageMode: "fs" | "db"; db?: SqlDatabase; usersDao?: UsersDao; channelsDao?: ChannelsDao; quotaDao?: QuotaDao; crypto?: PlatformCrypto; pool?: HostPool; audit?: AuditDao; reports?: ReportsDao; }
 
 export async function startWebServer(options: WebServerOptions = {}): Promise<WebServerHandle> {
   const mode: PlatformMode = options.mode ?? (process.env.MODE === "commercial" ? "commercial" : "selfhost");
@@ -69,8 +70,12 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
     crypto = mode === "commercial" ? PlatformCrypto.fromEnv() : await PlatformCrypto.loadOrInit(db);
     setStoreBackend(new SqlKV(db));
   }
+  const audit = db ? new AuditDao(db) : undefined;
+  const reports = db ? new ReportsDao(db) : undefined;
   const context = await loadRuntime(options.configPath, options.auth !== false, mode, storageMode, db, usersDao, channelsDao, quotaDao, crypto);
   context.pool = new HostPool();
+  context.audit = audit;
+  context.reports = reports;
   if (options.hostInstance) context.host = options.hostInstance;
   const server = createServer((request, response) => void route(request, response, context));
   const port = await listen(server, options.port ?? 3000, options.host ?? "127.0.0.1");
@@ -83,7 +88,7 @@ async function loadRuntime(configPath?: string, authEnabled = true, mode: Platfo
   try {
     if (await needsSetup(configPath)) return { configured: false, configPath: targetPath, authEnabled, authStore: new AuthStore(fallbackRoot, usersDao), rateLimiter: new LoginRateLimiter(), registerLimiter: new LoginRateLimiter(), mode, storageMode, db, usersDao, channelsDao, quotaDao, crypto };
     const config = await loadConfig(configPath);
-    const root = resolveBooksRoot(config.output_dir ?? "output/novel");
+    const root = resolve(resolveBooksRoot(config.output_dir ?? "output/novel"));
     const context: RuntimeContext = { config, configured: true, configPath: targetPath, authEnabled, authStore: new AuthStore(root, usersDao), rateLimiter: new LoginRateLimiter(), registerLimiter: new LoginRateLimiter(), mode, storageMode, db, usersDao, channelsDao, quotaDao, crypto };
     await activateInitialBook(context, config);
     await migrateBookOwners(context);
@@ -175,6 +180,7 @@ async function route(request: IncomingMessage, response: ServerResponse, context
   if (request.method === "POST" && url.pathname === "/api/auth/setup") return handleAuthSetup(request, response, context);
   if (request.method === "POST" && url.pathname === "/api/auth/login") return handleAuthLogin(request, response, context);
   if (request.method === "POST" && url.pathname === "/api/auth/register") return handleAuthRegister(request, response, context);
+  if (request.method === "POST" && url.pathname === "/api/reports") return handleReportCreate(request, response, context);
   if (request.method === "GET" && url.pathname === "/api/shell") return sendJson(response, 200, { mode: context.mode, storage: context.storageMode, features: { register: context.mode === "commercial", billing: context.mode === "commercial" } });
   if (context.authEnabled) {
     const user = await authenticate(request, context.authStore);
@@ -196,6 +202,10 @@ async function route(request: IncomingMessage, response: ServerResponse, context
     if (request.method === "GET") return sendJson(response, 200, { codes: context.quotaDao ? await context.quotaDao.listRechargeCodes() : [] });
     if (request.method === "POST") return handleRechargeCreate(request, response, context);
   }
+  if (url.pathname === "/api/admin/reports") {
+    if (request.method === "GET") return handleReportList(response, context, url.searchParams.get("status") ?? undefined);
+  }
+  if (request.method === "POST" && /^\/api\/admin\/reports\/\d+\/handle$/.test(url.pathname)) return handleReportHandle(request, response, context, Number(url.pathname.split("/")[4]));
   if (url.pathname === "/api/channels") {
     if (request.method === "GET") return handleChannelsList(response, context);
     if (request.method === "POST") return handleChannelCreate(request, response, context);
@@ -227,7 +237,10 @@ async function shelfEntry(context: RuntimeContext, id: string) { const entry = (
 async function handleShelfBook(response: ServerResponse, context: RuntimeContext, id: string): Promise<void> { try { const entry = await shelfEntry(context, id); if (!entry || !context.bookRoot) return sendJson(response, 404, { error: "书籍不存在" }); const store = new Store(join(context.bookRoot, id)); const [progress, outline] = await Promise.all([store.progress.load(), store.outline.loadOutline()]); const completed = new Set(progress?.completed_chapters ?? []); const chapters = outline.filter((item) => completed.has(item.chapter)).map((item) => ({ chapter: item.chapter, title: item.title, words: progress?.chapter_word_counts?.[String(item.chapter)] ?? 0, status: "completed" })); sendJson(response, 200, { entry, chapters }); } catch { sendJson(response, 404, { error: "书籍不存在" }); } }
 async function handleShelfChapter(response: ServerResponse, context: RuntimeContext, id: string, chapter: number): Promise<void> { try { const entry = await shelfEntry(context, id); if (!entry || !context.bookRoot) return sendJson(response, 404, { error: "章节不存在" }); const store = new Store(join(context.bookRoot, id)); const progress = await store.progress.load(); if (!progress?.completed_chapters.includes(chapter)) return sendJson(response, 404, { error: "章节不存在" }); const text = await store.drafts.loadChapterText(chapter); if (!text) return sendJson(response, 404, { error: "章节不存在" }); const outline = await store.outline.loadOutline(); const completed = [...progress.completed_chapters].sort((a, b) => a - b); const index = completed.indexOf(chapter); sendJson(response, 200, { title: outline.find((item) => item.chapter === chapter)?.title ?? `第 ${chapter} 章`, text, words: progress.chapter_word_counts?.[String(chapter)] ?? [...text].length, prev: completed[index - 1] ?? null, next: completed[index + 1] ?? null }); } catch { sendJson(response, 404, { error: "章节不存在" }); } }
 async function handlePublishList(response: ServerResponse, context: RuntimeContext): Promise<void> { const ids = new Set((context.bookshelf?.books ?? []).filter((book) => context.user?.role === "admin" || book.ownerId === context.user?.id).map((book) => book.id)); sendJson(response, 200, { entries: (await publishStore(context).load()).entries.filter((entry) => ids.has(entry.id)) }); }
-async function handlePublish(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> { try { const body = await readJson(request); const bookId = textField(body.bookId, "bookId"); const book = context.bookshelf?.books.find((item) => item.id === bookId); if (!book) return sendJson(response, 404, { error: "书籍不存在" }); if (context.user?.role !== "admin" && book.ownerId !== context.user?.id) return sendJson(response, 403, { error: "无权发布该书" }); const store = new Store(join(context.bookRoot!, bookId)); const progress = await store.progress.load(); const existing = (await publishStore(context).load()).entries.find((item) => item.id === bookId); const now = new Date().toISOString(); const entry = PublishedEntrySchema.parse({ id: bookId, title: optionalText(body.title) || book.title, authorName: context.user?.name || "匿名", synopsis: optionalText(body.synopsis), tags: Array.isArray(body.tags) ? body.tags : optionalText(body.tags).split(/[,，]/).filter(Boolean), visibility: optionalText(body.visibility) || "public", hue: titleHue(optionalText(body.title) || book.title), publishedAt: existing?.publishedAt ?? now, updatedAt: now, stats: { chapters: progress?.completed_chapters.length ?? 0, words: progress?.total_word_count ?? 0 } }); await publishStore(context).upsert(entry); sendJson(response, 200, { published: true, entry }); } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); } }
+async function handlePublish(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> { try { const body = await readJson(request); const bookId = textField(body.bookId, "bookId"); const book = context.bookshelf?.books.find((item) => item.id === bookId); if (!book) return sendJson(response, 404, { error: "书籍不存在" }); if (context.user?.role !== "admin" && book.ownerId !== context.user?.id) return sendJson(response, 403, { error: "无权发布该书" }); const store = new Store(join(context.bookRoot!, bookId)); const progress = await store.progress.load();
+if (context.mode === "commercial") { const findings: string[] = []; for (const chapter of progress?.completed_chapters ?? []) { const text = await store.drafts.loadChapterText(chapter); if (!text) continue; const result = scanSafety(text); for (const hit of result.hits) findings.push(`第 ${chapter} 章 ${hit.category} x${hit.count}: ${hit.samples.join("、").slice(0, 60)}`); }
+if (findings.length) return sendJson(response, 422, { error: "安全扫描未通过，存在严重命中，禁止发布", findings }); }
+const existing = (await publishStore(context).load()).entries.find((item) => item.id === bookId); const now = new Date().toISOString(); const entry = PublishedEntrySchema.parse({ id: bookId, title: optionalText(body.title) || book.title, authorName: context.user?.name || "匿名", synopsis: optionalText(body.synopsis), tags: Array.isArray(body.tags) ? body.tags : optionalText(body.tags).split(/[,，]/).filter(Boolean), visibility: optionalText(body.visibility) || "public", hue: titleHue(optionalText(body.title) || book.title), publishedAt: existing?.publishedAt ?? now, updatedAt: now, aigcLabel: true, stats: { chapters: progress?.completed_chapters.length ?? 0, words: progress?.total_word_count ?? 0 } }); await publishStore(context).upsert(entry); await context.audit?.log(context.user?.id ?? "admin", "publish", `book:${bookId}`, { visibility: entry.visibility }); sendJson(response, 200, { published: true, entry }); } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); } }
 async function handleUnpublish(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> { const body = await readJson(request); const id = textField(body.bookId, "bookId"); const book = context.bookshelf?.books.find((item) => item.id === id); if (!book) return sendJson(response, 404, { error: "书籍不存在" }); if (context.user?.role !== "admin" && book.ownerId !== context.user?.id) return sendJson(response, 403, { error: "无权下架该书" }); sendJson(response, 200, { unpublished: await publishStore(context).remove(id) }); }
 
 async function handleEvolutionGet(response: ServerResponse, context: RuntimeContext): Promise<void> { if (!context.store) return sendJson(response, 200, { lessons: [], chapterScores: [], stats: { active: 0, retired: 0, avgDelta: 0 } }); const file = await context.store.evolution.load(); const deltas = file.lessons.flatMap((item) => item.scoreDeltas); sendJson(response, 200, { lessons: file.lessons, chapterScores: file.chapterScores.slice(-20), stats: { active: file.lessons.filter((item) => item.status === "active").length, retired: file.lessons.filter((item) => item.status === "retired").length, avgDelta: deltas.length ? deltas.reduce((sum, value) => sum + value, 0) / deltas.length : 0 } }); }
@@ -607,7 +620,44 @@ async function handleRechargeCreate(request: IncomingMessage, response: ServerRe
       await context.quotaDao.createRechargeCode(code, amountUsd, context.user?.id ?? "admin");
       codes.push(code);
     }
+    await context.audit?.log(context.user?.id ?? "admin", "recharge.create", `codes:${count}`, { amountUsd });
     sendJson(response, 201, { created: true, codes, amountUsd });
+  } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
+}
+
+/** ---------- P10-E 合规：举报 / 审计 ---------- */
+
+async function handleReportCreate(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.reports) return sendJson(response, 503, { error: "举报功能需要数据库存储" });
+  try {
+    const body = await readJson(request);
+    const entryId = textField(body.entryId, "entryId");
+    const note = optionalText(body.note).slice(0, 500);
+    await context.reports.create(entryId, note);
+    sendJson(response, 201, { reported: true });
+  } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
+}
+
+async function handleReportList(response: ServerResponse, context: RuntimeContext, status?: string): Promise<void> {
+  if (!requireAdmin(context, response)) return;
+  if (!context.reports) return sendJson(response, 200, { reports: [] });
+  sendJson(response, 200, { reports: await context.reports.list(status) });
+}
+
+async function handleReportHandle(request: IncomingMessage, response: ServerResponse, context: RuntimeContext, id: number): Promise<void> {
+  if (!requireAdmin(context, response)) return;
+  if (!context.reports) return sendJson(response, 503, { error: "举报功能需要数据库存储" });
+  try {
+    const body = await readJson(request);
+    const action = optionalText(body.action) || "dismissed";
+    if (action === "takedown") {
+      const report = (await context.reports.list()).find((item) => item.id === id);
+      if (report) await publishStore(context).remove(report.entry_id);
+    }
+    const handled = await context.reports.handle(id, context.user?.id ?? "admin", action);
+    if (!handled) return sendJson(response, 404, { error: "举报不存在" });
+    await context.audit?.log(context.user?.id ?? "admin", `report.${action}`, `report:${id}`);
+    sendJson(response, 200, { handled: true, id, action });
   } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
 }
 

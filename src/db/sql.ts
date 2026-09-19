@@ -87,4 +87,6 @@ export async function ensureSchema(db: SqlDatabase): Promise<void> {
   await db.run(`CREATE TABLE IF NOT EXISTS channel_grants (channel_id ${nameType} NOT NULL, user_id ${nameType} NOT NULL, granted_at ${nameType} NOT NULL, PRIMARY KEY (channel_id, user_id))`);
   const ledgerId = db.dialect === "sqlite" ? "id INTEGER PRIMARY KEY AUTOINCREMENT" : db.dialect === "postgres" ? "id BIGSERIAL PRIMARY KEY" : "id BIGINT PRIMARY KEY AUTO_INCREMENT";
   await db.run(`CREATE TABLE IF NOT EXISTS usage_ledger (${ledgerId}, user_id ${nameType} NOT NULL, book_id ${nameType}, agent ${nameType} NOT NULL, tokens_in ${real} NOT NULL DEFAULT 0, tokens_out ${real} NOT NULL DEFAULT 0, cost_usd ${real} NOT NULL DEFAULT 0, created_at ${nameType} NOT NULL)`);
+  await db.run(`CREATE TABLE IF NOT EXISTS audit_logs (${ledgerId}, actor_id ${nameType} NOT NULL, action ${nameType} NOT NULL, target ${nameType} NOT NULL, detail ${text}, created_at ${nameType} NOT NULL)`);
+  await db.run(`CREATE TABLE IF NOT EXISTS reports (${ledgerId}, entry_id ${nameType} NOT NULL, note ${text}, status ${nameType} NOT NULL DEFAULT 'open', handled_by ${nameType}, created_at ${nameType} NOT NULL)`);
 }
