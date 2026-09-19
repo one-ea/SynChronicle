@@ -29,6 +29,7 @@ import { evaluateArenaCandidates } from "../runtime/arena.js";
 import { applyChapterText } from "../runtime/chapterapply.js";
 import { AutopilotRunner } from "../runtime/autopilot.js";
 import { AutopilotSettingsSchema, AutopilotStateSchema, type AutopilotSettings } from "../domain/autopilot.js";
+import { PrepRunner } from "../runtime/prep.js";
 import { BOOKSHELF_PATH, BookshelfFileSchema, createBookId, emptyBookshelf, normalizeTitle, resolveBooksRoot, type BookMeta, type BookshelfFile } from "../domain/bookshelf.js";import { BUILTIN_SKILL_PACKS, type SkillPack } from "../domain/skillpack.js";
 import { VERSION_SOURCES, countWords } from "../store/versions.js";
 import type { ResolvedConfig } from "../config/schemas.js";
@@ -122,7 +123,49 @@ async function route(request: IncomingMessage, response: ServerResponse, context
   if (request.method === "GET" && url.pathname === "/api/users") return handleUsersGet(response, context);
   if (request.method === "POST" && url.pathname === "/api/users") return handleUsersCreate(request, response, context);
   if (request.method === "POST" && /^\/api\/users\/[^/]+\/disable$/.test(url.pathname)) return handleUserDisable(response, context, decodeURIComponent(url.pathname.split("/")[3] ?? ""));
+  if (url.pathname === "/api/prep" && request.method === "GET") return handlePrepList(response, context);
+  if (url.pathname === "/api/prep" && request.method === "POST") return handlePrepCreate(request, response, context);
+  if (request.method === "GET" && /^\/api\/prep\/[^/]+$/.test(url.pathname)) return handlePrepGet(response, context, decodeURIComponent(url.pathname.split("/")[3] ?? ""));
+  if (request.method === "POST" && /^\/api\/prep\/[^/]+\/(chat|advance|confirm|abandon)$/.test(url.pathname)) return handlePrepAction(request, response, context, decodeURIComponent(url.pathname.split("/")[3] ?? ""), url.pathname.split("/").pop()!);
   return dispatchRoute(request, response, context, url);
+}
+
+async function prepRunner(context: RuntimeContext): Promise<PrepRunner> {
+  return new PrepRunner(await ensureHost(context), context.store!);
+}
+
+function prepBookId(context: RuntimeContext): string {
+  if (!context.bookshelf?.activeId) throw new Error("尚未激活书籍");
+  return context.bookshelf.activeId;
+}
+
+async function handlePrepList(response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.store) return sendJson(response, 200, { sessions: [] });
+  try { sendJson(response, 200, { sessions: (await (await prepRunner(context)).list()).filter((session) => session.bookId === prepBookId(context)) }); }
+  catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
+}
+
+async function handlePrepCreate(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.store) return sendJson(response, 503, { error: "尚未配置小说工作区" });
+  try { const body = await readJson(request); const session = await (await prepRunner(context)).createSession(prepBookId(context), optionalText(body.title)); sendJson(response, 201, { session }); }
+  catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
+}
+
+async function handlePrepGet(response: ServerResponse, context: RuntimeContext, id: string): Promise<void> {
+  try { const session = await (await prepRunner(context)).load(id); if (!session || session.bookId !== prepBookId(context)) return sendJson(response, 404, { error: "准备会话不存在" }); sendJson(response, 200, { session }); }
+  catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
+}
+
+async function handlePrepAction(request: IncomingMessage, response: ServerResponse, context: RuntimeContext, id: string, action: string): Promise<void> {
+  try {
+    const runner = await prepRunner(context);
+    const session = await runner.load(id);
+    if (!session || session.bookId !== prepBookId(context)) return sendJson(response, 404, { error: "准备会话不存在" });
+    if (action === "chat") { const body = await readJson(request); const result = await runner.chat(id, textField(body.text, "text")); return sendJson(response, 200, result); }
+    if (action === "advance") return sendJson(response, 200, { session: await runner.advance(id) });
+    if (action === "confirm") return sendJson(response, 200, await runner.confirm(id));
+    return sendJson(response, 200, { session: await runner.abandon(id) });
+  } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
 }
 
 function requireAdmin(context: RuntimeContext, response: ServerResponse): boolean {

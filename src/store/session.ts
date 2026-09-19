@@ -4,6 +4,7 @@ export class SessionStore {
   private tasks = new Map<string, string>();
   constructor(private readonly io: FileIO) {}
   logCocreate(entry: unknown) { return this.io.appendJSONLine("meta/sessions/cocreate.jsonl", entry); }
+  logPrep(entry: unknown) { return this.io.appendJSONLine("meta/sessions/prep.jsonl", entry); }
   log(path: string, message: unknown) { return this.io.appendJSONLine(path, message); }
   coordinatorLogger(lookup?: (agent: string) => { provider?: string; model?: string }) { return (message: Record<string, unknown>) => this.logMessage("meta/sessions/coordinator.jsonl", message, lookup?.("coordinator")); }
   subAgentLogger(lookup?: (agent: string) => { provider?: string; model?: string }) { return (agent: string, task: string, message: Record<string, unknown>) => this.logMessage(this.subAgentPath(agent, task), message, lookup?.(agent)); }

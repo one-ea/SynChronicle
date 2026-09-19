@@ -24,6 +24,10 @@ async function host(outputs: string[] = []) {
 }
 
 describe("Host", () => {
+  it("concatenates raw chat deltas without driving the novel pipeline", async () => {
+    const { value } = await host(["甲", "乙"]);
+    await expect(value.chat("问题")).resolves.toBe("甲乙");
+  });
   it("registers an injected agent observer once across multiple runs", async () => {
     const setObserver = vi.fn();
     const runtimeAgent = { ...agent(), setObserver };

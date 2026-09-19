@@ -95,6 +95,7 @@ export class Host {
 
   async resume(): Promise<{ label: string | null; error?: Error }> { const data = buildResumePrompt(await this.store.progress.load(), await this.store.runMeta.load()); this.recoveryLabel = data.label; if (!data.label) return { label: null }; try { await this.run(data.prompt, data.label); await this.store.clearHandledSteer(); return { label: data.label }; } catch (error) { return { label: data.label, error: error instanceof Error ? error : new Error(String(error)) }; } }
   async continue(prompt: string): Promise<void> { if (!prompt.trim()) throw new Error("continue prompt is empty"); await this.run(prompt, "继续创作"); }
+  async chat(prompt: string): Promise<string> { let output = ""; for await (const delta of this.agent.run(prompt)) output += delta; return output; }
   abort(reason: string, level = "info"): void { if (this.state === "closed") return; this.runController?.abort(new Error(reason)); this.agent.abort(reason); this.state = "paused"; this.emit({ ...systemEvent(reason, level), payload: { level } }); }
   async close(): Promise<void> { if (this.state === "closed") return; let failure: Error | null = null; try { await this.agent.close(); } catch (error) { failure = toError(error); } try { await this.usage.flush(); } catch (error) { failure ??= toError(error); } await Promise.all([...this.queueWrites]); failure ??= this.queueError; this.state = "closed"; this.eventQueue.close(); this.output.close(); if (failure) throw failure; }
   events(): AsyncIterable<RuntimeEvent> { return this.eventQueue; }

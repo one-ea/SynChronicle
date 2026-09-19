@@ -285,6 +285,7 @@ export function renderWebApp(): string {
         <div class="side-label">内容</div>
         <nav class="side-nav">
           <button type="button" data-view="studio" title="写作台"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="5" height="15" rx="1.5"/><rect x="9.5" y="4.5" width="5" height="15" rx="1.5"/><path d="M16.5 6l3.2.9-2.9 10.9"/></svg><span class="nv-t">写作台</span></button>
+          <button type="button" data-view="prep" title="创作准备"><span class="nv-t">创作准备</span></button>
           <button type="button" data-view="reader" title="章节与大纲"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6.2C10.4 4.5 8 4 4 4v13.5c4 0 6.4.5 8 2.3 1.6-1.8 4-2.3 8-2.3V4c-4 0-6.4.5-8 2.2z"/><path d="M12 6.2v13.6"/></svg><span class="nv-t">章节与大纲</span><span class="nav-count" id="nav-count-chapters" hidden></span></button>
           <button type="button" data-view="entities" title="人物图谱"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="12" cy="18" r="3"/><line x1="8.5" y1="7.5" x2="15.5" y2="7.5"/><line x1="7.5" y1="8.5" x2="10.5" y2="15.5"/><line x1="16.5" y1="8.5" x2="13.5" y2="15.5"/></svg><span class="nv-t">人物图谱</span><span class="nav-count" id="nav-count-entities" hidden></span></button>
           <button type="button" data-view="records" title="运行记录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h9"/></svg><span class="nv-t">运行记录</span></button>
@@ -688,6 +689,10 @@ export function renderWebApp(): string {
             </aside>
           </div>
         </section>
+        <section class="page" data-page="prep" aria-label="创作准备" hidden>
+          <div class="page-head"><div><h1>创作准备</h1><p class="meta">轮数由你决定，全部对话会持续留痕。</p></div><button class="btn btn-tonal" id="prep-new" type="button">新建会话</button></div>
+          <div class="grid"><div class="card"><div class="feed tall" id="prep-messages"><div class="empty">新建会话后开始对话。</div></div><div class="steer-row"><input id="prep-input" placeholder="说说你的想法" /><button class="btn btn-filled" id="prep-send" type="button">发送</button></div></div><aside class="stack"><div class="card"><div class="panel-head"><h3>阶段</h3><span id="prep-stage">—</span></div><button class="btn btn-tonal" id="prep-advance" type="button">进入下一阶段</button><button class="btn btn-filled" id="prep-confirm" type="button" hidden>确认结束并蒸馏</button><button class="btn btn-text" id="prep-autopilot" type="button" hidden>交给自动驾驶</button></div><div class="card"><div id="prep-list" class="rowlines"></div></div></aside></div>
+        </section>
       </main>
     </div>
     <nav class="tabbar" aria-label="移动端主导航">
@@ -743,7 +748,7 @@ export function renderWebApp(): string {
       es.addEventListener('runtime', (e) => pushEvent(JSON.parse(e.data)));
       es.addEventListener('delta', (e) => appendDelta(JSON.parse(e.data).value));
       es.onerror = () => { if (sseErrored) { es.close(); startPolling(); } sseErrored = true; };
-      function showView(view) { document.querySelectorAll('.page').forEach((page) => { page.hidden = page.dataset.page !== view; }); document.querySelectorAll('[data-view]').forEach((button) => { if (button.dataset.view === view) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current'); }); if (view === 'reader') void loadBook(); if (view === 'studio') void loadStudio(); }
+      function showView(view) { document.querySelectorAll('.page').forEach((page) => { page.hidden = page.dataset.page !== view; }); document.querySelectorAll('[data-view]').forEach((button) => { if (button.dataset.view === view) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current'); }); if (view === 'reader') void loadBook(); if (view === 'studio') void loadStudio(); if (view === 'prep') void loadPrepList(); }
       document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => showView(button.dataset.view)));
       function flatten(book) { const rows = []; for (const volume of book.volumes) for (const arc of volume.arcs) for (const chapter of arc.chapters) rows.push(chapter); return rows; }
       function pickTargetChapter(rows) { return rows.find((row) => row.status === 'in-progress') || [...rows].reverse().find((row) => row.status === 'completed') || rows[0]; }
@@ -834,6 +839,15 @@ export function renderWebApp(): string {
         catch (err) { showNotice(err.message || '恢复失败'); }
       });
       refreshAutopilot();
+      let prepCurrent = null; let prepBrief = '';
+      async function loadPrepList() { const data = await (await fetch('/api/prep')).json(); const list = $('prep-list'); list.replaceChildren(); for (const session of data.sessions || []) { const button = document.createElement('button'); button.className = 'btn btn-text'; button.textContent = (session.title || '未命名准备') + ' · ' + session.stage + ' · ' + session.rounds + '轮'; button.addEventListener('click', () => loadPrep(session.id)); list.append(button); } }
+      async function loadPrep(id) { const data = await (await fetch('/api/prep/' + encodeURIComponent(id))).json(); prepCurrent = data.session; renderPrep(); }
+      function renderPrep() { const box = $('prep-messages'); box.replaceChildren(); for (const message of prepCurrent.messages) { const row = document.createElement('div'); row.className = 'event'; const who = document.createElement('time'); who.textContent = message.role === 'user' ? '你' : 'AI'; const text = document.createElement('span'); text.textContent = message.content; row.append(who, text); box.append(row); } $('prep-stage').textContent = prepCurrent.stage; $('prep-advance').hidden = prepCurrent.stage === 'ready' || prepCurrent.status !== 'active'; $('prep-confirm').hidden = prepCurrent.stage !== 'ready' || prepCurrent.status !== 'active'; }
+      $('prep-new').addEventListener('click', async () => { const data = await post('/api/prep', { title: '新书准备' }); prepCurrent = data.session; renderPrep(); await loadPrepList(); });
+      $('prep-send').addEventListener('click', async () => { if (!prepCurrent) return showNotice('先新建准备会话'); const text = $('prep-input').value.trim(); if (!text) return; const data = await post('/api/prep/' + encodeURIComponent(prepCurrent.id) + '/chat', { text: text }); prepCurrent = data.session; $('prep-input').value = ''; renderPrep(); });
+      $('prep-advance').addEventListener('click', async () => { const data = await post('/api/prep/' + encodeURIComponent(prepCurrent.id) + '/advance'); prepCurrent = data.session; renderPrep(); });
+      $('prep-confirm').addEventListener('click', async () => { const data = await post('/api/prep/' + encodeURIComponent(prepCurrent.id) + '/confirm'); prepBrief = data.brief; prepCurrent.status = 'confirmed'; $('prep-autopilot').hidden = false; renderPrep(); });
+      $('prep-autopilot').addEventListener('click', async () => { await apAction('start', { idea: prepBrief, checkpoint: 'premise-outline', scoreThreshold: 75, maxRewrites: 2 }); showView('overview'); });
       async function loadChapter(chapter) { try { const data = await fetchChapter(chapter); if (!data.configured || !data.chapter) { $('ch-title').textContent = '尚未配置模型'; return; } const view = data.chapter; $('ch-title').textContent = view.title || ('第 ' + chapter + ' 章'); const chip = $('ch-status'); chip.hidden = false; chip.textContent = chapterLabels[view.status] || view.status; chip.dataset.state = view.status === 'rewrite' ? 'error' : view.status === 'completed' ? 'idle' : 'running';           $('ch-words').textContent = (view.source === 'draft' ? '草稿 · ' : '') + formatNumber(view.wordCount) + ' 字';
           const tone = $('ch-tone');
           if (view.aitone && view.aitone.score < 100) {

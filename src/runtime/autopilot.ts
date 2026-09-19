@@ -212,8 +212,9 @@ export class AutopilotRunner {
       if (!budget.ok) { await this.stop(`预算耗尽（已消费 $${budget.cost.toFixed(2)} / 上限 $${budget.limit.toFixed(2)}）`); return true; }
       const next = await this.nextChapter();
       if (!next) {
-        this.state = { ...this.state, phase: "complete" };
-        await this.persist();
+        const completed = { ...this.state, phase: "complete" as const };
+        await this.io.writeJSON(AUTOPILOT_PATH, completed);
+        this.state = completed;
         return true;
       }
       const chapter = next;
