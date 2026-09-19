@@ -72,6 +72,43 @@ describe("WebUI", () => {
     }
   });
 
+  it("isolates writer books while allowing admin access", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "synchronicle-web-users-"));
+    const configPath = join(directory, "config.json");
+    await writeFile(configPath, JSON.stringify({ provider: "deepseek", model: "deepseek-chat", providers: { deepseek: { base_url: "https://api.deepseek.com/v1" } }, output_dir: join(directory, "novel") }));
+    const handle = await startWebServer({ port: 0, configPath });
+    try {
+      const root = `http://127.0.0.1:${handle.port}`;
+      const headers = { "content-type": "application/json", "x-requested-with": "fetch" };
+      await fetch(`${root}/api/auth/setup`, { method: "POST", headers, body: JSON.stringify({ name: "admin", password: "test-password" }) });
+      const login = async (name: string, password: string): Promise<string> => {
+        const response = await fetch(`${root}/api/auth/login`, { method: "POST", headers, body: JSON.stringify({ name, password }) });
+        return response.headers.get("set-cookie")!.split(";")[0]!;
+      };
+      const adminCookie = await login("admin", "test-password");
+      const adminHeaders = { ...headers, cookie: adminCookie };
+      const createUser = async (name: string): Promise<any> => (await fetch(`${root}/api/users`, { method: "POST", headers: adminHeaders, body: JSON.stringify({ name, password: "writer-password" }) })).json();
+      const writerA = await createUser("writer-a");
+      await createUser("writer-b");
+      const cookieA = await login("writer-a", "writer-password");
+      const cookieB = await login("writer-b", "writer-password");
+      const writerHeaders = (cookie: string) => ({ ...headers, cookie });
+      const created: any = await (await fetch(`${root}/api/books`, { method: "POST", headers: writerHeaders(cookieA), body: JSON.stringify({ title: "A 的书" }) })).json();
+      expect(created.book.ownerId).toBe(writerA.user.id);
+      const booksA: any = await (await fetch(`${root}/api/books`, { headers: { cookie: cookieA } })).json();
+      expect(booksA.books.some((book: { id: string }) => book.id === created.book.id)).toBe(true);
+      const booksB: any = await (await fetch(`${root}/api/books`, { headers: { cookie: cookieB } })).json();
+      expect(booksB.books.some((book: { id: string }) => book.id === created.book.id)).toBe(false);
+      expect((await fetch(`${root}/api/books/switch`, { method: "POST", headers: writerHeaders(cookieB), body: JSON.stringify({ id: created.book.id }) })).status).toBe(403);
+      const adminBooks: any = await (await fetch(`${root}/api/books`, { headers: { cookie: adminCookie } })).json();
+      expect(adminBooks.books.some((book: { id: string }) => book.id === created.book.id)).toBe(true);
+      expect((await fetch(`${root}/api/books/switch`, { method: "POST", headers: adminHeaders, body: JSON.stringify({ id: created.book.id }) })).status).toBe(200);
+    } finally {
+      await handle.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("renders a studio shell with a prompt and live status regions", () => {
     const html = renderWebApp();
     expect(html).toContain("SynChronicle");

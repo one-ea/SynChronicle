@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createBookId, emptyBookshelf, normalizeTitle, resolveBooksRoot } from "./bookshelf.js";
+import { BookMetaSchema, createBookId, emptyBookshelf, normalizeTitle, resolveBooksRoot } from "./bookshelf.js";
 
 describe("bookshelf 多书管理", () => {
   it("resolves the books root as the parent of output_dir", () => {
@@ -22,5 +22,10 @@ describe("bookshelf 多书管理", () => {
     expect(normalizeTitle("x".repeat(80)).length).toBe(60);
     expect(emptyBookshelf().books).toEqual([]);
     expect(emptyBookshelf().activeId).toBeNull();
+  });
+
+  it("migrates legacy book metadata with an empty owner", () => {
+    const book = BookMetaSchema.parse({ id: "legacy", title: "旧书", createdAt: "now", updatedAt: "now" });
+    expect(book.ownerId).toBe("");
   });
 });

@@ -56,6 +56,7 @@ async function loadRuntime(configPath?: string, authEnabled = true): Promise<Run
     const root = resolveBooksRoot(config.output_dir ?? "output/novel");
     const context: RuntimeContext = { config, configured: true, configPath: targetPath, authEnabled, authStore: new AuthStore(root), rateLimiter: new LoginRateLimiter() };
     await activateInitialBook(context, config);
+    await migrateBookOwners(context);
     return context;
   } catch (error) {
     return { configured: false, configPath: targetPath, error: error instanceof Error ? error.message : String(error), authEnabled, authStore: new AuthStore(fallbackRoot), rateLimiter: new LoginRateLimiter() };
@@ -76,13 +77,25 @@ async function activateInitialBook(context: RuntimeContext, config: ResolvedConf
     const fallbackId = outputDir.replace(/\\/g, "/").split("/").filter(Boolean).at(-1) ?? "novel";
     const progress = await new FileIO(outputDir).readJSON<{ novel_name?: string }>("meta/progress.json").catch(() => null);
     const title = normalizeTitle(progress?.novel_name || fallbackId) || fallbackId;
-    shelf = { ...emptyBookshelf(), books: [{ id: fallbackId, title, createdAt: now, updatedAt: now }], activeId: fallbackId };
+    shelf = { ...emptyBookshelf(), books: [{ id: fallbackId, title, createdAt: now, updatedAt: now, ownerId: "" }], activeId: fallbackId };
     await io.writeJSON(BOOKSHELF_PATH, shelf);
   }
   if (!shelf.books.some((book) => book.id === shelf.activeId)) shelf = { ...shelf, activeId: shelf.books[0]!.id };
   context.bookRoot = root;
   context.bookshelf = shelf;
   context.store = new Store(join(root, shelf.activeId ?? fallbackDirName(outputDir)));
+}
+
+async function migrateBookOwners(context: RuntimeContext): Promise<void> {
+  if (!context.bookRoot || !context.bookshelf) return;
+  const admin = (await context.authStore.loadUsers()).users.find((user) => user.role === "admin");
+  if (!admin) return;
+  const needsMigration = context.bookshelf.books.some((book) => !book.ownerId);
+  if (!needsMigration) return;
+  const now = new Date().toISOString();
+  const shelf = { ...context.bookshelf, books: context.bookshelf.books.map((book) => ({ ...book, ownerId: book.ownerId || admin.id })), updatedAt: now };
+  await new FileIO(context.bookRoot).writeJSON(BOOKSHELF_PATH, shelf);
+  context.bookshelf = shelf;
 }
 
 function fallbackDirName(outputDir: string): string {
@@ -100,11 +113,64 @@ async function route(request: IncomingMessage, response: ServerResponse, context
     const user = await authenticate(request, context.authStore);
     if (!user) return sendJson(response, 401, { error: "未登录" });
     context.user = user;
+    const bookChooser = url.pathname === "/api/books" || url.pathname === "/api/books/switch";
+    if (!bookChooser && !(await assertBookAccess(context))) return sendJson(response, 403, { error: "无权访问当前书籍" });
     if (request.method !== "GET" && request.headers["x-requested-with"] !== "fetch") return sendJson(response, 403, { error: "请求缺少安全标识" });
   }
   if (request.method === "POST" && url.pathname === "/api/auth/logout") return handleAuthLogout(response);
   if (request.method === "GET" && url.pathname === "/api/auth/me") return sendJson(response, 200, { user: context.user ?? null });
+  if (request.method === "GET" && url.pathname === "/api/users") return handleUsersGet(response, context);
+  if (request.method === "POST" && url.pathname === "/api/users") return handleUsersCreate(request, response, context);
+  if (request.method === "POST" && /^\/api\/users\/[^/]+\/disable$/.test(url.pathname)) return handleUserDisable(response, context, decodeURIComponent(url.pathname.split("/")[3] ?? ""));
   return dispatchRoute(request, response, context, url);
+}
+
+function requireAdmin(context: RuntimeContext, response: ServerResponse): boolean {
+  if (context.user?.role === "admin") return true;
+  sendJson(response, 403, { error: "仅管理员可执行此操作" });
+  return false;
+}
+
+async function handleUsersGet(response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!requireAdmin(context, response)) return;
+  const users = (await context.authStore.loadUsers()).users.map(({ salt, hash, ...user }) => user);
+  sendJson(response, 200, { users });
+}
+
+async function handleUsersCreate(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!requireAdmin(context, response)) return;
+  try {
+    const body = await readJson(request);
+    const name = textField(body.name, "用户名");
+    const password = typeof body.password === "string" ? body.password : "";
+    const passwordError = validatePassword(password);
+    if (passwordError) return sendJson(response, 400, { error: passwordError });
+    const file = await context.authStore.loadUsers();
+    if (file.users.some((user) => user.name === name)) return sendJson(response, 409, { error: "用户名已存在" });
+    const user: UserRecord = { id: `u-${randomBytes(6).toString("hex")}`, name, role: "writer", ...hashPassword(password), createdAt: new Date().toISOString(), disabled: false };
+    await context.authStore.saveUsers([...file.users, user]);
+    const { salt, hash, ...safe } = user;
+    sendJson(response, 201, { created: true, user: safe });
+  } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
+}
+
+async function handleUserDisable(response: ServerResponse, context: RuntimeContext, id: string): Promise<void> {
+  if (!requireAdmin(context, response)) return;
+  try {
+    const file = await context.authStore.loadUsers();
+    const target = file.users.find((user) => user.id === id);
+    if (!target) return sendJson(response, 404, { error: "用户不存在" });
+    if (target.role === "admin" && target.id === context.user?.id) return sendJson(response, 400, { error: "不能停用当前管理员" });
+    const disabled = target.disabled === false;
+    await context.authStore.saveUsers(file.users.map((user) => user.id === id ? { ...user, disabled } : user));
+    sendJson(response, 200, { updated: true, id, disabled });
+  } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
+}
+
+async function assertBookAccess(context: RuntimeContext): Promise<boolean> {
+  if (!context.user || context.user.role === "admin" || !context.bookshelf?.activeId) return true;
+  const active = context.bookshelf.books.find((book) => book.id === context.bookshelf?.activeId);
+  return Boolean(active && (active.ownerId === context.user.id || active.ownerId === ""));
 }
 
 async function dispatchRoute(request: IncomingMessage, response: ServerResponse, context: RuntimeContext, url: URL): Promise<void> {
@@ -963,7 +1029,8 @@ async function ensureHost(context: RuntimeContext): Promise<Host> {
 async function handleBooksList(response: ServerResponse, context: RuntimeContext): Promise<void> {
   if (!context.bookRoot || !context.bookshelf) return sendJson(response, 200, { configured: false, books: [], activeId: null });
   try {
-    const books = await Promise.all(context.bookshelf.books.map(async (book) => {
+    const visibleBooks = context.user?.role === "admin" ? context.bookshelf.books : context.bookshelf.books.filter((book) => !book.ownerId || book.ownerId === context.user?.id);
+    const books = await Promise.all(visibleBooks.map(async (book) => {
       const progress = await new FileIO(join(context.bookRoot!, book.id)).readJSON<{ novel_name?: string; phase?: string; total_word_count?: number; completed_chapters?: number[] }>("meta/progress.json").catch(() => null);
       return { ...book, phase: progress?.phase ?? "init", words: progress?.total_word_count ?? 0, chapters: progress?.completed_chapters?.length ?? 0, active: book.id === context.bookshelf?.activeId };
     }));
@@ -977,7 +1044,7 @@ async function handleBooksCreate(request: IncomingMessage, response: ServerRespo
     const body = await readJson(request);
     const title = normalizeTitle(textField(body.title, "书名"));
     const now = new Date().toISOString();
-    const meta: BookMeta = { id: createBookId(title), title, createdAt: now, updatedAt: now };
+    const meta: BookMeta = { id: createBookId(title), title, createdAt: now, updatedAt: now, ownerId: context.user?.id ?? "" };
     await mkdir(join(context.bookRoot, meta.id), { recursive: true });
     const shelf = { ...context.bookshelf, books: [...context.bookshelf.books, meta], updatedAt: now };
     await new FileIO(context.bookRoot).writeJSON(BOOKSHELF_PATH, shelf);
@@ -991,7 +1058,9 @@ async function handleBooksSwitch(request: IncomingMessage, response: ServerRespo
   try {
     const body = await readJson(request);
     const id = textField(body.id, "书籍 id");
-    if (!context.bookshelf.books.some((book) => book.id === id)) return sendJson(response, 404, { error: `书籍不存在: ${id}` });
+    const target = context.bookshelf.books.find((book) => book.id === id);
+    if (!target) return sendJson(response, 404, { error: `书籍不存在: ${id}` });
+    if (context.user?.role !== "admin" && target.ownerId && target.ownerId !== context.user?.id) return sendJson(response, 403, { error: "无权切换到该书籍" });
     const now = new Date().toISOString();
     const shelf = { ...context.bookshelf, activeId: id, updatedAt: now };
     await new FileIO(context.bookRoot).writeJSON(BOOKSHELF_PATH, shelf);

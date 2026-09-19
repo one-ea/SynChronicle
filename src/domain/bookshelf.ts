@@ -11,6 +11,7 @@ export const BookMetaSchema = z.object({
   title: z.string().min(1).max(60),
   createdAt: z.string().min(1),
   updatedAt: z.string().min(1),
+  ownerId: z.string().default(""),
 });
 export type BookMeta = z.infer<typeof BookMetaSchema>;
 
