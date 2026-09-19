@@ -25,13 +25,16 @@ import { platformReviewFromStore, type Platform } from "../diag/platformreview.j
 import { fingerprintScan, rewriteAmplitude } from "../diag/aifingerprint.js";
 import { buildRewritePlan } from "../runtime/rewrite.js";
 import { evaluateArenaCandidates } from "../runtime/arena.js";
+import { applyChapterText } from "../runtime/chapterapply.js";
+import { AutopilotRunner } from "../runtime/autopilot.js";
+import { AutopilotSettingsSchema, AutopilotStateSchema, type AutopilotSettings } from "../domain/autopilot.js";
 import { BOOKSHELF_PATH, BookshelfFileSchema, createBookId, emptyBookshelf, normalizeTitle, resolveBooksRoot, type BookMeta, type BookshelfFile } from "../domain/bookshelf.js";import { BUILTIN_SKILL_PACKS, type SkillPack } from "../domain/skillpack.js";
 import { VERSION_SOURCES, countWords } from "../store/versions.js";
 import type { ResolvedConfig } from "../config/schemas.js";
 
 export interface WebServerOptions { port?: number; host?: string; configPath?: string; hostInstance?: Host; }
 export interface WebServerHandle { port: number; close(): Promise<void>; }
-interface RuntimeContext { host?: Host; store?: Store; config?: ResolvedConfig; configured: boolean; configPath: string; error?: string; bookRoot?: string; bookshelf?: BookshelfFile; }
+interface RuntimeContext { host?: Host; store?: Store; config?: ResolvedConfig; configured: boolean; configPath: string; error?: string; bookRoot?: string; bookshelf?: BookshelfFile; autopilot?: AutopilotRunner; }
 
 export async function startWebServer(options: WebServerOptions = {}): Promise<WebServerHandle> {
   const context = await loadRuntime(options.configPath);
@@ -149,6 +152,10 @@ async function route(request: IncomingMessage, response: ServerResponse, context
   if (url.pathname === "/api/skillpacks" && request.method === "POST") return handleSkillPacksCreate(request, response, context);
   if (request.method === "DELETE" && /^\/api\/skillpacks\/[^/]+$/.test(url.pathname)) return handleSkillPacksDelete(response, context, decodeURIComponent(url.pathname.split("/").pop() ?? ""));
   if (request.method === "POST" && url.pathname === "/api/skillpacks/toggle") return handleSkillPacksToggle(request, response, context);
+  if (url.pathname === "/api/autopilot") {
+    if (request.method === "GET") return handleAutopilotGet(response, context);
+    if (request.method === "POST") return handleAutopilotPost(request, response, context);
+  }
   if (request.method === "GET" && url.pathname === "/api/stream") return handleStream(request, response, context);
   sendJson(response, 404, { error: "Not found" });
 }
@@ -375,6 +382,7 @@ async function handleChapterAdopt(request: IncomingMessage, response: ServerResp
     const text = typeof body.text === "string" ? body.text : "";
     if (!text.trim()) return sendJson(response, 400, { error: "text 不能为空" });
     const applied = await applyChapterText(context.store, chapter, text, "adopt");
+    await context.autopilot?.clearReview(chapter);
     sendJson(response, 200, { adopted: true, chapter, wordCount: applied.wordCount });
   } catch (error) {
     sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) });
@@ -963,6 +971,7 @@ async function handleVersionRestore(request: IncomingMessage, response: ServerRe
     const version = await context.store.versions.get(chapter, body.id);
     if (!version) return sendJson(response, 404, { error: `版本不存在: ${body.id}` });
     const applied = await applyChapterText(context.store, chapter, version.text, "restore");
+    await context.autopilot?.clearReview(chapter);
     sendJson(response, 200, { restored: true, chapter, versionId: body.id, wordCount: applied.wordCount });
   } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
 }
@@ -977,27 +986,12 @@ async function handleChapterTextSave(request: IncomingMessage, response: ServerR
     const text = typeof body.text === "string" ? body.text : "";
     if (!text.trim()) return sendJson(response, 400, { error: "text 不能为空" });
     const applied = await applyChapterText(context.store, chapter, text, "studio");
+    await context.autopilot?.clearReview(chapter);
     sendJson(response, 200, { saved: true, chapter, wordCount: applied.wordCount });
   } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
 }
 
-/** 章节正文落盘共用：保存终稿 + 更新进度字数 + 记录版本快照。 */
-async function applyChapterText(store: Store, chapter: number, text: string, source: string): Promise<{ wordCount: number }> {
-  await store.drafts.saveFinalChapter(chapter, text);
-  await store.versions.record(chapter, text, source).catch(() => undefined);
-  const words = [...text].length;
-  const progress = await store.progress.load();
-  if (progress) {
-    const counts = { ...(progress.chapter_word_counts || {}) };
-    const oldWords = counts[String(chapter)] ?? 0;
-    counts[String(chapter)] = words;
-    const totalWords = Math.max(0, (progress.total_word_count || 0) - oldWords + words);
-    const completed = new Set(progress.completed_chapters || []);
-    completed.add(chapter);
-    await store.progress.save({ ...progress, chapter_word_counts: counts, total_word_count: totalWords, completed_chapters: [...completed].sort((a, b) => a - b) });
-  }
-  return { wordCount: words };
-}
+/** 章节正文落盘共用：见 src/runtime/chapterapply.ts（server 与自动驾驶 runner 共享）。 */
 
 /** ---------- P7-3 技能包市场 ---------- */
 
@@ -1051,6 +1045,47 @@ async function handleSkillPacksDelete(response: ServerResponse, context: Runtime
     const removed = await context.store.skillpacks.removeCustom(id);
     if (!removed) return sendJson(response, 404, { error: `自定义技能包不存在: ${id}` });
     sendJson(response, 200, { removed: true, id });
+  } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
+}
+
+/** ---------- P8 自动驾驶流水线 ---------- */
+
+async function handleAutopilotGet(response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.store) return sendJson(response, 200, { configured: false, state: null });
+  try {
+    if (context.autopilot) return sendJson(response, 200, { configured: true, state: context.autopilot.getState() });
+    const data = await new FileIO(context.store.dir).readJSON<unknown>("meta/autopilot.json");
+    const parsed = data ? AutopilotStateSchema.safeParse(data) : null;
+    sendJson(response, 200, { configured: true, state: parsed?.success ? parsed.data : null });
+  } catch (error) { sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) }); }
+}
+
+async function handleAutopilotPost(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.store || !context.configured) return sendJson(response, 503, { error: context.error || "尚未配置模型，请先准备配置文件" });
+  try {
+    const body = await readJson(request);
+    const action = textField(body.action, "action");
+    const host = await ensureHost(context);
+    if (!context.autopilot) {
+      context.autopilot = new AutopilotRunner(host, context.store);
+      await context.autopilot.load();
+    }
+    if (action === "start") {
+      const idea = textField(body.idea, "想法");
+      const settings: AutopilotSettings = AutopilotSettingsSchema.parse({
+        checkpoint: optionalText(body.checkpoint) || "premise-outline",
+        scoreThreshold: typeof body.scoreThreshold === "number" ? body.scoreThreshold : 75,
+        maxRewrites: typeof body.maxRewrites === "number" ? body.maxRewrites : 2,
+      });
+      const budgetUsd = context.config?.budget?.book_usd ?? 0;
+      const state = await context.autopilot.start(idea, settings, budgetUsd);
+      return sendJson(response, 202, { started: true, state });
+    }
+    if (action === "proceed") return sendJson(response, 200, { state: await context.autopilot.proceed() });
+    if (action === "tweak") return sendJson(response, 200, { state: await context.autopilot.tweak(textField(body.text, "微调内容")) });
+    if (action === "pause") return sendJson(response, 200, { state: await context.autopilot.pause() });
+    if (action === "resume") return sendJson(response, 200, { state: await context.autopilot.resume() });
+    return sendJson(response, 400, { error: `未知 action: ${action}` });
   } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
 }
 

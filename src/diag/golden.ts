@@ -41,20 +41,28 @@ function infoDumpScore(text: string): number {
   return clamp(100 - longRatio * 60 - exposition * 8);
 }
 
+/** 单章四维评分（任意章号可用；goldenReport 与自动驾驶门禁共用）。 */
+export function goldenChapterScore(chapter: number, text: string): GoldenChapter | null {
+  if (!text.trim()) return null;
+  const dimensions: GoldenDimensions = {
+    openingHook: openingHookScore(text),
+    conflict: clamp(thrillDensity(text) * 10),
+    immersion: immersionScore(text),
+    infoDump: infoDumpScore(text),
+  };
+  const score = clamp(dimensions.openingHook * 0.35 + dimensions.conflict * 0.3 + dimensions.immersion * 0.2 + dimensions.infoDump * 0.15);
+  return { chapter, score, dimensions, words: [...text.replace(/\s/g, "")].length };
+}
+
 export function goldenReview(chapters: Array<{ chapter: number; text: string }>): GoldenReport {
   const within = chapters.filter((item) => item.chapter >= 1 && item.chapter <= 3);
   const missing = [1, 2, 3].filter((chapter) => !within.some((item) => item.chapter === chapter));
   const rows: GoldenChapter[] = [];
   const findings: GoldenFinding[] = [];
   for (const item of within) {
-    if (!item.text.trim()) continue;
-    const dimensions: GoldenDimensions = {
-      openingHook: openingHookScore(item.text),
-      conflict: clamp(thrillDensity(item.text) * 10),
-      immersion: immersionScore(item.text),
-      infoDump: infoDumpScore(item.text),
-    };
-    const score = clamp(dimensions.openingHook * 0.35 + dimensions.conflict * 0.3 + dimensions.immersion * 0.2 + dimensions.infoDump * 0.15);
+    const scored = goldenChapterScore(item.chapter, item.text);
+    if (!scored) continue;
+    const { score, dimensions } = scored;
     rows.push({ chapter: item.chapter, score, dimensions, words: [...item.text.replace(/\s/g, "")].length });
     for (const [key, value] of Object.entries(dimensions) as Array<[keyof GoldenDimensions, number]>) {
       if (key === "infoDump" ? value < 50 : value < 40) {

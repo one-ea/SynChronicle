@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { renderWebApp } from "./app.js";
 import { renderReadApp } from "./read.js";
 import { startWebServer } from "./server.js";
+import { Host } from "../runtime/host.js";
 import { crc32 } from "../domain/charcard_crc.js";
 
 function makeTestCardPng(): Buffer {
@@ -762,5 +763,59 @@ describe("WebUI", () => {
       await handle.close();
       await rm(directory, { recursive: true, force: true });
     }
+  });
+
+  it("serves the p8 autopilot pipeline with checkpoints and state tour", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "synchronicle-web-p8-"));
+    const output = join(directory, "novel");
+    const configPath = join(directory, "config.json");
+    await writeFile(configPath, JSON.stringify({ provider: "mock", model: "mock", providers: { mock: { api_key: "test" } }, output_dir: output }));
+    const hostInstance = await Host.new({ provider: "mock", model: "mock", providers: { mock: { api_key: "test" } }, output_dir: output }, {}, { agent: { run: async function* () { /* 离线空流 */ }(), abort() {}, close() {} } as never });
+    const handle = await startWebServer({ port: 0, configPath, hostInstance });
+    try {
+      const root = `http://127.0.0.1:${handle.port}`;
+      const json = async (path: string, init?: RequestInit): Promise<any> => JSON.parse(await (await fetch(`${root}${path}`, init)).text());
+
+      const idle = await json("/api/autopilot");
+      expect(idle.configured).toBe(true);
+      expect(idle.state?.phase ?? "idle").toBe("idle");
+
+      const started = await json("/api/autopilot", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "start", idea: "写一本赛博修仙小说", checkpoint: "premise-outline", scoreThreshold: 75, maxRewrites: 2 }) });
+      expect(started.started).toBe(true);
+      expect(started.state.phase).toBe("premise");
+
+      await (async () => { for (let index = 0; index < 100; index += 1) { const state = await json("/api/autopilot"); if (state.state?.phase === "premise-review") return; await new Promise((resolve) => setTimeout(resolve, 10)); } throw new Error("never reached premise-review"); })();
+      const atPremise = await json("/api/autopilot");
+      expect(atPremise.state.phase).toBe("premise-review");
+
+      const proceeded = await json("/api/autopilot", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "proceed" }) });
+      expect(["outline", "outline-review", "writing", "complete"]).toContain(proceeded.state.phase);
+      await (async () => { for (let index = 0; index < 100; index += 1) { const state = await json("/api/autopilot"); if (state.state?.phase === "outline-review") return; await new Promise((resolve) => setTimeout(resolve, 10)); } })();
+
+      const tweaked = await json("/api/autopilot", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "tweak", text: "大纲压缩到十卷以内" }) });
+      expect(tweaked.state.stage).toBe("writing");
+      await (async () => { for (let index = 0; index < 100; index += 1) { const state = await json("/api/autopilot"); if (state.state?.phase === "complete") return; await new Promise((resolve) => setTimeout(resolve, 10)); } })();
+      const finalState = await json("/api/autopilot");
+      expect(finalState.state.phase).toBe("complete");
+
+      const badAction = await fetch(`${root}/api/autopilot`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "warp" }) });
+      expect(badAction.status).toBe(400);
+      const missingAction = await fetch(`${root}/api/autopilot`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({}) });
+      expect(missingAction.status).toBe(400);
+    } finally {
+      await handle.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("renders the p8 autopilot card in the overview", () => {
+    const html = renderWebApp();
+    expect(html).toContain("自动驾驶");
+    expect(html).toContain('id="ap-start"');
+    expect(html).toContain('id="ap-checkpoint"');
+    expect(html).toContain("/api/autopilot");
+    expect(html).toContain("直接放行");
+    expect(html).toContain("开启自动驾驶");
+    expect(html).not.toContain("innerHTML =");
   });
 });

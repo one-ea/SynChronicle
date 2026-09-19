@@ -303,6 +303,20 @@ export function renderWebApp(): string {
                   </div>
                 </section>
               </div>
+              <div class="card" id="autopilot-card">
+                <div class="panel-head"><h3 class="section-title" style="margin:0">自动驾驶</h3><span id="ap-phase" class="pill muted">未启动</span></div>
+                <div class="rowlines" id="ap-stats" hidden></div>
+                <div id="ap-checkpoint" hidden>
+                  <div class="tf" style="margin-top:10px"><textarea id="ap-proposal" style="min-height:110px;font-size:12.5px" readonly></textarea><label for="ap-proposal">AI 提案（可全选复制）</label></div>
+                  <div class="tf" style="margin-top:8px"><textarea id="ap-tweak" style="min-height:56px" placeholder=" "></textarea><label for="ap-tweak">微调意见（留空直接放行；前提阶段微调将覆写前提）</label></div>
+                  <div class="actions" style="margin-top:10px"><small id="ap-hint">检查点等待中。</small><div style="display:flex;gap:8px"><button id="ap-tweak-btn" class="btn btn-tonal" type="button" style="min-height:32px;font-size:12px">提交微调并继续</button><button id="ap-proceed" class="btn btn-filled" type="button" style="min-height:32px;font-size:12px">直接放行</button></div></div>
+                </div>
+                <div class="form-row" style="margin-top:10px" id="ap-launcher">
+                  <div class="tf"><input id="ap-idea" placeholder=" " /><label for="ap-idea">一句话想法（AI 全程接管）</label></div>
+                  <div class="tf"><input id="ap-params" placeholder=" " value="75分 / 重写2次 / 两站检查点" /><label for="ap-params">门禁参数（分数/重写/检查点）</label></div>
+                </div>
+                <div class="actions" style="margin-top:10px" id="ap-controls"><small>前提/大纲两站微调，其余全自动：写作→编辑打分→达标采纳。</small><div style="display:flex;gap:8px"><button id="ap-start" class="btn btn-filled" type="button" style="min-height:32px;font-size:12px">开启自动驾驶</button><button id="ap-pause" class="btn btn-tonal" type="button" style="min-height:32px;font-size:12px" hidden>暂停</button><button id="ap-resume" class="btn btn-text" type="button" style="min-height:32px;font-size:12px" hidden>继续</button></div></div>
+              </div>
               <div class="card">
                 <h3 class="section-title">连接引擎</h3>
                 <form id="settings" class="form-grid" data-testid="config-form">
@@ -707,6 +721,86 @@ export function renderWebApp(): string {
       let currentChapter = 0;
       function selectChapter(chapter) { currentChapter = chapter; document.querySelectorAll('.trow').forEach((row) => { const active = Number(row.dataset.chapter) === chapter; row.classList.toggle('active', active); row.setAttribute('aria-selected', String(active)); }); void loadChapter(chapter); }
       async function fetchChapter(chapter) { return (await fetch('/api/chapters/' + chapter)).json(); }
+      const apPhaseLabels = { idle: '未启动', premise: '生成前提', 'premise-review': '前提待微调', outline: '生成大纲', 'outline-review': '大纲待微调', 'chapter-review': '章节待确认', writing: '逐章写作', complete: '已完成', stopped: '已暂停', error: '出错' };
+      async function apAction(action, extra) { return post('/api/autopilot', Object.assign({ action: action }, extra || {})); }
+      async function refreshAutopilot() {
+        try {
+          const res = await (await fetch('/api/autopilot')).json();
+          if (!res.configured || !res.state) { $('ap-phase').textContent = '未配置'; return; }
+          renderAutopilot(res.state);
+        } catch { /* 静默 */ }
+      }
+      function renderAutopilot(state) {
+        const phase = $('ap-phase');
+        if (!phase) return;
+        phase.textContent = apPhaseLabels[state.phase] || state.phase;
+        phase.className = 'pill ' + (state.phase === 'complete' ? 'ok' : state.phase === 'error' ? 'bad' : state.phase.includes('review') ? 'warn' : state.phase === 'idle' || state.phase === 'stopped' ? 'muted' : 'ok');
+        const stats = $('ap-stats');
+        const atCheckpoint = state.phase === 'premise-review' || state.phase === 'outline-review' || state.phase === 'chapter-review';
+        stats.hidden = state.phase === 'idle';
+        stats.replaceChildren();
+        if (state.phase !== 'idle') {
+          const items = [['已采纳', state.adoptedCount + ' 章'], ['当前章', state.currentChapter || '—'], ['重写', state.rewriteCount + '/' + state.settings.maxRewrites], ['上稿得分', state.lastScore || '—'], ['预算', state.budgetUsd > 0 ? '$' + state.costUsd.toFixed(2) + ' / $' + state.budgetUsd.toFixed(2) : '未设上限']];
+          if (state.reviewQueue.length) items.push(['待复核', state.reviewQueue.join('、') + ' 章']);
+          for (const [label, value] of items) {
+            const row = document.createElement('div'); row.className = 'rowline';
+            const left = document.createElement('span'); left.textContent = label;
+            const right = document.createElement('small'); right.style.color = 'var(--muted)'; right.textContent = value;
+            row.append(left, right);
+            stats.append(row);
+          }
+          if (state.error) { const row = document.createElement('div'); row.className = 'rowline'; const note = document.createElement('small'); note.style.color = 'var(--danger, #e5484d)'; note.textContent = state.error; row.append(note); stats.append(row); }
+        }
+        const checkpoint = $('ap-checkpoint');
+        checkpoint.hidden = !atCheckpoint;
+        if (atCheckpoint) {
+          $('ap-proposal').value = state.proposal || '（无提案内容）';
+          $('ap-hint').textContent = state.phase === 'premise-review' ? '检查点 1/2：前提。微调将覆写前提后进入大纲。' : state.phase === 'outline-review' ? '检查点 2/2：大纲。微调将作为干预注入写作。' : '章节检查点：放行后继续写作。';
+        }
+        const running = ['premise', 'outline', 'writing'].includes(state.phase);
+        $('ap-pause').hidden = !running && !atCheckpoint;
+        $('ap-resume').hidden = state.phase !== 'stopped';
+        $('ap-start').hidden = running;
+        $('ap-launcher').hidden = running;
+      }
+      let apTimer = null;
+      function apWatch() {
+        clearInterval(apTimer);
+        apTimer = setInterval(async () => {
+          try {
+            const res = await (await fetch('/api/autopilot')).json();
+            if (!res.configured || !res.state) return;
+            renderAutopilot(res.state);
+            const active = ['premise', 'outline', 'writing', 'premise-review', 'outline-review', 'chapter-review'].includes(res.state.phase);
+            if (!active) clearInterval(apTimer);
+          } catch { /* 静默 */ }
+        }, 4000);
+      }
+      $('ap-start')?.addEventListener('click', async () => {
+        const idea = $('ap-idea')?.value.trim();
+        if (!idea) { showNotice('先填一句话想法'); return; }
+        try { await apAction('start', { idea: idea, checkpoint: 'premise-outline', scoreThreshold: 75, maxRewrites: 2 }); showNotice('自动驾驶已启动，先到前提检查点。', 'success'); apWatch(); await refreshAutopilot(); }
+        catch (err) { showNotice(err.message || '启动失败'); }
+      });
+      $('ap-proceed')?.addEventListener('click', async () => {
+        try { const res = await apAction('proceed'); renderAutopilot(res.state); apWatch(); showNotice('已放行，流水线继续。', 'success'); }
+        catch (err) { showNotice(err.message || '操作失败'); }
+      });
+      $('ap-tweak-btn')?.addEventListener('click', async () => {
+        const text = $('ap-tweak')?.value.trim();
+        if (!text) { showNotice('填写微调意见，或点直接放行'); return; }
+        try { const res = await apAction('tweak', { text: text }); if ($('ap-tweak')) $('ap-tweak').value = ''; renderAutopilot(res.state); apWatch(); showNotice('微调已提交，流水线继续。', 'success'); }
+        catch (err) { showNotice(err.message || '微调失败'); }
+      });
+      $('ap-pause')?.addEventListener('click', async () => {
+        try { const res = await apAction('pause'); renderAutopilot(res.state); showNotice('将在章节边界暂停。', 'success'); }
+        catch (err) { showNotice(err.message || '操作失败'); }
+      });
+      $('ap-resume')?.addEventListener('click', async () => {
+        try { const res = await apAction('resume'); renderAutopilot(res.state); apWatch(); }
+        catch (err) { showNotice(err.message || '恢复失败'); }
+      });
+      refreshAutopilot();
       async function loadChapter(chapter) { try { const data = await fetchChapter(chapter); if (!data.configured || !data.chapter) { $('ch-title').textContent = '尚未配置模型'; return; } const view = data.chapter; $('ch-title').textContent = view.title || ('第 ' + chapter + ' 章'); const chip = $('ch-status'); chip.hidden = false; chip.textContent = chapterLabels[view.status] || view.status; chip.dataset.state = view.status === 'rewrite' ? 'error' : view.status === 'completed' ? 'idle' : 'running';           $('ch-words').textContent = (view.source === 'draft' ? '草稿 · ' : '') + formatNumber(view.wordCount) + ' 字';
           const tone = $('ch-tone');
           if (view.aitone && view.aitone.score < 100) {
