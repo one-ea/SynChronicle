@@ -33,6 +33,34 @@ describe("WebUI", () => {
     expect(html).not.toContain("A room for long-form worlds");
   });
 
+  it("renders the emdash-style token system and three-tier responsive shell", () => {
+    const html = renderWebApp();
+    expect(html).toContain("--radius: 14px");
+    expect(html).toContain("--radius-lg: 18px");
+    expect(html).toContain("--space-5: 24px");
+    expect(html).toContain("(min-width: 768px) and (max-width: 1023px)");
+    expect(html).toContain("(max-width: 767px)");
+    expect(html).not.toContain("@media (max-width: 980px)");
+    expect(html).not.toContain("@media (max-width: 860px)");
+    expect(html).not.toContain("@media (max-width: 560px)");
+    expect(html).toContain('class="tabbar"');
+    expect(html).toContain('aria-label="移动端主导航"');
+    const tabbarViews = ["overview", "reader", "entities", "records", "settings"];
+    for (const view of tabbarViews) expect(html).toContain(`data-view="${view}" title=`);
+    expect(Buffer.byteLength(html, "utf8")).toBeLessThan(83196 + 30 * 1024);
+  });
+
+  it("adapts the read front with collapsible toc and fluid typography", () => {
+    const html = renderReadApp();
+    expect(html).toContain('class="card toc-card" id="r-toc"');
+    expect(html).toContain("<summary");
+    expect(html).toContain("max-width: 72ch");
+    expect(html).toContain("clamp(15px, 2.5vw, 17px)");
+    expect(html).toContain("(max-width: 767px)");
+    expect(html).toContain("$('r-toc').removeAttribute('open')");
+    expect(Buffer.byteLength(html, "utf8")).toBeLessThan(15070 + 30 * 1024);
+  });
+
   it("exposes recovery and steering states without unsafe event rendering", () => {
     const html = renderWebApp();
     expect(html).toContain('aria-current="page"');

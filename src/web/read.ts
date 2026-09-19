@@ -16,8 +16,8 @@ export function renderReadApp(): string {
         --line: #e8e8e8; --line-faint: #ededed;
         --alpha-4: rgba(38, 38, 38, .04); --alpha-6: rgba(38, 38, 38, .06);
         --success: #1f9d52; --success-dot: #42c366; --error: #dc2626;
-        --btn-radius: 10px; --radius: 10px; --radius-lg: 16px;
-        --shadow-sm: 0 1px 2px rgba(0, 0, 0, .04); --shadow-lg: 0 8px 16px -12px rgba(0, 0, 0, .19);
+        --btn-radius: 8px; --radius: 14px; --radius-lg: 18px;
+        --shadow-sm: 0 1px 2px rgba(0, 0, 0, .03); --shadow-lg: 0 6px 14px -10px rgba(0, 0, 0, .14);
         --dur-fast: .15s; --ease: ease;
         --font: "Inter", "Google Sans Text", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
       }
@@ -59,7 +59,11 @@ export function renderReadApp(): string {
       .btn-tonal { background: var(--alpha-4); color: var(--ink); }
       .btn-tonal:hover { background: var(--alpha-6); }
       .btn:disabled { pointer-events: none; background: var(--alpha-4); color: var(--faint); }
-      .card { border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--paper); padding: 18px 6px; box-shadow: var(--shadow-sm); }
+      .card { border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); padding: 18px 6px; box-shadow: var(--shadow-sm); }
+      .toc-card summary { cursor: pointer; list-style: none; }
+      .toc-card summary::-webkit-details-marker { display: none; }
+      .toc-card .chev { flex: none; width: 14px; height: 14px; color: var(--faint); transition: transform var(--dur-fast) var(--ease); }
+      .toc-card[open] .chev { transform: rotate(180deg); }
       .panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin: 0 16px 8px; }
       .panel-head h3 { font-size: 16px; }
       .panel-head span { color: var(--faint); font-size: 11.5px; font-variant-numeric: tabular-nums; }
@@ -77,10 +81,20 @@ export function renderReadApp(): string {
       .chapter-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
       .chapter-head h2 { font-size: 22px; }
       .meta { color: var(--muted); font-size: 12.5px; }
-      .chapter-text { max-width: 68ch; font-size: 15.5px; line-height: 1.95; }
+      .chapter-text { max-width: 72ch; font-size: clamp(15px, 2.5vw, 17px); line-height: 1.9; }
       .chapter-text p { margin: 0 0 1.1em; }
       .pager { display: flex; justify-content: space-between; gap: 10px; margin-top: 30px; padding-top: 18px; border-top: 1px solid var(--line-faint); }
       .read-foot { padding: 26px 16px 34px; text-align: center; color: var(--faint); font-size: 11.5px; }
+      @media (max-width: 767px) {
+        .read-nav { top: 0; margin: 0 10px; }
+        .read-nav-inner { padding: 8px 12px; gap: 8px; }
+        .rb-meta { display: none; }
+        .theme-btn { min-height: 44px; padding: 4px 10px; }
+        .read-wrap { padding: clamp(24px, 5vw, 44px) 16px 96px; }
+        .rrow { min-height: 44px; }
+        .pager { flex-direction: column; }
+        .pager .btn { width: 100%; }
+      }
       @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: .01ms !important; } }
     </style>
   </head>
@@ -103,10 +117,10 @@ export function renderReadApp(): string {
         <p class="meta" id="r-meta">完成章节后，这里会成为你的阅读前台。回到控制台提交第一个 brief，让 Architect、Writer 与 Editor 开始工作。</p>
         <div class="hero-actions"><button id="r-start" class="btn btn-filled" type="button" disabled>开始阅读</button><a class="btn btn-tonal" href="/">返回控制台</a></div>
       </section>
-      <section class="card" aria-label="章节目录">
-        <div class="panel-head"><h3>章节目录</h3><span id="r-count">0 章</span></div>
+      <details class="card toc-card" id="r-toc" open aria-label="章节目录">
+        <summary class="panel-head"><h3>章节目录</h3><span id="r-count">0 章</span><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></summary>
         <div id="r-list" role="list"><div class="empty">暂无可读章节。</div></div>
-      </section>
+      </details>
       <article class="card" id="r-article" hidden aria-label="章节正文">
         <header class="chapter-head"><h2 id="rc-title"></h2><span class="meta" id="rc-meta"></span></header>
         <div id="rc-text" class="chapter-text"></div>
@@ -128,6 +142,7 @@ export function renderReadApp(): string {
       }
       applyTheme(localStorage.getItem('theme') || 'system');
       themeButtons.forEach((button) => button.addEventListener('click', () => applyTheme(button.dataset.theme)));
+      if (matchMedia('(max-width: 767px)').matches) $('r-toc').removeAttribute('open');
       let chapters = [];
       let current = 0;
       function flatten(book) { const rows = []; for (const volume of book.volumes) for (const arc of volume.arcs) for (const chapter of arc.chapters) rows.push(chapter); return rows; }

@@ -16,8 +16,9 @@ export function renderWebApp(): string {
         --line: #e8e8e8; --line-faint: #ededed;
         --alpha-4: rgba(38, 38, 38, .04); --alpha-6: rgba(38, 38, 38, .06); --alpha-7: rgba(38, 38, 38, .08);
         --success: #1f9d52; --success-dot: #42c366; --warning: #ecb730; --error: #dc2626;
-        --btn-radius: 10px; --radius-sm: 8px; --radius: 10px; --radius-lg: 16px;
-        --shadow-sm: 0 1px 2px rgba(0, 0, 0, .04); --shadow-lg: 0 8px 16px -12px rgba(0, 0, 0, .19); --shadow-xl: 0 18px 32px -24px rgba(0, 0, 0, .28);
+        --btn-radius: 8px; --radius-sm: 8px; --radius: 14px; --radius-lg: 18px;
+        --shadow-sm: 0 1px 2px rgba(0, 0, 0, .03); --shadow-lg: 0 6px 14px -10px rgba(0, 0, 0, .14); --shadow-xl: 0 14px 28px -20px rgba(0, 0, 0, .22);
+        --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 24px; --space-6: 32px;
         --dur-fast: .15s; --dur: .2s; --ease: ease;
         --font: "Inter", "Google Sans Text", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
       }
@@ -60,7 +61,7 @@ export function renderWebApp(): string {
       @keyframes indeterminate { 0% { transform: translateX(-45%) scaleX(.3); } 55% { transform: translateX(50%) scaleX(.5); } 100% { transform: translateX(110%) scaleX(.3); } }
       @keyframes blink { 50% { opacity: .35; } }
       .admin { display: grid; grid-template-columns: 250px minmax(0, 1fr); min-height: calc(100vh - 56px); }
-      .side { display: flex; flex-direction: column; gap: 2px; padding: 18px 14px; background: var(--side-bg); border-right: 1px solid var(--line); }
+      .side { display: flex; flex-direction: column; gap: 2px; padding: var(--space-4) var(--space-3); background: var(--side-bg); border-right: 1px solid var(--line); }
       .side-label { margin: 14px 12px 4px; padding-bottom: 7px; border-bottom: 1px solid var(--line-faint); color: var(--faint); font-size: 10.5px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
       .side-label:first-child { margin-top: 0; }
       .side-nav { display: grid; gap: 2px; }
@@ -70,21 +71,25 @@ export function renderWebApp(): string {
       .side-nav svg { width: 16px; height: 16px; flex: none; color: var(--muted); }
       .side-nav button[aria-current="page"] svg { color: var(--heat-100); }
       .side-foot { margin-top: auto; padding-top: 14px; border-top: 1px solid var(--line-faint); color: var(--faint); font-size: 11px; line-height: 1.6; }
-      .main { min-width: 0; max-width: 1160px; width: 100%; margin: 0 auto; padding: 28px 30px 64px; }
+      .tabbar { display: none; position: fixed; left: 0; right: 0; bottom: 0; z-index: 90; grid-template-columns: repeat(5, 1fr); gap: 2px; min-height: 56px; padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px)); background: var(--paper); border-top: 1px solid var(--line); box-shadow: var(--shadow-lg); }
+      .tabbar button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; min-height: 44px; padding: 0 2px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--muted); font-size: 10.5px; font-weight: 500; white-space: nowrap; }
+      .tabbar svg { width: 20px; height: 20px; }
+      .tabbar button[aria-current="page"] { color: var(--heat-100); background: var(--heat-8); font-weight: 600; }
+      .main { min-width: 0; max-width: 1160px; width: 100%; margin: 0 auto; padding: var(--space-5) var(--space-5) 64px; }
       .page[hidden] { display: none; }
-      .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
-      .page-head h1 { font-size: 26px; }
+      .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-5); flex-wrap: wrap; }
+      .page-head h1 { font-size: clamp(20px, 2.2vw, 24px); }
       .page-head .meta { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
-      .head-actions { display: flex; gap: 8px; }
-      .stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 20px; }
+      .head-actions { display: flex; gap: var(--space-2); }
+      .stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-3); margin-bottom: 20px; }
       .stat-split { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--paper); }
       .stat-top { display: flex; align-items: center; gap: 8px; padding: 8px 14px; background: var(--bg); border-bottom: 1px solid var(--line-faint); color: var(--muted); font-size: 11.5px; font-weight: 600; }
       .stat-split b { display: block; padding: 12px 14px 14px; font-size: 24px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .stat-split b[data-state="running"] { color: var(--heat-100); }
       .stat-split b[data-state="error"] { color: var(--error); }
-      .grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(300px, .9fr); gap: 20px; align-items: start; }
-      .card { border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--paper); padding: clamp(20px, 3vw, 28px); box-shadow: var(--shadow-sm); }
-      .stack { display: grid; gap: 20px; }
+      .grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(300px, .9fr); gap: var(--space-5); align-items: start; }
+      .card { border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); padding: clamp(20px, 3vw, 28px); box-shadow: var(--shadow-sm); }
+      .stack { display: grid; gap: var(--space-5); }
       .announce { display: inline-flex; align-items: center; gap: 10px; margin-bottom: 16px; padding: 5px 13px 5px 6px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); font-size: 12px; box-shadow: var(--shadow-sm); }
       .announce b { padding: 2px 9px; border-radius: 999px; background: var(--heat-12); color: var(--heat-100); font-size: 11px; font-weight: 600; letter-spacing: .02em; }
       .announce span { color: var(--muted); }
@@ -163,7 +168,7 @@ export function renderWebApp(): string {
       .chapter-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
       .chapter-head h2 { font-size: 21px; }
       .meta { color: var(--muted); font-size: 12px; }
-      .chapter-text { max-width: 68ch; margin-top: 18px; font-size: 15px; line-height: 1.9; }
+      .chapter-text { max-width: 72ch; margin-top: 18px; font-size: clamp(14.5px, 1.1vw, 15.5px); line-height: 1.9; }
       .chapter-text p { margin: 0 0 1em; }
       .summary-block { margin-top: 14px; padding: 14px 16px; border: 1px solid var(--line-faint); border-radius: var(--radius); background: var(--bg); font-size: 13px; }
       .summary-block h4 { margin: 0 0 6px; font-size: 13px; }
@@ -179,9 +184,41 @@ export function renderWebApp(): string {
       #notice::before { content: ""; flex: none; width: 9px; height: 9px; border-radius: 50%; background: #ff8b5e; }
       #notice[data-tone="success"]::before { background: #42c366; }
       :root.dark #notice { background: #1f1f1f; border: 1px solid #333; }
-      @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } .reader { grid-template-columns: 1fr; } .tree { max-height: 34vh; } .stat-row { grid-template-columns: repeat(2, 1fr); } }
-      @media (max-width: 860px) { .admin { grid-template-columns: 1fr; } .side { flex-direction: row; align-items: center; gap: 6px; padding: 10px 14px; border-right: 0; border-bottom: 1px solid var(--line); overflow-x: auto; } .side-label, .side-foot { display: none; } .side-nav { display: flex; gap: 4px; } .side-nav button { width: auto; min-height: 36px; white-space: nowrap; } .main { padding: 20px 16px 52px; } }
-      @media (max-width: 560px) { .topbar { padding: 0 14px; } .brand small { display: none; } .theme-switcher { display: none; } .form-row { grid-template-columns: 1fr; } .actions { align-items: stretch; flex-direction: column; } .actions .btn { width: 100%; } .steer-row { grid-template-columns: 1fr; } .steer-row .btn { width: 100%; } .seg label { font-size: 11px; padding: 0 4px; } .stat-row { grid-template-columns: 1fr 1fr; } }
+      @media (min-width: 768px) and (max-width: 1023px) {
+        .admin { grid-template-columns: 72px minmax(0, 1fr); }
+        .side { padding: var(--space-4) var(--space-2); align-items: center; }
+        .side-label { margin: var(--space-3) 0 2px; padding: 0; border: 0; text-align: center; font-size: 10px; letter-spacing: .02em; text-overflow: ellipsis; overflow: hidden; }
+        .side-nav { gap: var(--space-1); }
+        .side-nav button { justify-content: center; gap: 0; min-height: 44px; padding: 0; border-radius: var(--radius-sm); }
+        .side-nav svg { width: 18px; height: 18px; }
+        .side-foot { display: none; }
+        .stat-row { grid-template-columns: repeat(2, 1fr); }
+        .grid, .reader { grid-template-columns: 1fr; }
+        .tree { max-height: 40vh; }
+        .main { padding: var(--space-5) var(--space-4) 56px; }
+      }
+      @media (max-width: 767px) {
+        .admin { grid-template-columns: 1fr; }
+        .side { display: none; }
+        .tabbar { display: grid; }
+        .main { padding: var(--space-4) var(--space-4) calc(64px + env(safe-area-inset-bottom, 0px)); }
+        .stat-row { grid-template-columns: repeat(2, 1fr); }
+        .grid, .reader { grid-template-columns: 1fr; }
+        .tree { max-height: 32vh; }
+        .page-head h1 { font-size: 22px; }
+        .topbar { padding: 0 var(--space-4); }
+        .brand small { display: none; }
+        .view-site .vs-text { display: none; }
+        .view-site { padding: 4px 9px; }
+        .theme-btn { min-height: 44px; padding: 4px 10px; }
+        .seg label { min-height: 44px; font-size: 11.5px; padding: 0 4px; }
+        .trow { min-height: 44px; }
+        .form-row { grid-template-columns: 1fr; }
+        .actions { align-items: stretch; flex-direction: column; }
+        .actions .btn, .steer-row .btn { width: 100%; }
+        .steer-row { grid-template-columns: 1fr; }
+        #notice { left: var(--space-4); right: var(--space-4); max-width: none; bottom: calc(72px + env(safe-area-inset-bottom, 0px)); }
+      }
       @media (prefers-reduced-motion: no-preference) { .card { animation: enter .3s ease both; } @keyframes enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } } }
       @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition-duration: .01ms !important; scroll-behavior: auto !important; } }
     </style>
@@ -190,7 +227,7 @@ export function renderWebApp(): string {
     <header class="topbar">
       <a class="brand" href="#" aria-label="SynChronicle 控制台">S<em>—</em><small>本地创作控制台</small></a>
       <div class="topbar-right">
-        <a class="view-site" href="/read"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3h7v7h-2V6.41l-9.29 9.3l-1.42-1.42l9.3-9.29H14V3Z"/><path d="M5 5h6v2H7v10h10v-4h2v6H5V5Z"/></svg>前台阅读</a>
+        <a class="view-site" href="/read"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3h7v7h-2V6.41l-9.29 9.3l-1.42-1.42l9.3-9.29H14V3Z"/><path d="M5 5h6v2H7v10h10v-4h2v6H5V5Z"/></svg><span class="vs-text">前台阅读</span></a>
         <div id="runtime-status" class="chip" data-testid="runtime-status" data-state="idle" role="status"><i aria-hidden="true"></i><span aria-live="polite">正在检查引擎</span></div>
         <div class="theme-switcher" role="group" aria-label="主题选择">
           <button type="button" class="theme-btn" data-theme="light" aria-pressed="false">Light</button>
@@ -204,17 +241,17 @@ export function renderWebApp(): string {
       <aside class="side" aria-label="主导航">
         <div class="side-label">工作区</div>
         <nav class="side-nav">
-          <button type="button" data-view="overview" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><rect x="13" y="13" width="7" height="7" rx="2"/></svg>创作概览</button>
+          <button type="button" data-view="overview" title="创作概览" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><rect x="13" y="13" width="7" height="7" rx="2"/></svg>创作概览</button>
         </nav>
         <div class="side-label">内容</div>
         <nav class="side-nav">
-          <button type="button" data-view="reader"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6.2C10.4 4.5 8 4 4 4v13.5c4 0 6.4.5 8 2.3 1.6-1.8 4-2.3 8-2.3V4c-4 0-6.4.5-8 2.2z"/><path d="M12 6.2v13.6"/></svg>章节与大纲</button>
-          <button type="button" data-view="entities"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="12" cy="18" r="3"/><line x1="8.5" y1="7.5" x2="15.5" y2="7.5"/><line x1="7.5" y1="8.5" x2="10.5" y2="15.5"/><line x1="16.5" y1="8.5" x2="13.5" y2="15.5"/></svg>人物图谱</button>
-          <button type="button" data-view="records"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h9"/></svg>运行记录</button>
+          <button type="button" data-view="reader" title="章节与大纲"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6.2C10.4 4.5 8 4 4 4v13.5c4 0 6.4.5 8 2.3 1.6-1.8 4-2.3 8-2.3V4c-4 0-6.4.5-8 2.2z"/><path d="M12 6.2v13.6"/></svg>章节与大纲</button>
+          <button type="button" data-view="entities" title="人物图谱"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="12" cy="18" r="3"/><line x1="8.5" y1="7.5" x2="15.5" y2="7.5"/><line x1="7.5" y1="8.5" x2="10.5" y2="15.5"/><line x1="16.5" y1="8.5" x2="13.5" y2="15.5"/></svg>人物图谱</button>
+          <button type="button" data-view="records" title="运行记录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h9"/></svg>运行记录</button>
         </nav>
         <div class="side-label">管理</div>
         <nav class="side-nav">
-          <button type="button" data-view="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 8h9M17.5 8H20M4 16h3M11.5 16H20"/><circle cx="15" cy="8" r="2.4"/><circle cx="9" cy="16" r="2.4"/></svg>配置</button>
+          <button type="button" data-view="settings" title="配置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 8h9M17.5 8H20M4 16h3M11.5 16H20"/><circle cx="15" cy="8" r="2.4"/><circle cx="9" cy="16" r="2.4"/></svg>配置</button>
         </nav>
         <div class="side-foot">Local runtime<br />作品、配置与运行记录均保存在本机。</div>
       </aside>
@@ -466,6 +503,13 @@ export function renderWebApp(): string {
         </section>
       </main>
     </div>
+    <nav class="tabbar" aria-label="移动端主导航">
+      <button type="button" data-view="overview" title="创作概览"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><rect x="13" y="13" width="7" height="7" rx="2"/></svg><span>概览</span></button>
+      <button type="button" data-view="reader" title="章节与大纲"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6.2C10.4 4.5 8 4 4 4v13.5c4 0 6.4.5 8 2.3 1.6-1.8 4-2.3 8-2.3V4c-4 0-6.4.5-8 2.2z"/><path d="M12 6.2v13.6"/></svg><span>章节</span></button>
+      <button type="button" data-view="entities" title="人物图谱"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="12" cy="18" r="3"/><line x1="8.5" y1="7.5" x2="15.5" y2="7.5"/><line x1="7.5" y1="8.5" x2="10.5" y2="15.5"/><line x1="16.5" y1="8.5" x2="13.5" y2="15.5"/></svg><span>图谱</span></button>
+      <button type="button" data-view="records" title="运行记录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h9"/></svg><span>记录</span></button>
+      <button type="button" data-view="settings" title="配置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 8h9M17.5 8H20M4 16h3M11.5 16H20"/><circle cx="15" cy="8" r="2.4"/><circle cx="9" cy="16" r="2.4"/></svg><span>配置</span></button>
+    </nav>
     <div id="notice" role="alert"></div>
     <script>
       const $ = (id) => document.getElementById(id);
