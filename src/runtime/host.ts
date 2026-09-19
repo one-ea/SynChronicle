@@ -19,6 +19,7 @@ import { prepareUserRules } from "./prepareUserRules.js";
 import { FileIO } from "../store/io.js";
 import type { AskUserHandler } from "../tools/registry.js";
 import type { ReflectionEvent } from "../agents/reflection/index.js";
+import { EvolutionEngine } from "./evolution.js";
 
 export interface RuntimeObserver { reflection(event: ReflectionEvent & { agent: string }): void | Promise<void>; usage(agent: string, usage: ModelUsage | undefined, model?: ModelIdentity): void; }
 export interface RuntimeAgent { run(prompt: string, signal?: AbortSignal): AsyncIterable<string>; setObserver?(observer: RuntimeObserver): void; abort(reason: string): void; close(): void | Promise<void>; }
@@ -39,7 +40,8 @@ export class Host {
   private seenEventIds = new Set<string>();
   private readonly injectIO: FileIO;
   private injectionChain = Promise.resolve();
-  private constructor(private readonly config: Config, private readonly agent: RuntimeAgent, store: Store) { this.store = store; this.injectIO = new FileIO(store.dir); this.usage = new UsageTracker((state) => this.store.usage.save(state)); this.agent.setObserver?.({ reflection: (event) => this.observeReflection(event), usage: (agent, usage, model) => this.usage.record(agent, usage?.model ? usage : normalizeUsage(usage, model)) }); }
+  readonly evolution: EvolutionEngine;
+  private constructor(private readonly config: Config, private readonly agent: RuntimeAgent, store: Store) { this.store = store; this.injectIO = new FileIO(store.dir); this.evolution = new EvolutionEngine(store); this.usage = new UsageTracker((state) => this.store.usage.save(state)); this.agent.setObserver?.({ reflection: (event) => this.observeReflection(event), usage: (agent, usage, model) => this.usage.record(agent, usage?.model ? usage : normalizeUsage(usage, model)) }); }
 
   static async new(config: Config, bundle: Bundle, dependencies: HostDependencies = {}): Promise<Host> { const cfg = ConfigSchema.parse(config); const store = dependencies.store ?? new Store(cfg.output_dir ?? "output/novel"); await store.init(); let runtimeAgent = dependencies.agent; let host: Host | undefined; if (!runtimeAgent) { const models = createModelSet(cfg); try { await prepareUserRules(store, models); } catch { /* 快照缺失不阻断启动 */ } const built = buildCoordinator(cfg, store, models, bundle, (agent, usage, model) => host?.usage.record(agent, normalizeUsage(usage, model)), undefined, undefined, dependencies.askUser, (event) => host?.observeReflection(event), () => host?.hasBudget() ?? true); runtimeAgent = { run(prompt, signal) { const stream = built.coordinator.stream(prompt, signal); return stream.textStream; }, abort() { built.coordinator.clear(); }, close() { built.coordinator.clear(); } }; } host = new Host(cfg, runtimeAgent, store); host.usage.load(await store.usage.load()); for (const item of await store.runtime.loadQueue()) { const payload = item.payload as RuntimeEvent | undefined; if (item.kind === "ui_event" && payload?.id) host.seenEventIds.add(payload.id); } return host; }
 
@@ -119,7 +121,8 @@ export class Host {
     const constitutionText = renderConstitutionText(loadedConstitution ?? emptyConstitution());
     const loadedSkillPacks = await this.store.skillpacks.load().catch(() => null);
     const skillPackText = renderSkillPacks(effectiveSkillPacks(loadedSkillPacks ?? emptySkillPackFile()));
-    const finalPrompt = `${constitutionText ? constitutionText + "\n\n" : ""}${skillPackText ? skillPackText + "\n\n" : ""}${injections.length ? `${injections.map(text => `[用户干预] ${text}`).join("\n\n")}\n\n` : ""}${prompt}`;
+    const evolutionText = await this.evolution.renderBlock().catch(() => "");
+    const finalPrompt = `${constitutionText ? constitutionText + "\n\n" : ""}${skillPackText ? skillPackText + "\n\n" : ""}${evolutionText ? evolutionText + "\n\n" : ""}${injections.length ? `${injections.map(text => `[用户干预] ${text}`).join("\n\n")}\n\n` : ""}${prompt}`;
     try {
       const stream = this.agent.run(finalPrompt, controller.signal);
       for await (const delta of stream) {

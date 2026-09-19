@@ -31,6 +31,7 @@ import { AutopilotRunner } from "../runtime/autopilot.js";
 import { AutopilotSettingsSchema, AutopilotStateSchema, type AutopilotSettings } from "../domain/autopilot.js";
 import { PrepRunner } from "../runtime/prep.js";
 import { computeAdvice } from "../runtime/advisor.js";
+import { EvolutionEngine } from "../runtime/evolution.js";
 import { BOOKSHELF_PATH, BookshelfFileSchema, createBookId, emptyBookshelf, normalizeTitle, resolveBooksRoot, type BookMeta, type BookshelfFile } from "../domain/bookshelf.js";import { BUILTIN_SKILL_PACKS, type SkillPack } from "../domain/skillpack.js";
 import { VERSION_SOURCES, countWords } from "../store/versions.js";
 import type { ResolvedConfig } from "../config/schemas.js";
@@ -130,8 +131,15 @@ async function route(request: IncomingMessage, response: ServerResponse, context
   if (request.method === "POST" && /^\/api\/prep\/[^/]+\/(chat|advance|confirm|abandon)$/.test(url.pathname)) return handlePrepAction(request, response, context, decodeURIComponent(url.pathname.split("/")[3] ?? ""), url.pathname.split("/").pop()!);
   if (request.method === "GET" && url.pathname === "/api/advice") return handleAdviceGet(response, context);
   if (request.method === "POST" && url.pathname === "/api/advice/dismiss") return handleAdviceDismiss(request, response, context);
+  if (request.method === "GET" && url.pathname === "/api/evolution") return handleEvolutionGet(response, context);
+  if (request.method === "POST" && url.pathname === "/api/evolution/distill") return handleEvolutionDistill(response, context);
+  if (request.method === "POST" && /^\/api\/evolution\/lessons\/[^/]+\/retire$/.test(url.pathname)) return handleEvolutionRetire(response, context, decodeURIComponent(url.pathname.split("/")[4] ?? ""));
   return dispatchRoute(request, response, context, url);
 }
+
+async function handleEvolutionGet(response: ServerResponse, context: RuntimeContext): Promise<void> { if (!context.store) return sendJson(response, 200, { lessons: [], chapterScores: [], stats: { active: 0, retired: 0, avgDelta: 0 } }); const file = await context.store.evolution.load(); const deltas = file.lessons.flatMap((item) => item.scoreDeltas); sendJson(response, 200, { lessons: file.lessons, chapterScores: file.chapterScores.slice(-20), stats: { active: file.lessons.filter((item) => item.status === "active").length, retired: file.lessons.filter((item) => item.status === "retired").length, avgDelta: deltas.length ? deltas.reduce((sum, value) => sum + value, 0) / deltas.length : 0 } }); }
+async function handleEvolutionDistill(response: ServerResponse, context: RuntimeContext): Promise<void> { if (!context.store) return sendJson(response, 503, { error: "尚未配置小说工作区" }); sendJson(response, 200, { lessons: await new EvolutionEngine(context.store).distill() }); }
+async function handleEvolutionRetire(response: ServerResponse, context: RuntimeContext, id: string): Promise<void> { if (!context.store) return sendJson(response, 503, { error: "尚未配置小说工作区" }); const file = await context.store.evolution.load(); const lesson = file.lessons.find((item) => item.id === id); if (!lesson) return sendJson(response, 404, { error: "经验不存在" }); lesson.status = "retired"; lesson.retiredAt = new Date().toISOString(); lesson.retireReason = "手动退役"; await context.store.evolution.save(file); sendJson(response, 200, { retired: true, id }); }
 
 async function activeAdvice(context: RuntimeContext) {
   if (!context.store) return [];

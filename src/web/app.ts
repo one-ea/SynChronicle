@@ -309,6 +309,7 @@ export function renderWebApp(): string {
             <div class="stat-split"><div class="stat-top">输入 tokens<code>prompt</code></div><b id="input">0</b></div>
             <div class="stat-split"><div class="stat-top">输出 tokens<code>output</code></div><b id="output">0</b></div>
           </div>
+          <div class="card" style="margin-bottom:20px"><div class="panel-head"><h3>进化引擎</h3><button class="btn btn-text" id="evolution-distill" type="button">蒸馏经验</button></div><div class="rowlines" id="evolution-list"><div class="empty">暂无跨章经验。</div></div></div>
           <div class="grid">
             <section class="stack">
               <div class="card hero">
@@ -841,6 +842,9 @@ export function renderWebApp(): string {
         catch (err) { showNotice(err.message || '恢复失败'); }
       });
       refreshAutopilot();
+      async function loadEvolution() { const data = await (await fetch('/api/evolution')).json(); const list = $('evolution-list'); list.replaceChildren(); for (const lesson of data.lessons || []) { if (lesson.status !== 'active') continue; const row = document.createElement('div'); row.className = 'rowline'; const text = document.createElement('span'); text.textContent = lesson.dimension + ' · ' + lesson.lesson; const meta = document.createElement('small'); meta.textContent = '使用 ' + lesson.useCount + ' 次'; row.append(text, meta); list.append(row); } if (!list.children.length) { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '暂无跨章经验。'; list.append(empty); } }
+      $('evolution-distill').addEventListener('click', async () => { await post('/api/evolution/distill'); await loadEvolution(); });
+      void loadEvolution();
       let prepCurrent = null; let prepBrief = '';
       async function loadPrepList() { const data = await (await fetch('/api/prep')).json(); const list = $('prep-list'); list.replaceChildren(); for (const session of data.sessions || []) { const button = document.createElement('button'); button.className = 'btn btn-text'; button.textContent = (session.title || '未命名准备') + ' · ' + session.stage + ' · ' + session.rounds + '轮'; button.addEventListener('click', () => loadPrep(session.id)); list.append(button); } }
       async function loadPrep(id) { const data = await (await fetch('/api/prep/' + encodeURIComponent(id))).json(); prepCurrent = data.session; renderPrep(); }

@@ -3,6 +3,8 @@ import type { Store } from "../store/index.js";
 import type { Host } from "./host.js";
 import { applyChapterText } from "./chapterapply.js";
 import { goldenChapterScore } from "../diag/golden.js";
+import { detectAitone } from "../stylestat/aitone.js";
+import { EvolutionEngine } from "./evolution.js";
 import { AUTOPILOT_PATH, AutopilotStateSchema, emptyAutopilotState, type AutopilotPhase, type AutopilotSettings, type AutopilotState } from "../domain/autopilot.js";
 
 /**
@@ -270,6 +272,9 @@ export class AutopilotRunner {
       reviewQueue: needsReview ? [...this.state.reviewQueue, chapter] : this.state.reviewQueue,
     };
     await this.persist();
+    const engine = new EvolutionEngine(this.store);
+    await engine.recordChapter({ chapter, golden: score, aitone: detectAitone(text)?.score ?? 0, rewrites: this.state.rewriteCount, reflectionIssues: [] }).catch(() => undefined);
+    await engine.feedback(chapter, score).catch(() => undefined);
   }
 
   private scoreChapter(chapter: number, text: string): number {
