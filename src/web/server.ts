@@ -45,11 +45,12 @@ import { SqlKV } from "../db/kv.js";
 import { setStoreBackend } from "../store/io.js";
 import { PlatformCrypto, maskKey } from "../platform/crypto.js";
 import { ChannelsDao, QuotaDao, type ChannelRow } from "../platform/dao.js";
+import { HostPool } from "../platform/hostpool.js";
 
 export type PlatformMode = "selfhost" | "commercial";
 export interface WebServerOptions { port?: number; host?: string; configPath?: string; hostInstance?: Host; auth?: boolean; storage?: "fs" | "db"; dbUrl?: string; mode?: PlatformMode; }
 export interface WebServerHandle { port: number; close(): Promise<void>; }
-interface RuntimeContext { host?: Host; store?: Store; config?: ResolvedConfig; configured: boolean; configPath: string; error?: string; bookRoot?: string; bookshelf?: BookshelfFile; autopilot?: AutopilotRunner; user?: SessionUser; authEnabled: boolean; authStore: AuthStore; rateLimiter: LoginRateLimiter; registerLimiter: LoginRateLimiter; mode: PlatformMode; storageMode: "fs" | "db"; db?: SqlDatabase; usersDao?: UsersDao; channelsDao?: ChannelsDao; quotaDao?: QuotaDao; crypto?: PlatformCrypto; }
+interface RuntimeContext { host?: Host; store?: Store; config?: ResolvedConfig; configured: boolean; configPath: string; error?: string; bookRoot?: string; bookshelf?: BookshelfFile; autopilot?: AutopilotRunner; user?: SessionUser; authEnabled: boolean; authStore: AuthStore; rateLimiter: LoginRateLimiter; registerLimiter: LoginRateLimiter; mode: PlatformMode; storageMode: "fs" | "db"; db?: SqlDatabase; usersDao?: UsersDao; channelsDao?: ChannelsDao; quotaDao?: QuotaDao; crypto?: PlatformCrypto; pool?: HostPool; }
 
 export async function startWebServer(options: WebServerOptions = {}): Promise<WebServerHandle> {
   const mode: PlatformMode = options.mode ?? (process.env.MODE === "commercial" ? "commercial" : "selfhost");
@@ -69,6 +70,7 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
     setStoreBackend(new SqlKV(db));
   }
   const context = await loadRuntime(options.configPath, options.auth !== false, mode, storageMode, db, usersDao, channelsDao, quotaDao, crypto);
+  context.pool = new HostPool();
   if (options.hostInstance) context.host = options.hostInstance;
   const server = createServer((request, response) => void route(request, response, context));
   const port = await listen(server, options.port ?? 3000, options.host ?? "127.0.0.1");
@@ -326,6 +328,7 @@ async function handleUserDisable(response: ServerResponse, context: RuntimeConte
     if (target.role === "admin" && target.id === context.user?.id) return sendJson(response, 400, { error: "不能停用当前管理员" });
     const disabled = target.disabled === false;
     await context.authStore.saveUsers(file.users.map((user) => user.id === id ? { ...user, disabled } : user));
+    if (disabled) context.pool?.invalidateUser(id);
     sendJson(response, 200, { updated: true, id, disabled });
   } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
 }
@@ -1341,6 +1344,17 @@ async function handleSteer(request: IncomingMessage, response: ServerResponse, c
 }
 
 async function ensureHost(context: RuntimeContext): Promise<Host> {
+  if (context.user && context.pool && context.bookshelf?.activeId) {
+    const cached = context.pool.get(context.user.id, context.bookshelf.activeId);
+    if (cached) { context.host = cached; return cached; }
+    if (!context.config) throw new Error("尚未配置模型，请先准备配置文件");
+    try {
+      const host = await Host.new(context.config, loadAssets(context.config.style));
+      context.pool.put(context.user.id, context.bookshelf.activeId, host);
+      context.host = host;
+      return host;
+    } catch (error) { context.error = error instanceof Error ? error.message : String(error); throw error; }
+  }
   if (context.host) return context.host;
   if (!context.config) throw new Error("尚未配置模型，请先准备配置文件");
   try { context.host = await Host.new(context.config, loadAssets(context.config.style)); return context.host; }
@@ -1384,11 +1398,13 @@ async function handleBooksSwitch(request: IncomingMessage, response: ServerRespo
     const target = context.bookshelf.books.find((book) => book.id === id);
     if (!target) return sendJson(response, 404, { error: `书籍不存在: ${id}` });
     if (context.user?.role !== "admin" && target.ownerId && target.ownerId !== context.user?.id) return sendJson(response, 403, { error: "无权切换到该书籍" });
+    const previousBook = context.bookshelf.activeId;
     const now = new Date().toISOString();
     const shelf = { ...context.bookshelf, activeId: id, updatedAt: now };
     await new FileIO(context.bookRoot).writeJSON(BOOKSHELF_PATH, shelf);
     context.bookshelf = shelf;
     if (context.host) { context.host.abort?.(`切换书籍：${id}`, "warn"); context.host = undefined; }
+    if (previousBook && previousBook !== id) context.pool?.invalidateBook(previousBook);
     const dir = join(context.bookRoot, id);
     context.store = new Store(dir);
     context.config = { ...context.config, output_dir: dir };
