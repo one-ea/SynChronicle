@@ -1,32 +1,73 @@
-import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
+/**
+ * P10 存储后端：默认文件系统；setStoreBackend(kv) 后全站读写路由到数据库 kv_files。
+ * Store 层零改动——FileIO 契约保持一致（readJSON/readText/writeFile/appendJSONLine/remove/listDir）。
+ */
+
+export interface KvBackend {
+  get(path: string): Promise<string | null>;
+  set(path: string, content: string): Promise<void>;
+  delete(path: string): Promise<void>;
+  list(prefix: string): Promise<string[]>;
+}
+
+let kvBackend: KvBackend | null = null;
+
+export function setStoreBackend(kv: KvBackend | null): void { kvBackend = kv; }
+export function storeBackend(): KvBackend | null { return kvBackend; }
+
+function virtualKey(dir: string, rel: string): string {
+  return join(dir || ".", rel).replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
 export class FileIO {
   constructor(readonly dir: string) {}
-  path(rel: string) { return join(this.dir, rel); }
-  async ensureDirs(dirs: string[]) { await Promise.all(dirs.map((dir) => mkdir(this.path(dir), { recursive: true }))); }
-  async readFile(rel: string) { return readFile(this.path(rel)); }
-  async readText(rel: string) { try { return await readFile(this.path(rel), "utf8"); } catch (error) { if (isMissing(error)) return ""; throw error; } }
+  path(rel: string) { return kvBackend ? virtualKey(this.dir, rel) : join(this.dir, rel); }
+  async ensureDirs(_dirs: string[]) { if (!kvBackend) await Promise.all(_dirs.map((dir) => mkdir(this.path(dir), { recursive: true }))); }
+  async readFile(rel: string) {
+    if (kvBackend) { const content = await kvBackend.get(virtualKey(this.dir, rel)); if (content === null) throw Object.assign(new Error(`ENOENT: ${rel}`), { code: "ENOENT" }); return Buffer.from(content, "utf8"); }
+    return readFile(this.path(rel));
+  }
+  async readText(rel: string) { try { return await (await this.readFile(rel)).toString("utf8"); } catch (error) { if (isMissing(error)) return ""; throw error; } }
   async readJSON<T>(rel: string, schema?: z.ZodType<T>): Promise<T | null> {
     try {
-      const value: unknown = JSON.parse(await readFile(this.path(rel), "utf8"));
+      const value: unknown = JSON.parse(await this.readFile(rel).then((buffer) => buffer.toString("utf8")));
       return schema ? schema.parse(value) : value as T;
     } catch (error) {
       if (isMissing(error)) return null;
       throw error;
     }
   }
-  async writeFile(rel: string, data: string | Uint8Array) { await atomicWrite(this.path(rel), data); }
+  async writeFile(rel: string, data: string | Uint8Array) {
+    const content = typeof data === "string" ? data : Buffer.from(data).toString("utf8");
+    if (kvBackend) return kvBackend.set(virtualKey(this.dir, rel), content);
+    await atomicWrite(this.path(rel), data);
+  }
   async writeJSON(rel: string, value: unknown) { await this.writeFile(rel, JSON.stringify(value, null, 2)); }
   async appendJSONLine(rel: string, value: unknown) {
+    const line = `${JSON.stringify(value)}\n`;
+    if (kvBackend) { const key = virtualKey(this.dir, rel); const current = (await kvBackend.get(key)) ?? ""; return kvBackend.set(key, current + line); }
     const path = this.path(rel);
     await mkdir(dirname(path), { recursive: true });
     const handle = await open(path, "a", 0o644);
-    try { await handle.write(`${JSON.stringify(value)}\n`); await handle.sync(); } finally { await handle.close(); }
+    try { await handle.write(line); await handle.sync(); } finally { await handle.close(); }
   }
-  async remove(rel: string) { await rm(this.path(rel), { force: true, recursive: true }); }
+  async remove(rel: string) { if (kvBackend) return kvBackend.delete(virtualKey(this.dir, rel)); await rm(this.path(rel), { force: true, recursive: true }); }
+  /** 列出目录下直接子项名称（文件与目录），数据库后端按 key 前缀推导。 */
+  async listDir(rel: string): Promise<string[]> {
+    if (kvBackend) {
+      const prefix = virtualKey(this.dir, rel).replace(/\/$/, "") + "/";
+      const names = new Set<string>();
+      for (const key of await kvBackend.list(prefix)) names.add(key.slice(prefix.length).split("/")[0]!);
+      return [...names];
+    }
+    const entries = await readdir(this.path(rel), { withFileTypes: true }).catch(() => []);
+    return entries.map((entry) => entry.name);
+  }
 }
 
 export class RecordingFileIO extends FileIO {

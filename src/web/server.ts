@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { mkdir, readdir } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { loadAssets } from "../assets/load.js";
@@ -39,32 +39,47 @@ import { VERSION_SOURCES, countWords } from "../store/versions.js";
 import type { ResolvedConfig } from "../config/schemas.js";
 import { validatePassword, type UserRecord } from "../domain/user.js";
 import { AuthStore, LoginRateLimiter, authenticate, clearSessionCookie, hashPassword, issueToken, sessionCookie, verifyPassword, type SessionUser } from "./auth.js";
+import { openDatabase, ensureSchema, type SqlDatabase } from "../db/sql.js";
+import { UsersDao } from "../db/users.js";
+import { SqlKV } from "../db/kv.js";
+import { setStoreBackend } from "../store/io.js";
 
-export interface WebServerOptions { port?: number; host?: string; configPath?: string; hostInstance?: Host; auth?: boolean; }
+export type PlatformMode = "selfhost" | "commercial";
+export interface WebServerOptions { port?: number; host?: string; configPath?: string; hostInstance?: Host; auth?: boolean; storage?: "fs" | "db"; dbUrl?: string; mode?: PlatformMode; }
 export interface WebServerHandle { port: number; close(): Promise<void>; }
-interface RuntimeContext { host?: Host; store?: Store; config?: ResolvedConfig; configured: boolean; configPath: string; error?: string; bookRoot?: string; bookshelf?: BookshelfFile; autopilot?: AutopilotRunner; user?: SessionUser; authEnabled: boolean; authStore: AuthStore; rateLimiter: LoginRateLimiter; }
+interface RuntimeContext { host?: Host; store?: Store; config?: ResolvedConfig; configured: boolean; configPath: string; error?: string; bookRoot?: string; bookshelf?: BookshelfFile; autopilot?: AutopilotRunner; user?: SessionUser; authEnabled: boolean; authStore: AuthStore; rateLimiter: LoginRateLimiter; registerLimiter: LoginRateLimiter; mode: PlatformMode; storageMode: "fs" | "db"; db?: SqlDatabase; usersDao?: UsersDao; }
 
 export async function startWebServer(options: WebServerOptions = {}): Promise<WebServerHandle> {
-  const context = await loadRuntime(options.configPath, options.auth !== false);
+  const mode: PlatformMode = options.mode ?? (process.env.MODE === "commercial" ? "commercial" : "selfhost");
+  const storageMode = options.storage ?? "fs";
+  let db: SqlDatabase | undefined;
+  let usersDao: UsersDao | undefined;
+  if (storageMode === "db") {
+    db = await openDatabase(options.dbUrl ?? process.env.DATABASE_URL ?? "sqlite:data/synchronicle.db");
+    await ensureSchema(db);
+    usersDao = new UsersDao(db);
+    setStoreBackend(new SqlKV(db));
+  }
+  const context = await loadRuntime(options.configPath, options.auth !== false, mode, storageMode, db, usersDao);
   if (options.hostInstance) context.host = options.hostInstance;
   const server = createServer((request, response) => void route(request, response, context));
   const port = await listen(server, options.port ?? 3000, options.host ?? "127.0.0.1");
-  return { port, close: () => close(server, context.host) };
+  return { port, close: async () => { await close(server, context.host); if (storageMode === "db" && context.db) { setStoreBackend(null); await context.db.close(); } } };
 }
 
-async function loadRuntime(configPath?: string, authEnabled = true): Promise<RuntimeContext> {
+async function loadRuntime(configPath?: string, authEnabled = true, mode: PlatformMode = "selfhost", storageMode: "fs" | "db" = "fs", db?: SqlDatabase, usersDao?: UsersDao): Promise<RuntimeContext> {
   const targetPath = configPath || defaultConfigPath();
   const fallbackRoot = dirname(targetPath);
   try {
-    if (await needsSetup(configPath)) return { configured: false, configPath: targetPath, authEnabled, authStore: new AuthStore(fallbackRoot), rateLimiter: new LoginRateLimiter() };
+    if (await needsSetup(configPath)) return { configured: false, configPath: targetPath, authEnabled, authStore: new AuthStore(fallbackRoot, usersDao), rateLimiter: new LoginRateLimiter(), registerLimiter: new LoginRateLimiter(), mode, storageMode, db, usersDao };
     const config = await loadConfig(configPath);
     const root = resolveBooksRoot(config.output_dir ?? "output/novel");
-    const context: RuntimeContext = { config, configured: true, configPath: targetPath, authEnabled, authStore: new AuthStore(root), rateLimiter: new LoginRateLimiter() };
+    const context: RuntimeContext = { config, configured: true, configPath: targetPath, authEnabled, authStore: new AuthStore(root, usersDao), rateLimiter: new LoginRateLimiter(), registerLimiter: new LoginRateLimiter(), mode, storageMode, db, usersDao };
     await activateInitialBook(context, config);
     await migrateBookOwners(context);
     return context;
   } catch (error) {
-    return { configured: false, configPath: targetPath, error: error instanceof Error ? error.message : String(error), authEnabled, authStore: new AuthStore(fallbackRoot), rateLimiter: new LoginRateLimiter() };
+    return { configured: false, configPath: targetPath, error: error instanceof Error ? error.message : String(error), authEnabled, authStore: new AuthStore(fallbackRoot, usersDao), rateLimiter: new LoginRateLimiter(), registerLimiter: new LoginRateLimiter(), mode, storageMode, db, usersDao };
   }
 }
 
@@ -118,6 +133,8 @@ async function route(request: IncomingMessage, response: ServerResponse, context
   if (request.method === "GET" && /^\/api\/shelf\/[^/]+\/chapters\/\d+$/.test(url.pathname)) return handleShelfChapter(response, context, decodeURIComponent(url.pathname.split("/")[3] ?? ""), Number(url.pathname.split("/")[5]));
   if (request.method === "POST" && url.pathname === "/api/auth/setup") return handleAuthSetup(request, response, context);
   if (request.method === "POST" && url.pathname === "/api/auth/login") return handleAuthLogin(request, response, context);
+  if (request.method === "POST" && url.pathname === "/api/auth/register") return handleAuthRegister(request, response, context);
+  if (request.method === "GET" && url.pathname === "/api/shell") return sendJson(response, 200, { mode: context.mode, storage: context.storageMode, features: { register: context.mode === "commercial", billing: context.mode === "commercial" } });
   if (context.authEnabled) {
     const user = await authenticate(request, context.authStore);
     if (!user) return sendJson(response, 401, { error: "未登录" });
@@ -130,6 +147,10 @@ async function route(request: IncomingMessage, response: ServerResponse, context
   if (request.method === "GET" && url.pathname === "/api/auth/me") return sendJson(response, 200, { user: context.user ?? null });
   if (request.method === "GET" && url.pathname === "/api/users") return handleUsersGet(response, context);
   if (request.method === "POST" && url.pathname === "/api/users") return handleUsersCreate(request, response, context);
+  if (url.pathname === "/api/admin/invite-codes") {
+    if (request.method === "GET") return handleInviteList(response, context);
+    if (request.method === "POST") return handleInviteCreate(request, response, context);
+  }
   if (request.method === "POST" && /^\/api\/users\/[^/]+\/disable$/.test(url.pathname)) return handleUserDisable(response, context, decodeURIComponent(url.pathname.split("/")[3] ?? ""));
   if (url.pathname === "/api/prep" && request.method === "GET") return handlePrepList(response, context);
   if (url.pathname === "/api/prep" && request.method === "POST") return handlePrepCreate(request, response, context);
@@ -375,6 +396,58 @@ function handleAuthLogout(response: ServerResponse): void {
   sendJson(response, 200, { ok: true });
 }
 
+/** P10-A 注册：仅商用模式 + 邀请码，自用模式关闭。 */
+async function handleAuthRegister(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (context.mode !== "commercial") return sendJson(response, 403, { error: "当前为自用模式，注册未开放；账号由管理员在系统页创建" });
+  if (context.storageMode !== "db" || !context.usersDao) return sendJson(response, 503, { error: "商用注册需要数据库存储（DATABASE_URL）" });
+  const client = request.socket.remoteAddress ?? "unknown";
+  if (context.registerLimiter.isLocked(client)) return sendJson(response, 429, { error: "注册尝试过于频繁，请稍后再试" });
+  try {
+    const body = await readJson(request);
+    const name = optionalText(body.name);
+    const password = typeof body.password === "string" ? body.password : "";
+    const inviteCode = optionalText(body.inviteCode);
+    if (name.length < 2 || name.length > 32) return sendJson(response, 400, { error: "用户名需为 2 至 32 位" });
+    const passwordError = validatePassword(password);
+    if (passwordError) { context.registerLimiter.fail(client); return sendJson(response, 400, { error: passwordError }); }
+    if (!inviteCode) return sendJson(response, 400, { error: "邀请码不能为空" });
+    if ((await context.authStore.loadUsers()).users.some((user) => user.name === name)) { context.registerLimiter.fail(client); return sendJson(response, 409, { error: "用户名已存在" }); }
+    const credentials = hashPassword(password);
+    const user: UserRecord = { id: `u-${randomBytes(6).toString("hex")}`, name, role: "writer", ...credentials, createdAt: new Date().toISOString(), disabled: false };
+    const claim = await context.usersDao.claimInvite(inviteCode, user.id, new Date().toISOString());
+    if (!claim.ok) { context.registerLimiter.fail(client); return sendJson(response, 400, { error: claim.expired ? "邀请码已过期" : "邀请码不存在或已被使用" }); }
+    await context.authStore.saveUsers([...(await context.authStore.loadUsers()).users, user]);
+    if (claim.grantedUsd > 0) await context.usersDao.upsert({ ...(await context.usersDao.byId(user.id))!, quota_usd_remaining: claim.grantedUsd });
+    sendJson(response, 201, { created: true, grantedUsd: claim.grantedUsd });
+  } catch (error) {
+    context.registerLimiter.fail(client);
+    sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function handleInviteCreate(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!requireAdmin(context, response)) return;
+  if (!context.usersDao) return sendJson(response, 503, { error: "邀请码需要数据库存储" });
+  try {
+    const body = await readJson(request);
+    const count = Math.min(Math.max(Number(body.count) || 1, 1), 50);
+    const grantedUsd = Math.max(Number(body.grantedUsd) || 0, 0);
+    const codes: string[] = [];
+    for (let index = 0; index < count; index += 1) {
+      const code = `inv-${randomBytes(8).toString("hex")}`;
+      await context.usersDao.createInvite(code, grantedUsd, context.user?.id ?? "admin", null);
+      codes.push(code);
+    }
+    sendJson(response, 201, { created: true, codes, grantedUsd });
+  } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
+}
+
+async function handleInviteList(response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!requireAdmin(context, response)) return;
+  if (!context.usersDao) return sendJson(response, 200, { invites: [] });
+  sendJson(response, 200, { invites: await context.usersDao.listInvites() });
+}
+
 type ChapterStatus = "completed" | "in-progress" | "pending" | "rewrite";
 
 async function handleDiag(response: ServerResponse, context: RuntimeContext): Promise<void> {
@@ -390,9 +463,9 @@ async function handleReflectionList(response: ServerResponse, context: RuntimeCo
   if (!context.store) return sendJson(response, 200, { configured: false, sessions: [] });
   try {
     const root = new FileIO(context.store.dir);
-    const entries = await readdir(root.path("meta/reflection"), { withFileTypes: true }).catch(() => []);
+    const sessionIds = (await root.listDir("meta/reflection").catch(() => [])).filter((name) => !name.includes("."));
     const sessions = [];
-    for (const entry of entries.filter((item) => item.isDirectory()).map((item) => item.name).sort().reverse()) {
+    for (const entry of sessionIds.sort().reverse()) {
       const manifest = await root.readJSON<{ sessionId: string; artifacts: Array<{ id: string; round: number; target: string; contentFile: string; status: string }> }>(`meta/reflection/${entry}/manifest.json`);
       if (!manifest?.artifacts?.length) continue;
       const artifacts: ReflectionArtifactView[] = [];
@@ -1135,7 +1208,7 @@ async function handleBooksCreate(request: IncomingMessage, response: ServerRespo
     const title = normalizeTitle(textField(body.title, "书名"));
     const now = new Date().toISOString();
     const meta: BookMeta = { id: createBookId(title), title, createdAt: now, updatedAt: now, ownerId: context.user?.id ?? "" };
-    await mkdir(join(context.bookRoot, meta.id), { recursive: true });
+    if (context.storageMode !== "db") await mkdir(join(context.bookRoot, meta.id), { recursive: true });
     const shelf = { ...context.bookshelf, books: [...context.bookshelf.books, meta], updatedAt: now };
     await new FileIO(context.bookRoot).writeJSON(BOOKSHELF_PATH, shelf);
     context.bookshelf = shelf;

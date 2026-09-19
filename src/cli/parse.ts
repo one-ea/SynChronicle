@@ -3,11 +3,25 @@ export type CLIOptions =
   | { command: "version" }
   | { command: "update"; updateVersion: string }
   | { command: "mcp"; configPath: string }
+  | { command: "migrate-files"; booksRoot: string; dbUrl: string }
+  | { command: "verify-migration"; booksRoot: string; dbUrl: string }
   | { command: "start"; configPath: string; headless: boolean; web: boolean; port: number; prompt: string; promptFile: string; args: string[] };
 
 export function parseCLIOptions(argv: string[]): CLIOptions {
   if (argv[0] === "eval") return { command: "eval", argv: argv.slice(1) };
   if (argv[0] === "mcp") return parseMcp(argv.slice(1));
+  if (argv[0] === "migrate-files" || argv[0] === "verify-migration") {
+    const command = argv[0] === "migrate-files" ? "migrate-files" : "verify-migration";
+    let booksRoot = "output";
+    let dbUrl = process.env.DATABASE_URL || "sqlite:data/synchronicle.db";
+    const rest = argv.slice(1);
+    for (let i = 0; i < rest.length; i += 1) {
+      if (rest[i] === "--books-root") booksRoot = requiredValue(rest, ++i, "--books-root");
+      else if (rest[i] === "--db") dbUrl = requiredValue(rest, ++i, "--db");
+      else throw new Error(`${command} 不接受参数 ${rest[i]}`);
+    }
+    return { command, booksRoot, dbUrl } as CLIOptions;
+  }
   let configPath = "", prompt = "", promptFile = "", updateVersion = "";
   let port = 3000, web = true, webFlag = false;
   let headless = false, version = false, update = false;

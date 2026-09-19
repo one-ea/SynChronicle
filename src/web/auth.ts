@@ -1,7 +1,7 @@
 import { createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { chmod } from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
-import { FileIO } from "../store/io.js";
+import { FileIO, storeBackend } from "../store/io.js";
 import { UsersFileSchema, type UserRecord, type UsersFile } from "../domain/user.js";
 
 const USERS_PATH = "users.json";
@@ -62,15 +62,31 @@ export class LoginRateLimiter {
 
 export class AuthStore {
   private readonly io: FileIO;
-  constructor(readonly root: string) { this.io = new FileIO(root); }
+  constructor(readonly root: string, private readonly usersDao?: import("../db/users.js").UsersDao) { this.io = new FileIO(root); }
 
   async loadUsers(): Promise<UsersFile> {
+    if (this.usersDao) {
+      const rows = await this.usersDao.list();
+      return { users: rows.map((row) => ({ id: row.id, name: row.name, role: row.role as UserRecord["role"], salt: row.password_salt, hash: row.password_hash, createdAt: row.created_at, disabled: row.status === "disabled" })), updatedAt: new Date().toISOString() };
+    }
     const raw = await this.io.readJSON<unknown>(USERS_PATH);
     const parsed = raw ? UsersFileSchema.safeParse(raw) : null;
     return parsed?.success ? parsed.data : { users: [], updatedAt: new Date().toISOString() };
   }
 
   async saveUsers(users: UserRecord[]): Promise<void> {
+    if (this.usersDao) {
+      const now = new Date().toISOString();
+      const existing = new Map((await this.usersDao.list()).map((row) => [row.id, row]));
+      await this.usersDao.sync(users.map((user) => ({
+        id: user.id, name: user.name, password_salt: user.salt, password_hash: user.hash, role: user.role,
+        status: user.disabled ? "disabled" : "active",
+        quota_usd_remaining: existing.get(user.id)?.quota_usd_remaining ?? 0,
+        quota_usd_used: existing.get(user.id)?.quota_usd_used ?? 0,
+        created_at: user.createdAt, updated_at: now,
+      })));
+      return;
+    }
     await this.io.writeJSON(USERS_PATH, { users, updatedAt: new Date().toISOString() });
   }
 
@@ -79,7 +95,7 @@ export class AuthStore {
     if (existing) return existing;
     const secret = randomBytes(32).toString("hex");
     await this.io.writeFile(SECRET_PATH, secret);
-    await chmod(this.io.path(SECRET_PATH), 0o600);
+    if (!storeBackend()) await chmod(this.io.path(SECRET_PATH), 0o600);
     return secret;
   }
 }

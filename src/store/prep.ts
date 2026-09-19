@@ -11,11 +11,10 @@ export class PrepStore {
     return parsed.success ? parsed.data : null;
   }
   async list(): Promise<PrepSession[]> {
-    const { readdir } = await import("node:fs/promises");
-    const entries = await readdir(this.io.path("meta/prep"), { withFileTypes: true }).catch(() => []);
+    const names = await this.io.listDir("meta/prep").catch(() => []);
     const sessions: PrepSession[] = [];
-    for (const entry of entries.filter((item) => item.isFile() && item.name.endsWith(".json"))) {
-      const session = await this.load(entry.name.slice(0, -5));
+    for (const name of names.filter((item) => item.endsWith(".json"))) {
+      const session = await this.load(name.slice(0, -5));
       if (session) sessions.push(session);
     }
     return sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));

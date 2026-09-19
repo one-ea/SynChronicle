@@ -42,24 +42,33 @@
     "url": "https://github.com/one-ea/SynChronicle.git"
   },
   "dependencies": {
-    "ai": "^5.0.48",
-    "@ai-sdk/openai": "^2.0.32",
     "@ai-sdk/anthropic": "^2.0.16",
     "@ai-sdk/google": "^2.0.15",
+    "@ai-sdk/openai": "^2.0.32",
+    "ai": "^5.0.48",
+    "better-sqlite3": "^13.0.3",
+    "drizzle-orm": "^0.45.2",
+    "gpt-tokenizer": "^3.4.0",
     "ink": "^6.3.1",
+    "mysql2": "^3.24.4",
+    "pg": "^8.23.0",
     "react": "^19.1.0",
-    "zod": "^3.25.76",
-    "gpt-tokenizer": "^3.4.0"
+    "zod": "^3.25.76"
   },
   "devDependencies": {
-    "typescript": "^5.8.3",
-    "tsup": "^8.5.0",
-    "vitest": "^3.2.4",
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^24.0.0",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19.1.2",
-    "ink-testing-library": "^4.0.0"
+    "drizzle-kit": "^0.31.10",
+    "ink-testing-library": "^4.0.0",
+    "tsup": "^8.5.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   }
 }
