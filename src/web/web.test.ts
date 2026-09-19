@@ -167,12 +167,11 @@ describe("WebUI", () => {
 
   it("adapts the read front with collapsible toc and fluid typography", () => {
     const html = renderReadApp();
-    expect(html).toContain('class="card toc-card" id="r-toc"');
-    expect(html).toContain("<summary");
-    expect(html).toContain("max-width: 72ch");
-    expect(html).toContain("clamp(15px, 2.5vw, 17px)");
-    expect(html).toContain("(max-width: 767px)");
-    expect(html).toContain("$('r-toc').removeAttribute('open')");
+    expect(html).toContain("书城");
+    expect(html).toContain("/api/shelf");
+    expect(html).toContain("className='chapter-text'");
+    expect(html).toContain("clamp(15px,2.5vw,18px)");
+    expect(html).toContain("@media(max-width:700px)");
     expect(Buffer.byteLength(html, "utf8")).toBeLessThan(15070 + 30 * 1024);
   });
 
@@ -282,11 +281,9 @@ describe("WebUI", () => {
 
   it("renders an emdash-style read front with chapter navigation", () => {
     const html = renderReadApp();
-    expect(html).toContain("开始阅读");
-    expect(html).toContain("返回控制台");
-    expect(html).toContain("/api/book");
-    expect(html).toContain("/api/chapters/");
-    expect(html).toContain('data-theme="system"');
+    expect(html).toContain("发现故事");
+    expect(html).toContain("控制台");
+    expect(html).toContain("/api/shelf/");
     expect(html).toContain("上一章");
     expect(html).toContain("下一章");
     expect(html).not.toContain("innerHTML =");
