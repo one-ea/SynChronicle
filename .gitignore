@@ -31,3 +31,5 @@ synchronicle
 
 # runtime database
 data/
+
+webui/node_modules/

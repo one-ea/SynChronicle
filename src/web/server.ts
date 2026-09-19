@@ -130,12 +130,43 @@ function fallbackDirName(outputDir: string): string {
   return outputDir.replace(/\\/g, "/").split("/").filter(Boolean).at(-1) ?? "novel";
 }
 
+import { readFile as spaReadFile, stat as spaStat } from "node:fs/promises";
+import { extname, join as spaJoin, normalize as spaNormalize } from "node:path";
+
+const SPA_DIST = "webui/dist";
+const SPA_MIME: Record<string, string> = { ".js": "text/javascript", ".css": "text/css", ".html": "text/html; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon", ".json": "application/json", ".woff2": "font/woff2" };
+
+async function serveSpaFile(target: string, response: ServerResponse): Promise<boolean> {
+  const info = await spaStat(target).then((value) => (value.isFile() ? value : null)).catch(() => null);
+  if (!info) return false;
+  const body = await spaReadFile(target);
+  response.writeHead(200, { "content-type": SPA_MIME[extname(target)] ?? "application/octet-stream", "cache-control": extname(target) === ".html" ? "no-store" : "public, max-age=3600" });
+  response.end(body);
+  return true;
+}
+
+/** P10-C SPA 静态托管：产物存在时门户路由走 webui/dist，缺失时回落旧内联页（开发/测试兼容）。 */
+async function spaAsset(url: URL, request: IncomingMessage, response: ServerResponse): Promise<boolean> {
+  if (request.method !== "GET") return false;
+  if (url.pathname.startsWith("/assets/")) {
+    const relative = spaNormalize(url.pathname).replace(/^(\.\.[/\\])+/, "");
+    return serveSpaFile(spaJoin(process.cwd(), SPA_DIST, relative.replace(/^\//, "")), response);
+  }
+  const portal = url.pathname === "/" || url.pathname === "/read" || url.pathname === "/login" || url.pathname === "/studio";
+  if (!portal) return false;
+  if (await serveSpaFile(spaJoin(process.cwd(), SPA_DIST, "index.html"), response)) return true;
+  // SPA 产物缺失：回落旧内联页（/read 保留书城旧页，其余进旧控制台）
+  if (url.pathname === "/read") { send(response, 200, renderReadApp(), "text/html; charset=utf-8"); return true; }
+  send(response, 200, renderWebApp(), "text/html; charset=utf-8");
+  return true;
+}
+
 async function route(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
   const url = new URL(request.url ?? "/", "http://localhost");
-  if (request.method === "GET" && url.pathname === "/") return send(response, 200, renderWebApp(), "text/html; charset=utf-8");
-  if (request.method === "GET" && url.pathname === "/read") return send(response, 200, renderReadApp(), "text/html; charset=utf-8");
-  if (request.method === "GET" && url.pathname === "/favicon.ico") { response.writeHead(204); response.end(); return; }
   if (request.method === "GET" && url.pathname === "/api/health") return sendJson(response, 200, { ok: true });
+  if (await spaAsset(url, request, response)) return;
+  if (request.method === "GET" && url.pathname === "/studio/legacy") return send(response, 200, renderWebApp(), "text/html; charset=utf-8");
+  if (request.method === "GET" && url.pathname === "/favicon.ico") { response.writeHead(204); response.end(); return; }
   if (request.method === "GET" && url.pathname === "/api/shelf") return handleShelfList(response, context);
   if (request.method === "GET" && /^\/api\/shelf\/[^/]+$/.test(url.pathname)) return handleShelfBook(response, context, decodeURIComponent(url.pathname.split("/")[3] ?? ""));
   if (request.method === "GET" && /^\/api\/shelf\/[^/]+\/chapters\/\d+$/.test(url.pathname)) return handleShelfChapter(response, context, decodeURIComponent(url.pathname.split("/")[3] ?? ""), Number(url.pathname.split("/")[5]));
