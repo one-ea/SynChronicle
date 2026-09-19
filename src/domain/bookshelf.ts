@@ -43,7 +43,8 @@ export function createBookId(title: string, now = new Date()): string {
   return `${base}-${suffix}-${rand}`;
 }
 
-export function normalizeTitle(input: string): string {
+/** 压缩空白并截断到 max 位的通用名称归一化（书名/技能包名共用）。 */
+export function normalizeTitle(input: string, max = 60): string {
   const trimmed = input.trim().replace(/\s+/g, " ");
-  return trimmed.slice(0, 60);
+  return trimmed.slice(0, max);
 }

@@ -699,13 +699,15 @@ export function renderWebApp(): string {
       function showView(view) { document.querySelectorAll('.page').forEach((page) => { page.hidden = page.dataset.page !== view; }); document.querySelectorAll('[data-view]').forEach((button) => { if (button.dataset.view === view) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current'); }); if (view === 'reader') void loadBook(); if (view === 'studio') void loadStudio(); }
       document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => showView(button.dataset.view)));
       function flatten(book) { const rows = []; for (const volume of book.volumes) for (const arc of volume.arcs) for (const chapter of arc.chapters) rows.push(chapter); return rows; }
+      function pickTargetChapter(rows) { return rows.find((row) => row.status === 'in-progress') || [...rows].reverse().find((row) => row.status === 'completed') || rows[0]; }
       function rowPill(label, count, tone) { const pill = document.createElement('span'); pill.className = 'pill ' + tone; pill.textContent = count + ' ' + label; return pill; }
       async function loadBookSummary() { const box = $('book-rows'); try { const data = await (await fetch('/api/book')).json(); if (!data.configured || !data.book) { box.replaceChildren(); const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '尚未配置模型，先连接引擎。'; box.append(empty); $('book-phase').textContent = '—'; return; } const book = data.book; const rows = flatten(book); const done = rows.filter((row) => row.status === 'completed').length; const rewrite = rows.filter((row) => row.status === 'rewrite').length; const pending = rows.length - done - rewrite; box.replaceChildren(); const rowA = document.createElement('div'); rowA.className = 'rowline'; const labelA = document.createElement('span'); labelA.textContent = '章节进度'; const pills = document.createElement('div'); pills.className = 'pills'; pills.append(rowPill('已完成', done, 'ok'), rowPill('待写', pending, 'muted')); if (rewrite) pills.append(rowPill('待重写', rewrite, 'bad')); rowA.append(labelA, pills); const rowB = document.createElement('div'); rowB.className = 'rowline'; const labelB = document.createElement('span'); labelB.textContent = '全书字数'; const valueB = document.createElement('span'); valueB.style.fontWeight = '700'; valueB.style.fontSize = '15px'; valueB.textContent = formatNumber(book.totalWordCount); rowB.append(labelB, valueB); const rowC = document.createElement('div'); rowC.className = 'rowline'; const labelC = document.createElement('span'); labelC.textContent = '阅读前台'; const link = document.createElement('a'); link.href = '/read'; link.className = 'btn btn-text'; link.style.minHeight = '32px'; link.textContent = '打开 /read'; rowC.append(labelC, link); box.append(rowA, rowB, rowC); $('book-phase').textContent = phaseLabels[book.phase] || book.phase; const navChapters = $('nav-count-chapters'); if (navChapters) { navChapters.textContent = rows.length + '章'; navChapters.hidden = rows.length === 0; } } catch { /* 保持现有内容 */ } }
       function treeEmpty(message) { $('outline-tree').replaceChildren(); const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = message; $('outline-tree').append(empty); $('book-progress').textContent = '—'; }
-      async function loadBook() { try { const data = await (await fetch('/api/book')).json(); if (!data.configured || !data.book) { $('book-title').textContent = '大纲'; treeEmpty('尚未配置模型，先在概览页连接引擎。'); return; } const book = data.book; $('book-title').textContent = book.novelName || '大纲'; $('book-progress').textContent = book.completedChapters.length + '/' + (book.totalChapters || flatten(book).length) + ' 章'; const tree = $('outline-tree'); tree.replaceChildren(); const rows = flatten(book); if (!rows.length) { treeEmpty('尚未开始创作，提交 brief 后这里会长出大纲。'); return; } for (const volume of book.volumes) { const vol = document.createElement('div'); vol.className = 'vol'; vol.textContent = '第 ' + volume.index + ' 卷 · ' + (volume.title || '未命名'); tree.append(vol); for (const arc of volume.arcs) { const arcLabel = document.createElement('div'); arcLabel.className = 'arc'; arcLabel.textContent = ' ' + (arc.title || '弧') + (arc.goal ? ' — ' + arc.goal : ''); tree.append(arcLabel); for (const chapter of arc.chapters) { const row = document.createElement('button'); row.type = 'button'; row.className = 'trow'; row.dataset.chapter = String(chapter.chapter); row.setAttribute('role', 'treeitem'); const dot = document.createElement('i'); dot.className = 'dot s-' + chapter.status; dot.setAttribute('aria-hidden', 'true'); const label = document.createElement('span'); label.textContent = chapter.chapter + '. ' + chapter.title; const words = document.createElement('small'); words.textContent = chapter.wordCount ? formatNumber(chapter.wordCount) + ' 字' : ''; row.append(dot, label, words); row.addEventListener('click', () => selectChapter(chapter.chapter)); tree.append(row); } } } const target = rows.find((row) => row.status === 'in-progress') || [...rows].reverse().find((row) => row.status === 'completed') || rows[0]; if (target) selectChapter(target.chapter); } catch { treeEmpty('加载大纲失败，请稍后重试。'); } }
+      async function loadBook() { try { const data = await (await fetch('/api/book')).json(); if (!data.configured || !data.book) { $('book-title').textContent = '大纲'; treeEmpty('尚未配置模型，先在概览页连接引擎。'); return; } const book = data.book; $('book-title').textContent = book.novelName || '大纲'; $('book-progress').textContent = book.completedChapters.length + '/' + (book.totalChapters || flatten(book).length) + ' 章'; const tree = $('outline-tree'); tree.replaceChildren(); const rows = flatten(book); if (!rows.length) { treeEmpty('尚未开始创作，提交 brief 后这里会长出大纲。'); return; } for (const volume of book.volumes) { const vol = document.createElement('div'); vol.className = 'vol'; vol.textContent = '第 ' + volume.index + ' 卷 · ' + (volume.title || '未命名'); tree.append(vol); for (const arc of volume.arcs) { const arcLabel = document.createElement('div'); arcLabel.className = 'arc'; arcLabel.textContent = ' ' + (arc.title || '弧') + (arc.goal ? ' — ' + arc.goal : ''); tree.append(arcLabel); for (const chapter of arc.chapters) { const row = document.createElement('button'); row.type = 'button'; row.className = 'trow'; row.dataset.chapter = String(chapter.chapter); row.setAttribute('role', 'treeitem'); const dot = document.createElement('i'); dot.className = 'dot s-' + chapter.status; dot.setAttribute('aria-hidden', 'true'); const label = document.createElement('span'); label.textContent = chapter.chapter + '. ' + chapter.title; const words = document.createElement('small'); words.textContent = chapter.wordCount ? formatNumber(chapter.wordCount) + ' 字' : ''; row.append(dot, label, words); row.addEventListener('click', () => selectChapter(chapter.chapter)); tree.append(row); } } } const target = pickTargetChapter(rows); if (target) selectChapter(target.chapter); } catch { treeEmpty('加载大纲失败，请稍后重试。'); } }
       let currentChapter = 0;
       function selectChapter(chapter) { currentChapter = chapter; document.querySelectorAll('.trow').forEach((row) => { const active = Number(row.dataset.chapter) === chapter; row.classList.toggle('active', active); row.setAttribute('aria-selected', String(active)); }); void loadChapter(chapter); }
-      async function loadChapter(chapter) { try { const data = await (await fetch('/api/chapters/' + chapter)).json(); if (!data.configured || !data.chapter) { $('ch-title').textContent = '尚未配置模型'; return; } const view = data.chapter; $('ch-title').textContent = view.title || ('第 ' + chapter + ' 章'); const chip = $('ch-status'); chip.hidden = false; chip.textContent = chapterLabels[view.status] || view.status; chip.dataset.state = view.status === 'rewrite' ? 'error' : view.status === 'completed' ? 'idle' : 'running';           $('ch-words').textContent = (view.source === 'draft' ? '草稿 · ' : '') + formatNumber(view.wordCount) + ' 字';
+      async function fetchChapter(chapter) { return (await fetch('/api/chapters/' + chapter)).json(); }
+      async function loadChapter(chapter) { try { const data = await fetchChapter(chapter); if (!data.configured || !data.chapter) { $('ch-title').textContent = '尚未配置模型'; return; } const view = data.chapter; $('ch-title').textContent = view.title || ('第 ' + chapter + ' 章'); const chip = $('ch-status'); chip.hidden = false; chip.textContent = chapterLabels[view.status] || view.status; chip.dataset.state = view.status === 'rewrite' ? 'error' : view.status === 'completed' ? 'idle' : 'running';           $('ch-words').textContent = (view.source === 'draft' ? '草稿 · ' : '') + formatNumber(view.wordCount) + ' 字';
           const tone = $('ch-tone');
           if (view.aitone && view.aitone.score < 100) {
             tone.hidden = false;
@@ -1050,12 +1052,13 @@ export function renderWebApp(): string {
         } catch (err) { showNotice(err.message || '创建分支失败'); }
       });
       let recallSnippetText = '';
+      async function fetchRecall(query) { return (await fetch('/api/recall?q=' + encodeURIComponent(query))).json(); }
       $('recall-run')?.addEventListener('click', async () => {
         const query = $('recall-query')?.value.trim();
         const box = $('recall-results');
         if (!query || !box) return;
         try {
-          const res = await (await fetch('/api/recall?q=' + encodeURIComponent(query))).json();
+          const res = await fetchRecall(query);
           $('recall-engine').textContent = res.engine === 'embedding' ? '向量检索' : 'BM25';
           box.replaceChildren();
           recallSnippetText = '';
@@ -1454,17 +1457,15 @@ export function renderWebApp(): string {
           }
         } catch { box.replaceChildren(); }
       }
-      $('fingerprint-btn')?.addEventListener('click', async () => {
-        if (!currentChapter) return;
+      async function scanFingerprint(chapter) {
         try {
-          const res = await (await fetch('/api/ai-fingerprint?chapter=' + currentChapter)).json();
-          if (!res.configured || !res.fingerprint) { showNotice(err0(res)); return; }
+          const res = await (await fetch('/api/ai-fingerprint?chapter=' + chapter)).json();
+          if (!res.configured || !res.fingerprint) { showNotice(res.error || '扫描失败'); return; }
           const f = res.fingerprint;
-          const level = f.riskScore >= 60 ? 'warn' : 'success';
-          showNotice('第 ' + currentChapter + ' 章 AI 痕迹风险 ' + f.riskScore + '/100（排比 ' + f.signals.parallelism + ' · 工整 ' + f.signals.uniformity + ' · 模板 ' + f.signals.templated + ' · 陈词 ' + f.signals.summaryCliche + '）。' + res.advice, level);
+          showNotice('第 ' + chapter + ' 章 AI 痕迹风险 ' + f.riskScore + '/100（排比 ' + f.signals.parallelism + ' · 工整 ' + f.signals.uniformity + ' · 模板 ' + f.signals.templated + ' · 陈词 ' + f.signals.summaryCliche + '）。' + res.advice, f.riskScore >= 60 ? 'warn' : 'success');
         } catch (err) { showNotice(err.message || '扫描失败'); }
-      });
-      function err0(res) { return res.error || '扫描失败'; }
+      }
+      $('fingerprint-btn')?.addEventListener('click', () => { if (currentChapter) void scanFingerprint(currentChapter); });
       async function loadBookshelf() {
         const box = $('bookshelf-rows');
         if (!box) return;
@@ -1603,7 +1604,7 @@ export function renderWebApp(): string {
             row.addEventListener('click', () => selectStudioChapter(chapter.chapter));
             list.append(row);
           }
-          const target = studioChapter || (rows.find((row) => row.status === 'in-progress') || [...rows].reverse().find((row) => row.status === 'completed') || rows[0]).chapter;
+          const target = studioChapter || (pickTargetChapter(rows) || {}).chapter;
           if (target) selectStudioChapter(target);
         } catch { /* 保持现有内容 */ }
       }
@@ -1616,7 +1617,7 @@ export function renderWebApp(): string {
         const editor = $('studio-editor');
         if (!editor) return;
         try {
-          const res = await (await fetch('/api/chapters/' + chapter)).json();
+          const res = await fetchChapter(chapter);
           if (!res.configured || !res.chapter) { editor.value = ''; editor.disabled = true; if ($('studio-save')) $('studio-save').disabled = true; return; }
           const view = res.chapter;
           $('studio-ch-title').textContent = view.title;
@@ -1652,7 +1653,7 @@ export function renderWebApp(): string {
         if (!box) return;
         if (!query) { showNotice('输入检索关键词'); return; }
         try {
-          const res = await (await fetch('/api/recall?q=' + encodeURIComponent(query))).json();
+          const res = await fetchRecall(query);
           box.replaceChildren();
           if (!res.hits || !res.hits.length) { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '没有命中的设定。'; box.append(empty); return; }
           for (const hit of res.hits.slice(0, 6)) {
@@ -1666,15 +1667,7 @@ export function renderWebApp(): string {
           }
         } catch { box.replaceChildren(); }
       });
-      $('studio-fingerprint')?.addEventListener('click', async () => {
-        if (!studioChapter) return;
-        try {
-          const res = await (await fetch('/api/ai-fingerprint?chapter=' + studioChapter)).json();
-          if (!res.configured || !res.fingerprint) { showNotice(res.error || '扫描失败'); return; }
-          const f = res.fingerprint;
-          showNotice('第 ' + studioChapter + ' 章 AI 痕迹风险 ' + f.riskScore + '/100（排比 ' + f.signals.parallelism + ' · 工整 ' + f.signals.uniformity + ' · 模板 ' + f.signals.templated + ' · 陈词 ' + f.signals.summaryCliche + '）。' + res.advice, f.riskScore >= 60 ? 'warn' : 'success');
-        } catch (err) { showNotice(err.message || '扫描失败'); }
-      });
+      $('studio-fingerprint')?.addEventListener('click', () => { if (studioChapter) void scanFingerprint(studioChapter); });
       async function loadEntities() {
         try {
           const res = await (await fetch('/api/entities')).json();

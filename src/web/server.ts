@@ -25,9 +25,8 @@ import { platformReviewFromStore, type Platform } from "../diag/platformreview.j
 import { fingerprintScan, rewriteAmplitude } from "../diag/aifingerprint.js";
 import { buildRewritePlan } from "../runtime/rewrite.js";
 import { evaluateArenaCandidates } from "../runtime/arena.js";
-import { BOOKSHELF_PATH, BookshelfFileSchema, createBookId, emptyBookshelf, normalizeTitle, resolveBooksRoot, type BookMeta, type BookshelfFile } from "../domain/bookshelf.js";
-import { BUILTIN_SKILL_PACKS, type SkillPack } from "../domain/skillpack.js";
-import { VERSION_SOURCES } from "../store/versions.js";
+import { BOOKSHELF_PATH, BookshelfFileSchema, createBookId, emptyBookshelf, normalizeTitle, resolveBooksRoot, type BookMeta, type BookshelfFile } from "../domain/bookshelf.js";import { BUILTIN_SKILL_PACKS, type SkillPack } from "../domain/skillpack.js";
+import { VERSION_SOURCES, countWords } from "../store/versions.js";
 import type { ResolvedConfig } from "../config/schemas.js";
 
 export interface WebServerOptions { port?: number; host?: string; configPath?: string; hostInstance?: Host; }
@@ -946,7 +945,7 @@ async function handleVersionsList(response: ServerResponse, context: RuntimeCont
   try {
     const versions = await context.store.versions.list(chapter);
     const current = (await context.store.drafts.loadChapterText(chapter)) || (await context.store.drafts.loadDraft(chapter)) || "";
-    const currentWords = [...current.replace(/\s/g, "")].length;
+    const currentWords = countWords(current);
     sendJson(response, 200, {
       configured: true,
       currentWords,
@@ -1007,10 +1006,11 @@ async function handleSkillPacksGet(response: ServerResponse, context: RuntimeCon
   try {
     const file = await context.store.skillpacks.load();
     const enabled = new Set(file.enabled);
+    const projectPack = (pack: { id: string; name: string; category: string; description: string; techniques: string[] }) => ({ id: pack.id, name: pack.name, category: pack.category, description: pack.description, techniqueCount: pack.techniques.length, preview: pack.techniques[0], enabled: enabled.has(pack.id) });
     sendJson(response, 200, {
       configured: true,
-      builtin: BUILTIN_SKILL_PACKS.map((pack) => ({ id: pack.id, name: pack.name, category: pack.category, description: pack.description, techniqueCount: pack.techniques.length, preview: pack.techniques[0], enabled: enabled.has(pack.id) })),
-      custom: file.custom.map((pack) => ({ id: pack.id, name: pack.name, category: pack.category, description: pack.description, techniqueCount: pack.techniques.length, preview: pack.techniques[0], enabled: enabled.has(pack.id) })),
+      builtin: BUILTIN_SKILL_PACKS.map(projectPack),
+      custom: file.custom.map(projectPack),
       enabledCount: enabled.size,
     });
   } catch (error) { sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) }); }
@@ -1031,7 +1031,7 @@ async function handleSkillPacksCreate(request: IncomingMessage, response: Server
   if (!context.store) return sendJson(response, 503, { error: "尚未配置小说工作区" });
   try {
     const body = await readJson(request);
-    const name = normalizePackName(textField(body.name, "技能包名称"));
+    const name = normalizeTitle(textField(body.name, "技能包名称"), 40);
     const category = optionalText(body.category) || "自定义";
     const description = optionalText(body.description).slice(0, 120);
     const techniquesRaw = Array.isArray(body.techniques)
@@ -1052,10 +1052,6 @@ async function handleSkillPacksDelete(response: ServerResponse, context: Runtime
     if (!removed) return sendJson(response, 404, { error: `自定义技能包不存在: ${id}` });
     sendJson(response, 200, { removed: true, id });
   } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
-}
-
-function normalizePackName(input: string): string {
-  return input.trim().replace(/\s+/g, " ").slice(0, 40);
 }
 
 function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
