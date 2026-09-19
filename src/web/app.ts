@@ -297,6 +297,7 @@ export function renderWebApp(): string {
         <div class="side-foot">Local runtime<br />作品、配置与运行记录均保存在本机。</div>
       </aside>
       <main class="main">
+        <div id="advice-bar" aria-live="polite"></div>
         <section class="page" data-page="overview" aria-label="创作概览">
           <div class="page-head">
             <div><h1>创作概览</h1><p class="meta">从一个 brief 开始，持续推进你的故事。</p></div>
@@ -739,12 +740,13 @@ export function renderWebApp(): string {
       $('auth-form').addEventListener('submit', async (event) => { event.preventDefault(); try { const response = await fetch('/api/auth/' + authMode, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: $('auth-name').value.trim(), password: $('auth-password').value }) }); const data = await response.json(); if (!response.ok) { if (response.status === 401 && authMode === 'login') { const setup = await fetch('/api/auth/setup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: $('auth-name').value.trim(), password: $('auth-password').value }) }); if (setup.status === 201) { authMode = 'login'; $('auth-title').textContent = '管理员已初始化'; $('auth-copy').textContent = '再次提交即可登录控制台。'; return; } } throw new Error(data.error || '认证失败'); } location.reload(); } catch (error) { showNotice(error.message || '认证失败'); } });
       void detectAuth();
       function applyStatus(data) { currentState = data.snapshot?.runtimeState || (data.configured ? 'idle' : 'setup'); const ready = Boolean(data.configured); const active = currentState === 'running'; const status = $('runtime-status'); status.dataset.state = data.error ? 'error' : currentState; status.querySelector('span').textContent = data.error ? '服务异常' : (stateLabels[currentState] || currentState); $('progress').hidden = !active; $('state').textContent = currentState; $('state').dataset.state = currentState; $('model').textContent = data.snapshot?.model || '—'; $('input').textContent = formatNumber(data.snapshot?.usage?.inputTokens); $('output').textContent = formatNumber(data.snapshot?.usage?.outputTokens); $('prompt').disabled = !ready || active || currentState === 'closed'; $('run').disabled = !ready || active || currentState === 'closed'; $('run').textContent = active ? '创作进行中…' : currentState === 'paused' ? '继续创作' : '开始创作'; $('steering-panel').classList.toggle('show', ready); $('runtime-actions').hidden = !ready || !['paused', 'completed'].includes(currentState); $('resume').hidden = currentState !== 'paused'; if (!active) $('live-state').textContent = '本轮已完成'; if (data.events) { eventsBuf = data.events; renderEvents(eventsBuf); } }
+      function renderAdvice(items) { const target = $('advice-bar'); if (!target) return; target.replaceChildren(); for (const item of items || []) { const row = document.createElement('div'); row.className = 'announce'; const text = document.createElement('span'); text.textContent = item.message; const dismiss = document.createElement('button'); dismiss.className = 'btn btn-text'; dismiss.type = 'button'; dismiss.textContent = '忽略'; dismiss.addEventListener('click', async () => { await post('/api/advice/dismiss', { id: item.id }); row.remove(); }); row.append(text, dismiss); target.append(row); } }
       async function refresh() { try { applyStatus(await (await fetch('/api/status')).json()); } catch { $('runtime-status').dataset.state = 'error'; $('runtime-status').querySelector('span').textContent = '本地服务未连接'; showNotice('无法连接本地服务，请确认 SynChronicle 仍在运行。'); } }
       function appendDelta(value) { if (value === RUN_END) { $('live-state').textContent = '本轮已完成'; return; } $('live-card').hidden = false; $('live-state').textContent = '生成中'; const el = $('live-text'); el.textContent = (el.textContent + value).slice(-4000); el.scrollTop = el.scrollHeight; }
       let sseErrored = false; let pollTimer = 0;
       function startPolling() { if (pollTimer) return; pollTimer = setInterval(() => void refresh(), 3000); }
       const es = new EventSource('/api/stream');
-      es.addEventListener('snapshot', (e) => applyStatus(JSON.parse(e.data)));
+       es.addEventListener('snapshot', (e) => { const data = JSON.parse(e.data); applyStatus(data); renderAdvice(data.advice); });
       es.addEventListener('runtime', (e) => pushEvent(JSON.parse(e.data)));
       es.addEventListener('delta', (e) => appendDelta(JSON.parse(e.data).value));
       es.onerror = () => { if (sseErrored) { es.close(); startPolling(); } sseErrored = true; };

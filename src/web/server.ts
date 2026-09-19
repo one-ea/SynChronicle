@@ -30,6 +30,7 @@ import { applyChapterText } from "../runtime/chapterapply.js";
 import { AutopilotRunner } from "../runtime/autopilot.js";
 import { AutopilotSettingsSchema, AutopilotStateSchema, type AutopilotSettings } from "../domain/autopilot.js";
 import { PrepRunner } from "../runtime/prep.js";
+import { computeAdvice } from "../runtime/advisor.js";
 import { BOOKSHELF_PATH, BookshelfFileSchema, createBookId, emptyBookshelf, normalizeTitle, resolveBooksRoot, type BookMeta, type BookshelfFile } from "../domain/bookshelf.js";import { BUILTIN_SKILL_PACKS, type SkillPack } from "../domain/skillpack.js";
 import { VERSION_SOURCES, countWords } from "../store/versions.js";
 import type { ResolvedConfig } from "../config/schemas.js";
@@ -127,7 +128,27 @@ async function route(request: IncomingMessage, response: ServerResponse, context
   if (url.pathname === "/api/prep" && request.method === "POST") return handlePrepCreate(request, response, context);
   if (request.method === "GET" && /^\/api\/prep\/[^/]+$/.test(url.pathname)) return handlePrepGet(response, context, decodeURIComponent(url.pathname.split("/")[3] ?? ""));
   if (request.method === "POST" && /^\/api\/prep\/[^/]+\/(chat|advance|confirm|abandon)$/.test(url.pathname)) return handlePrepAction(request, response, context, decodeURIComponent(url.pathname.split("/")[3] ?? ""), url.pathname.split("/").pop()!);
+  if (request.method === "GET" && url.pathname === "/api/advice") return handleAdviceGet(response, context);
+  if (request.method === "POST" && url.pathname === "/api/advice/dismiss") return handleAdviceDismiss(request, response, context);
   return dispatchRoute(request, response, context, url);
+}
+
+async function activeAdvice(context: RuntimeContext) {
+  if (!context.store) return [];
+  const autopilot = context.autopilot?.getState();
+  const sessions = await context.store.prep.list();
+  const activePrep = sessions.find((session) => session.status === "active");
+  return computeAdvice(context.store, { prepStage: activePrep?.stage, autopilotPhase: autopilot?.phase, budgetUsd: autopilot?.budgetUsd, costUsd: autopilot?.costUsd, reviewQueue: autopilot?.reviewQueue });
+}
+
+async function handleAdviceGet(response: ServerResponse, context: RuntimeContext): Promise<void> {
+  try { sendJson(response, 200, { advice: await activeAdvice(context) }); } catch (error) { sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) }); }
+}
+
+async function handleAdviceDismiss(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.store) return sendJson(response, 503, { error: "尚未配置小说工作区" });
+  try { const body = await readJson(request); const id = textField(body.id, "id"); const io = new FileIO(context.store.dir); const file = await io.readJSON<{ dismissed?: string[] }>("meta/advice.json"); await io.writeJSON("meta/advice.json", { dismissed: [...new Set([...(file?.dismissed ?? []), id])], updatedAt: new Date().toISOString() }); sendJson(response, 200, { dismissed: true, id }); }
+  catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
 }
 
 async function prepRunner(context: RuntimeContext): Promise<PrepRunner> {
@@ -972,7 +993,7 @@ async function handleStream(request: IncomingMessage, response: ServerResponse, 
 
 async function lightStatus(context: RuntimeContext): Promise<Record<string, unknown>> {
   const snapshot = context.host?.snapshot() ?? (context.config ? { runtimeState: "idle", provider: context.config.provider, model: context.config.model, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, costUSD: 0 } } : undefined);
-  return { configured: context.configured, ...(context.error ? { error: context.error } : {}), snapshot };
+  return { configured: context.configured, ...(context.error ? { error: context.error } : {}), snapshot, advice: await activeAdvice(context).catch(() => []) };
 }
 
 async function status(context: RuntimeContext): Promise<Record<string, unknown>> {
