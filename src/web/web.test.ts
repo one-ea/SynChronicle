@@ -50,6 +50,20 @@ describe("WebUI", () => {
     expect(Buffer.byteLength(html, "utf8")).toBeLessThan(83196 + 30 * 1024);
   });
 
+  it("applies stitch draft refinements to the console shell", () => {
+    const html = renderWebApp();
+    expect(html).toContain("--font-mono");
+    expect(html).toContain('class="nv-t"');
+    expect(html).toContain('id="nav-count-chapters"');
+    expect(html).toContain('id="nav-count-entities"');
+    expect(html).toContain("<code>engine</code>");
+    expect(html).toContain("<code>output</code>");
+    expect(html).toContain("草稿自动归档");
+    expect(html).toContain("inset 0 0 0 1px var(--heat-20)");
+    expect(html).toContain("backdrop-filter: blur(14px)");
+    expect(html).toContain(".card:hover { border-color: var(--line-strong); }");
+  });
+
   it("adapts the read front with collapsible toc and fluid typography", () => {
     const html = renderReadApp();
     expect(html).toContain('class="card toc-card" id="r-toc"');

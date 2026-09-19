@@ -21,6 +21,8 @@ export function renderWebApp(): string {
         --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 24px; --space-6: 32px;
         --dur-fast: .15s; --dur: .2s; --ease: ease;
         --font: "Inter", "Google Sans Text", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+        --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        --line-strong: #d9d9d9;
       }
       :root.dark {
         color-scheme: dark;
@@ -29,6 +31,7 @@ export function renderWebApp(): string {
         --line: #333; --line-faint: #2a2a2a;
         --alpha-4: rgba(255, 255, 255, .05); --alpha-6: rgba(255, 255, 255, .08); --alpha-7: rgba(255, 255, 255, .1);
         --heat-8: rgba(250, 93, 25, .1);
+        --line-strong: #454545;
       }
       * { box-sizing: border-box; }
       ::selection { background: var(--heat-12); color: var(--ink); }
@@ -37,7 +40,7 @@ export function renderWebApp(): string {
       button { cursor: pointer; }
       h1, h2, h3, h4 { letter-spacing: -.02em; font-weight: 700; line-height: 1.2; margin: 0; }
       button:focus-visible, input:focus-visible, textarea:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--heat-100); }
-      .topbar { position: sticky; top: 0; z-index: 100; display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 56px; padding: 0 22px; background: var(--paper); border-bottom: 1px solid var(--line); }
+      .topbar { position: sticky; top: 0; z-index: 100; display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 56px; padding: 0 22px; background: color-mix(in srgb, var(--paper) 86%, transparent); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border-bottom: 1px solid var(--line); }
       .brand { display: inline-flex; align-items: baseline; gap: 1px; color: var(--ink); font-weight: 800; font-size: 16px; letter-spacing: -.03em; white-space: nowrap; }
       .brand em { color: var(--heat-100); font-style: normal; }
       .brand small { margin-left: 9px; color: var(--muted); font-size: 11px; font-weight: 500; letter-spacing: 0; }
@@ -67,14 +70,15 @@ export function renderWebApp(): string {
       .side-nav { display: grid; gap: 2px; }
       .side-nav button { display: flex; align-items: center; gap: 11px; width: 100%; min-height: 40px; padding: 0 12px; border: 0; border-radius: var(--btn-radius); background: transparent; color: var(--ink); font-size: 13.5px; font-weight: 500; text-align: left; transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease); }
       .side-nav button:hover { background: var(--alpha-4); }
-      .side-nav button[aria-current="page"] { background: var(--alpha-6); font-weight: 600; }
+      .side-nav button[aria-current="page"] { background: var(--heat-8); box-shadow: inset 0 0 0 1px var(--heat-20); font-weight: 600; }
       .side-nav svg { width: 16px; height: 16px; flex: none; color: var(--muted); }
       .side-nav button[aria-current="page"] svg { color: var(--heat-100); }
+      .nav-count { margin-left: auto; padding: 1px 7px; border: 1px solid var(--line); border-radius: 999px; color: var(--faint); font-family: var(--font-mono); font-size: 10px; line-height: 1.5; font-variant-numeric: tabular-nums; white-space: nowrap; }
       .side-foot { margin-top: auto; padding-top: 14px; border-top: 1px solid var(--line-faint); color: var(--faint); font-size: 11px; line-height: 1.6; }
       .tabbar { display: none; position: fixed; left: 0; right: 0; bottom: 0; z-index: 90; grid-template-columns: repeat(5, 1fr); gap: 2px; min-height: 56px; padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px)); background: var(--paper); border-top: 1px solid var(--line); box-shadow: var(--shadow-lg); }
       .tabbar button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; min-height: 44px; padding: 0 2px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--muted); font-size: 10.5px; font-weight: 500; white-space: nowrap; }
       .tabbar svg { width: 20px; height: 20px; }
-      .tabbar button[aria-current="page"] { color: var(--heat-100); background: var(--heat-8); font-weight: 600; }
+      .tabbar button[aria-current="page"] { color: var(--heat-100); background: var(--heat-8); box-shadow: inset 0 0 0 1px var(--heat-20); font-weight: 600; }
       .main { min-width: 0; max-width: 1160px; width: 100%; margin: 0 auto; padding: var(--space-5) var(--space-5) 64px; }
       .page[hidden] { display: none; }
       .page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-5); flex-wrap: wrap; }
@@ -84,11 +88,13 @@ export function renderWebApp(): string {
       .stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-3); margin-bottom: 20px; }
       .stat-split { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--paper); }
       .stat-top { display: flex; align-items: center; gap: 8px; padding: 8px 14px; background: var(--bg); border-bottom: 1px solid var(--line-faint); color: var(--muted); font-size: 11.5px; font-weight: 600; }
-      .stat-split b { display: block; padding: 12px 14px 14px; font-size: 24px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .stat-top code { margin-left: auto; color: var(--faint); font-family: var(--font-mono); font-size: 9.5px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; }
+      .stat-split b { display: block; padding: 12px 14px 14px; font-size: 24px; font-weight: 700; letter-spacing: -.02em; font-family: var(--font-mono); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .stat-split b[data-state="running"] { color: var(--heat-100); }
       .stat-split b[data-state="error"] { color: var(--error); }
       .grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(300px, .9fr); gap: var(--space-5); align-items: start; }
-      .card { border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); padding: clamp(20px, 3vw, 28px); box-shadow: var(--shadow-sm); }
+      .card { border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper); padding: clamp(20px, 3vw, 28px); box-shadow: var(--shadow-sm); transition: border-color var(--dur-fast) var(--ease); }
+      .card:hover { border-color: var(--line-strong); }
       .stack { display: grid; gap: var(--space-5); }
       .announce { display: inline-flex; align-items: center; gap: 10px; margin-bottom: 16px; padding: 5px 13px 5px 6px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); font-size: 12px; box-shadow: var(--shadow-sm); }
       .announce b { padding: 2px 9px; border-radius: 999px; background: var(--heat-12); color: var(--heat-100); font-size: 11px; font-weight: 600; letter-spacing: .02em; }
@@ -145,7 +151,7 @@ export function renderWebApp(): string {
       .event:last-child { border-bottom: 0; }
       .event::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--heat-100); opacity: .75; align-self: center; }
       .event span { color: var(--ink); line-height: 1.5; overflow: hidden; text-overflow: ellipsis; }
-      .event time { color: var(--faint); font-size: 10.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+      .event time { color: var(--faint); font-family: var(--font-mono); font-size: 10.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
       .empty { color: var(--muted); font-size: 12.5px; }
       .panel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
       .panel-head h3 { margin: 0; font-size: 15px; }
@@ -164,7 +170,8 @@ export function renderWebApp(): string {
       .s-in-progress { background: var(--heat-100); animation: blink 1.6s infinite; }
       .s-pending { background: var(--line); }
       .s-rewrite { background: var(--error); }
-      .trow small { margin-left: auto; color: var(--faint); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+      .trow small { margin-left: auto; color: var(--faint); font-family: var(--font-mono); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+      .mono-chip { padding: 1px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--muted); font-family: var(--font-mono); font-size: 10.5px; white-space: nowrap; }
       .chapter-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
       .chapter-head h2 { font-size: 21px; }
       .meta { color: var(--muted); font-size: 12px; }
@@ -190,6 +197,7 @@ export function renderWebApp(): string {
         .side-label { margin: var(--space-3) 0 2px; padding: 0; border: 0; text-align: center; font-size: 10px; letter-spacing: .02em; text-overflow: ellipsis; overflow: hidden; }
         .side-nav { gap: var(--space-1); }
         .side-nav button { justify-content: center; gap: 0; min-height: 44px; padding: 0; border-radius: var(--radius-sm); }
+        .side-nav .nv-t, .side-nav .nav-count { display: none; }
         .side-nav svg { width: 18px; height: 18px; }
         .side-foot { display: none; }
         .stat-row { grid-template-columns: repeat(2, 1fr); }
@@ -241,17 +249,17 @@ export function renderWebApp(): string {
       <aside class="side" aria-label="主导航">
         <div class="side-label">工作区</div>
         <nav class="side-nav">
-          <button type="button" data-view="overview" title="创作概览" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><rect x="13" y="13" width="7" height="7" rx="2"/></svg>创作概览</button>
+          <button type="button" data-view="overview" title="创作概览" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><rect x="13" y="13" width="7" height="7" rx="2"/></svg><span class="nv-t">创作概览</span></button>
         </nav>
         <div class="side-label">内容</div>
         <nav class="side-nav">
-          <button type="button" data-view="reader" title="章节与大纲"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6.2C10.4 4.5 8 4 4 4v13.5c4 0 6.4.5 8 2.3 1.6-1.8 4-2.3 8-2.3V4c-4 0-6.4.5-8 2.2z"/><path d="M12 6.2v13.6"/></svg>章节与大纲</button>
-          <button type="button" data-view="entities" title="人物图谱"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="12" cy="18" r="3"/><line x1="8.5" y1="7.5" x2="15.5" y2="7.5"/><line x1="7.5" y1="8.5" x2="10.5" y2="15.5"/><line x1="16.5" y1="8.5" x2="13.5" y2="15.5"/></svg>人物图谱</button>
-          <button type="button" data-view="records" title="运行记录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h9"/></svg>运行记录</button>
+          <button type="button" data-view="reader" title="章节与大纲"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6.2C10.4 4.5 8 4 4 4v13.5c4 0 6.4.5 8 2.3 1.6-1.8 4-2.3 8-2.3V4c-4 0-6.4.5-8 2.2z"/><path d="M12 6.2v13.6"/></svg><span class="nv-t">章节与大纲</span><span class="nav-count" id="nav-count-chapters" hidden></span></button>
+          <button type="button" data-view="entities" title="人物图谱"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="12" cy="18" r="3"/><line x1="8.5" y1="7.5" x2="15.5" y2="7.5"/><line x1="7.5" y1="8.5" x2="10.5" y2="15.5"/><line x1="16.5" y1="8.5" x2="13.5" y2="15.5"/></svg><span class="nv-t">人物图谱</span><span class="nav-count" id="nav-count-entities" hidden></span></button>
+          <button type="button" data-view="records" title="运行记录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h9"/></svg><span class="nv-t">运行记录</span></button>
         </nav>
         <div class="side-label">管理</div>
         <nav class="side-nav">
-          <button type="button" data-view="settings" title="配置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 8h9M17.5 8H20M4 16h3M11.5 16H20"/><circle cx="15" cy="8" r="2.4"/><circle cx="9" cy="16" r="2.4"/></svg>配置</button>
+          <button type="button" data-view="settings" title="配置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 8h9M17.5 8H20M4 16h3M11.5 16H20"/><circle cx="15" cy="8" r="2.4"/><circle cx="9" cy="16" r="2.4"/></svg><span class="nv-t">配置</span></button>
         </nav>
         <div class="side-foot">Local runtime<br />作品、配置与运行记录均保存在本机。</div>
       </aside>
@@ -262,15 +270,15 @@ export function renderWebApp(): string {
             <div class="head-actions" id="runtime-actions" hidden><button id="resume" class="btn btn-tonal" type="button">恢复上一轮</button><button id="new-run" class="btn btn-text" type="button">新建 brief</button></div>
           </div>
           <div class="stat-row">
-            <div class="stat-split"><div class="stat-top">引擎</div><b id="state">setup</b></div>
-            <div class="stat-split"><div class="stat-top">模型</div><b id="model">—</b></div>
-            <div class="stat-split"><div class="stat-top">输入 tokens</div><b id="input">0</b></div>
-            <div class="stat-split"><div class="stat-top">输出 tokens</div><b id="output">0</b></div>
+            <div class="stat-split"><div class="stat-top">引擎<code>engine</code></div><b id="state">setup</b></div>
+            <div class="stat-split"><div class="stat-top">模型<code>model</code></div><b id="model">—</b></div>
+            <div class="stat-split"><div class="stat-top">输入 tokens<code>prompt</code></div><b id="input">0</b></div>
+            <div class="stat-split"><div class="stat-top">输出 tokens<code>output</code></div><b id="output">0</b></div>
           </div>
           <div class="grid">
             <section class="stack">
               <div class="card hero">
-                <div class="announce"><b>Local</b><span>作品、配置与运行记录均保存在本机</span></div>
+                <div class="announce"><b>Local</b><span>作品、配置与运行记录均保存在本机</span><span class="mono-chip">草稿自动归档</span></div>
                 <h2>把想法变成一条可继续的故事线。</h2>
                 <p class="intro">Architect 负责结构，Writer 负责正文，Editor 负责校准。你只需要提供方向。</p>
                 <section id="composer" aria-label="创作 brief">
@@ -550,7 +558,7 @@ export function renderWebApp(): string {
       document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => showView(button.dataset.view)));
       function flatten(book) { const rows = []; for (const volume of book.volumes) for (const arc of volume.arcs) for (const chapter of arc.chapters) rows.push(chapter); return rows; }
       function rowPill(label, count, tone) { const pill = document.createElement('span'); pill.className = 'pill ' + tone; pill.textContent = count + ' ' + label; return pill; }
-      async function loadBookSummary() { const box = $('book-rows'); try { const data = await (await fetch('/api/book')).json(); if (!data.configured || !data.book) { box.replaceChildren(); const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '尚未配置模型，先连接引擎。'; box.append(empty); $('book-phase').textContent = '—'; return; } const book = data.book; const rows = flatten(book); const done = rows.filter((row) => row.status === 'completed').length; const rewrite = rows.filter((row) => row.status === 'rewrite').length; const pending = rows.length - done - rewrite; box.replaceChildren(); const rowA = document.createElement('div'); rowA.className = 'rowline'; const labelA = document.createElement('span'); labelA.textContent = '章节进度'; const pills = document.createElement('div'); pills.className = 'pills'; pills.append(rowPill('已完成', done, 'ok'), rowPill('待写', pending, 'muted')); if (rewrite) pills.append(rowPill('待重写', rewrite, 'bad')); rowA.append(labelA, pills); const rowB = document.createElement('div'); rowB.className = 'rowline'; const labelB = document.createElement('span'); labelB.textContent = '全书字数'; const valueB = document.createElement('span'); valueB.style.fontWeight = '700'; valueB.style.fontSize = '15px'; valueB.textContent = formatNumber(book.totalWordCount); rowB.append(labelB, valueB); const rowC = document.createElement('div'); rowC.className = 'rowline'; const labelC = document.createElement('span'); labelC.textContent = '阅读前台'; const link = document.createElement('a'); link.href = '/read'; link.className = 'btn btn-text'; link.style.minHeight = '32px'; link.textContent = '打开 /read'; rowC.append(labelC, link); box.append(rowA, rowB, rowC); $('book-phase').textContent = phaseLabels[book.phase] || book.phase; } catch { /* 保持现有内容 */ } }
+      async function loadBookSummary() { const box = $('book-rows'); try { const data = await (await fetch('/api/book')).json(); if (!data.configured || !data.book) { box.replaceChildren(); const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '尚未配置模型，先连接引擎。'; box.append(empty); $('book-phase').textContent = '—'; return; } const book = data.book; const rows = flatten(book); const done = rows.filter((row) => row.status === 'completed').length; const rewrite = rows.filter((row) => row.status === 'rewrite').length; const pending = rows.length - done - rewrite; box.replaceChildren(); const rowA = document.createElement('div'); rowA.className = 'rowline'; const labelA = document.createElement('span'); labelA.textContent = '章节进度'; const pills = document.createElement('div'); pills.className = 'pills'; pills.append(rowPill('已完成', done, 'ok'), rowPill('待写', pending, 'muted')); if (rewrite) pills.append(rowPill('待重写', rewrite, 'bad')); rowA.append(labelA, pills); const rowB = document.createElement('div'); rowB.className = 'rowline'; const labelB = document.createElement('span'); labelB.textContent = '全书字数'; const valueB = document.createElement('span'); valueB.style.fontWeight = '700'; valueB.style.fontSize = '15px'; valueB.textContent = formatNumber(book.totalWordCount); rowB.append(labelB, valueB); const rowC = document.createElement('div'); rowC.className = 'rowline'; const labelC = document.createElement('span'); labelC.textContent = '阅读前台'; const link = document.createElement('a'); link.href = '/read'; link.className = 'btn btn-text'; link.style.minHeight = '32px'; link.textContent = '打开 /read'; rowC.append(labelC, link); box.append(rowA, rowB, rowC); $('book-phase').textContent = phaseLabels[book.phase] || book.phase; const navChapters = $('nav-count-chapters'); if (navChapters) { navChapters.textContent = rows.length + '章'; navChapters.hidden = rows.length === 0; } } catch { /* 保持现有内容 */ } }
       function treeEmpty(message) { $('outline-tree').replaceChildren(); const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = message; $('outline-tree').append(empty); $('book-progress').textContent = '—'; }
       async function loadBook() { try { const data = await (await fetch('/api/book')).json(); if (!data.configured || !data.book) { $('book-title').textContent = '大纲'; treeEmpty('尚未配置模型，先在概览页连接引擎。'); return; } const book = data.book; $('book-title').textContent = book.novelName || '大纲'; $('book-progress').textContent = book.completedChapters.length + '/' + (book.totalChapters || flatten(book).length) + ' 章'; const tree = $('outline-tree'); tree.replaceChildren(); const rows = flatten(book); if (!rows.length) { treeEmpty('尚未开始创作，提交 brief 后这里会长出大纲。'); return; } for (const volume of book.volumes) { const vol = document.createElement('div'); vol.className = 'vol'; vol.textContent = '第 ' + volume.index + ' 卷 · ' + (volume.title || '未命名'); tree.append(vol); for (const arc of volume.arcs) { const arcLabel = document.createElement('div'); arcLabel.className = 'arc'; arcLabel.textContent = ' ' + (arc.title || '弧') + (arc.goal ? ' — ' + arc.goal : ''); tree.append(arcLabel); for (const chapter of arc.chapters) { const row = document.createElement('button'); row.type = 'button'; row.className = 'trow'; row.dataset.chapter = String(chapter.chapter); row.setAttribute('role', 'treeitem'); const dot = document.createElement('i'); dot.className = 'dot s-' + chapter.status; dot.setAttribute('aria-hidden', 'true'); const label = document.createElement('span'); label.textContent = chapter.chapter + '. ' + chapter.title; const words = document.createElement('small'); words.textContent = chapter.wordCount ? formatNumber(chapter.wordCount) + ' 字' : ''; row.append(dot, label, words); row.addEventListener('click', () => selectChapter(chapter.chapter)); tree.append(row); } } } const target = rows.find((row) => row.status === 'in-progress') || [...rows].reverse().find((row) => row.status === 'completed') || rows[0]; if (target) selectChapter(target.chapter); } catch { treeEmpty('加载大纲失败，请稍后重试。'); } }
       let currentChapter = 0;
@@ -903,6 +911,8 @@ export function renderWebApp(): string {
           relList.replaceChildren();
           const items = res.entities || [];
           $('entities-count').textContent = items.length + ' 位';
+          const navEntities = $('nav-count-entities');
+          if (navEntities) { navEntities.textContent = items.length + '实体'; navEntities.hidden = items.length === 0; }
           if (!items.length) {
             const empty1 = document.createElement('div'); empty1.className = 'empty'; empty1.textContent = '暂无实体记录。可点击上方按钮添加。'; list.append(empty1);
             const empty2 = document.createElement('div'); empty2.className = 'empty'; empty2.textContent = '暂无关系连线。'; relList.append(empty2);
