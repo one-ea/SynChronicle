@@ -24,7 +24,11 @@
     "start:web": "node dist/cli/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.worker.json",
+    "typecheck:node": "tsc --noEmit",
+    "typecheck:worker": "tsc --noEmit -p tsconfig.worker.json",
+    "worker:dev": "wrangler dev",
+    "worker:deploy": "wrangler deploy"
   },
   "keywords": [
     "ai",
@@ -56,6 +60,7 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250914.0",
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.23.1",
@@ -64,7 +69,8 @@
     "ink-testing-library": "^4.0.0",
     "tsup": "^8.5.0",
     "typescript": "^5.8.3",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "wrangler": "^4.42.0"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

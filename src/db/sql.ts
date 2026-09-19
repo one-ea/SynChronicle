@@ -1,21 +1,16 @@
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
+import type { DatabaseUrl, SqlDatabase } from "./sql-core.js";
 
 /**
- * P10 平台数据层：跨方言 SQL 适配。
+ * P10 平台数据层：跨方言 SQL 适配（Node 侧驱动）。
  * sqlite（默认，better-sqlite3）/ postgres（pg）/ mysql（mysql2）。
  * 占位符统一写 `?`，pg 方言自动转换为 `$n`。
+ * 类型与 ensureSchema 在 sql-core.ts（无 Node 依赖，Worker 复用）。
  */
 
-export interface SqlDatabase {
-  readonly dialect: "sqlite" | "postgres" | "mysql";
-  run(sql: string, params?: unknown[]): Promise<void>;
-  get<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<T | null>;
-  all<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<T[]>;
-  close(): Promise<void>;
-}
-
-export interface DatabaseUrl { dialect: "sqlite" | "postgres" | "mysql"; target: string; }
+export type { DatabaseUrl, SqlDatabase };
+export { ensureSchema } from "./sql-core.js";
 
 export function parseDatabaseUrl(url: string): DatabaseUrl {
   if (url.startsWith("sqlite:")) return { dialect: "sqlite", target: url.slice("sqlite:".length) };
@@ -72,21 +67,4 @@ async function openMysql(target: string): Promise<SqlDatabase> {
 function toPg(sql: string): string {
   let index = 0;
   return sql.replace(/\?/g, () => `$${++index}`);
-}
-
-/** 幂等建表（三方言可移植 DDL）。 */
-export async function ensureSchema(db: SqlDatabase): Promise<void> {
-  const text = db.dialect === "mysql" ? "LONGTEXT" : "TEXT";
-  const real = db.dialect === "sqlite" ? "REAL" : "DOUBLE PRECISION";
-  const nameType = db.dialect === "mysql" ? "VARCHAR(64)" : "TEXT";
-  await db.run(`CREATE TABLE IF NOT EXISTS kv_files (path ${nameType} PRIMARY KEY, content ${text} NOT NULL, updated_at ${nameType} NOT NULL)`);
-  await db.run(`CREATE TABLE IF NOT EXISTS users (id ${nameType} PRIMARY KEY, name ${nameType} NOT NULL UNIQUE, password_salt ${nameType} NOT NULL, password_hash ${nameType} NOT NULL, role ${nameType} NOT NULL, status ${nameType} NOT NULL, quota_usd_remaining ${real} NOT NULL DEFAULT 0, quota_usd_used ${real} NOT NULL DEFAULT 0, created_at ${nameType} NOT NULL, updated_at ${nameType} NOT NULL)`);
-  await db.run(`CREATE TABLE IF NOT EXISTS invite_codes (code ${nameType} PRIMARY KEY, granted_usd ${real} NOT NULL, issued_by ${nameType} NOT NULL, used_by ${nameType}, used_at ${nameType}, expires_at ${nameType})`);
-  await db.run(`CREATE TABLE IF NOT EXISTS recharge_codes (code ${nameType} PRIMARY KEY, amount_usd ${real} NOT NULL, issued_by ${nameType} NOT NULL, used_by ${nameType}, used_at ${nameType})`);
-  await db.run(`CREATE TABLE IF NOT EXISTS channels (id ${nameType} PRIMARY KEY, owner_id ${nameType}, name ${nameType} NOT NULL, provider ${nameType} NOT NULL, base_url ${nameType} NOT NULL, api_key_ct ${text} NOT NULL, api_key_iv ${nameType} NOT NULL, api_key_tag ${nameType} NOT NULL, models ${text} NOT NULL, weight ${real} NOT NULL DEFAULT 1, status ${nameType} NOT NULL, created_at ${nameType} NOT NULL)`);
-  await db.run(`CREATE TABLE IF NOT EXISTS channel_grants (channel_id ${nameType} NOT NULL, user_id ${nameType} NOT NULL, granted_at ${nameType} NOT NULL, PRIMARY KEY (channel_id, user_id))`);
-  const ledgerId = db.dialect === "sqlite" ? "id INTEGER PRIMARY KEY AUTOINCREMENT" : db.dialect === "postgres" ? "id BIGSERIAL PRIMARY KEY" : "id BIGINT PRIMARY KEY AUTO_INCREMENT";
-  await db.run(`CREATE TABLE IF NOT EXISTS usage_ledger (${ledgerId}, user_id ${nameType} NOT NULL, book_id ${nameType}, agent ${nameType} NOT NULL, tokens_in ${real} NOT NULL DEFAULT 0, tokens_out ${real} NOT NULL DEFAULT 0, cost_usd ${real} NOT NULL DEFAULT 0, created_at ${nameType} NOT NULL)`);
-  await db.run(`CREATE TABLE IF NOT EXISTS audit_logs (${ledgerId}, actor_id ${nameType} NOT NULL, action ${nameType} NOT NULL, target ${nameType} NOT NULL, detail ${text}, created_at ${nameType} NOT NULL)`);
-  await db.run(`CREATE TABLE IF NOT EXISTS reports (${ledgerId}, entry_id ${nameType} NOT NULL, note ${text}, status ${nameType} NOT NULL DEFAULT 'open', handled_by ${nameType}, created_at ${nameType} NOT NULL)`);
 }

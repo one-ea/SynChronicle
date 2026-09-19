@@ -1,0 +1,21 @@
+name = "synchronicle"
+main = "worker/index.ts"
+compatibility_date = "2025-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+# D1：用户/渠道/额度/审计/举报 + kv_files 书稿内容表
+[[d1_databases]]
+binding = "DB"
+database_name = "synchronicle"
+database_id = "REPLACE_WITH_D1_ID"
+migrations_dir = "migrations"
+
+# KV：可选缓存命名空间（当前切片未强制使用）
+# [[kv_namespaces]]
+# binding = "CONTENT"
+# id = "REPLACE_WITH_KV_ID"
+
+[vars]
+# MODE = "commercial"
+
+# 机密：wrangler secret put MASTER_KEY  # openssl rand -hex 32

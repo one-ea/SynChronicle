@@ -1,0 +1,533 @@
+/**
+ * SynChronicle Cloudflare Worker 入口（P11-C1 切片）。
+ * 覆盖：health / shell / D1 schema 初始化 / 书城 shelf / 注册登录（商用邀请码 + 自用 setup）/
+ * 渠道管理与授权 / 模型清单 / 额度与兑换 / 举报与处置 / D1 版发布（含商用安全闸）。
+ * AI 生成运行时（Host/Agent）仍在 Node 主线；本切片提供门户与平台管理面。
+ */
+
+import { z } from "zod";
+import { ensureSchema } from "../src/db/sql-core.js";
+import type { SqlDatabase } from "../src/db/sql-core.js";
+import { ChannelsDao, QuotaDao, AuditDao, ReportsDao, type ChannelRow } from "../src/platform/dao.js";
+import { UsersDao } from "../src/db/users.js";
+import { PublishedEntrySchema, titleHue } from "../src/domain/publish.js";
+import { scanSafety } from "../src/diag/safety.js";
+import { D1KvStore, type Env } from "./types.js";
+import { WorkerCrypto, issueToken, verifyToken, maskKey } from "./crypto.js";
+
+export { D1KvStore } from "./types.js";
+
+interface Ctx {
+  env: Env;
+  kv: D1KvStore;
+  db: SqlDb;
+  mode: "selfhost" | "commercial";
+  users: UsersDao;
+  channels: ChannelsDao;
+  quota: QuotaDao;
+  audit: AuditDao;
+  reports: ReportsDao;
+  crypto: WorkerCrypto;
+  authSecret: Promise<string>;
+  user?: { id: string; name: string; role: "admin" | "writer" };
+}
+
+type SqlDb = SqlDatabase;
+
+/** D1 适配 SqlDatabase 接口：占位符 ?n 语法、batch 关闭为空操作。 */
+function d1Adapter(db: D1Database): SqlDb {
+  return {
+    dialect: "sqlite" as const,
+    run: async (sql, params = []) => { await db.prepare(sql).bind(...params).run(); },
+    get: async <T>(sql: string, params: unknown[] = []) => { const { results } = await db.prepare(sql).bind(...params).all<T>(); return results[0] ?? null; },
+    all: async <T>(sql: string, params: unknown[] = []) => { const { results } = await db.prepare(sql).bind(...params).all<T>(); return results; },
+    close: async () => {},
+  };
+}
+
+let schemaReady: Promise<void> | null = null;
+function ensureReady(db: D1Database): Promise<void> {
+  schemaReady ??= ensureSchema(d1Adapter(db));
+  return schemaReady;
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    try {
+      await ensureReady(env.DB);
+      const db = d1Adapter(env.DB);
+      const mode = env.MODE === "commercial" ? "commercial" : "selfhost";
+      const ctx: Ctx = {
+        env, kv: new D1KvStore(env.DB), db, mode,
+        users: new UsersDao(db),
+        channels: new ChannelsDao(db),
+        quota: new QuotaDao(db),
+        audit: new AuditDao(db),
+        reports: new ReportsDao(db),
+        crypto: WorkerCrypto.fromHex(env.MASTER_KEY ?? ""),
+        authSecret: authSecret(env),
+      };
+      return await route(request, ctx);
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : String(error) }, 500);
+    }
+  },
+};
+
+let cachedSecret: string | null = null;
+async function authSecret(env: Env): Promise<string> {
+  if (cachedSecret) return cachedSecret;
+  if (env.AUTH_SECRET) { cachedSecret = env.AUTH_SECRET; return cachedSecret; }
+  const kv = new D1KvStore(env.DB);
+  const existing = (await kv.get("platform/.auth_secret")) ?? "";
+  if (existing) { cachedSecret = existing; return existing; }
+  const generated = [...crypto.getRandomValues(new Uint8Array(32))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  await kv.set("platform/.auth_secret", generated);
+  cachedSecret = generated;
+  return generated;
+}
+
+function json(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
+  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...headers } });
+}
+
+function fail(message: string, status: number): Response { return json({ error: message }, status); }
+
+async function readBody(request: Request): Promise<Record<string, unknown>> {
+  const raw = await request.text();
+  if (raw.length > 1_000_000) throw new Error("请求体过大");
+  const parsed: unknown = JSON.parse(raw || "{}");
+  return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
+}
+
+function text(value: unknown, name: string): string { const out = typeof value === "string" ? value.trim() : ""; if (!out) throw new Error(`${name} 不能为空`); return out; }
+function optional(value: unknown): string { return typeof value === "string" ? value.trim() : ""; }
+
+function parseCookie(header: string | null): string | null {
+  for (const part of (header ?? "").split(";")) {
+    const separator = part.indexOf("=");
+    if (separator < 0) continue;
+    if (part.slice(0, separator).trim() === "sc_token") return part.slice(separator + 1).trim();
+  }
+  return null;
+}
+
+async function authed(ctx: Ctx, request: Request): Promise<Response | null> {
+  const token = parseCookie(request.headers.get("cookie"));
+  if (!token) return fail("未登录", 401);
+  const payload = await verifyToken(token, await ctx.authSecret);
+  if (!payload) return fail("登录已过期", 401);
+  const row = await ctx.users.byId(payload.uid);
+  if (!row || row.status === "disabled") return fail("账号不可用", 401);
+  ctx.user = { id: row.id, name: row.name, role: row.role === "admin" ? "admin" : "writer" };
+  return null;
+}
+
+async function route(request: Request, ctx: Ctx): Promise<Response> {
+  const url = new URL(request.url);
+  const path = url.pathname;
+  const method = request.method;
+
+  if (method === "GET" && path === "/api/health") return json({ ok: true });
+  if (method === "GET" && path === "/api/shell") return json({ mode: ctx.mode, runtime: "worker", storage: "d1", features: { register: ctx.mode === "commercial", billing: ctx.mode === "commercial" } });
+
+  // 匿名书城
+  if (method === "GET" && path === "/api/shelf") return shelfList(ctx);
+  if (method === "GET" && /^\/api\/shelf\/[^/]+$/.test(path)) return shelfBook(ctx, decodeURIComponent(path.split("/")[3] ?? ""));
+  if (method === "GET" && /^\/api\/shelf\/[^/]+\/chapters\/\d+$/.test(path)) return shelfChapter(ctx, decodeURIComponent(path.split("/")[3] ?? ""), Number(path.split("/")[5]));
+
+  // 匿名举报
+  if (method === "POST" && path === "/api/reports") {
+    const body = await readBody(request);
+    await ctx.reports.create(text(body.entryId, "entryId"), optional(body.note));
+    return json({ reported: true }, 201);
+  }
+
+  // 认证入口（setup/register/login 无需会话）
+  if (method === "POST" && path === "/api/auth/setup") return authSetup(request, ctx);
+  if (method === "POST" && path === "/api/auth/register") return authRegister(request, ctx);
+  if (method === "POST" && path === "/api/auth/login") return authLogin(request, ctx);
+
+  // 以下全部需要会话
+  const guard = await authed(ctx, request);
+  if (guard) return guard;
+  if (method !== "GET" && request.headers.get("x-requested-with") !== "fetch") return fail("请求缺少安全标识", 403);
+
+  if (method === "GET" && path === "/api/auth/me") return json({ user: ctx.user ?? null });
+  if (method === "POST" && path === "/api/auth/logout") return json({ ok: true }, 200, { "set-cookie": "sc_token=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0" });
+
+  if (path === "/api/admin/invite-codes") {
+    if (method === "GET") return inviteList(ctx);
+    if (method === "POST") return inviteCreate(request, ctx);
+  }
+  if (path === "/api/admin/recharge-codes") {
+    if (method === "GET") { if (ctx.user?.role !== "admin") return fail("需要管理员权限", 403); return json({ codes: await ctx.quota.listRechargeCodes() }); }
+    if (method === "POST") return rechargeCreate(request, ctx);
+  }
+  if (method === "GET" && path === "/api/admin/reports") return reportList(ctx, url.searchParams.get("status") ?? undefined);
+  if (method === "POST" && /^\/api\/admin\/reports\/\d+\/handle$/.test(path)) return reportHandle(request, ctx, Number(path.split("/")[4]));
+
+  if (path === "/api/channels") {
+    if (method === "GET") return channelsList(ctx);
+    if (method === "POST") return channelCreate(request, ctx);
+  }
+  if (/^\/api\/channels\/[^/]+$/.test(path) && method === "DELETE") return channelDelete(ctx, decodeURIComponent(path.split("/")[3] ?? ""));
+  if (/^\/api\/channels\/[^/]+\/(grant|revoke)$/.test(path) && method === "POST") return channelGrant(request, ctx, decodeURIComponent(path.split("/")[3] ?? ""), path.endsWith("/grant"));
+
+  if (method === "GET" && path === "/api/models") return modelsList(ctx);
+  if (method === "GET" && path === "/api/quota") return quotaGet(ctx);
+  if (method === "POST" && path === "/api/quota/redeem") return quotaRedeem(request, ctx);
+
+  if (method === "GET" && path === "/api/publish") return publishList(ctx);
+  if (method === "POST" && path === "/api/publish") return publish(request, ctx);
+  if (method === "POST" && path === "/api/unpublish") return unpublish(request, ctx);
+
+  return fail("接口不存在（Worker 切片当前覆盖平台面；AI 生成请使用 Node 主线）", 404);
+}
+
+/** ---------- 书城（published.json 存于 kv: platform/published.json） ---------- */
+
+interface ShelfFile { entries: unknown[]; updatedAt: string }
+
+async function loadShelf(ctx: Ctx): Promise<ShelfFile> {
+  const raw = await ctx.kv.get("platform/published.json");
+  if (!raw) return { entries: [], updatedAt: new Date().toISOString() };
+  try { const parsed = JSON.parse(raw) as ShelfFile; return { entries: Array.isArray(parsed.entries) ? parsed.entries : [], updatedAt: parsed.updatedAt ?? new Date().toISOString() }; } catch { return { entries: [], updatedAt: new Date().toISOString() }; }
+}
+
+async function saveShelf(ctx: Ctx, file: ShelfFile): Promise<void> { await ctx.kv.set("platform/published.json", JSON.stringify(file, null, 2)); }
+
+async function shelfList(ctx: Ctx): Promise<Response> {
+  const file = await loadShelf(ctx);
+  const entries = (file.entries as Array<Record<string, unknown>>).filter((item) => item.visibility === "public").sort((a, b) => String(b.publishedAt ?? "").localeCompare(String(a.publishedAt ?? "")));
+  return json({ entries });
+}
+
+async function shelfBook(ctx: Ctx, id: string): Promise<Response> {
+  const file = await loadShelf(ctx);
+  const entry = (file.entries as Array<Record<string, unknown>>).find((item) => item.id === id && item.visibility !== "private");
+  if (!entry) return fail("书籍不存在", 404);
+  const chapters: Array<Record<string, unknown>> = [];
+  const progressRaw = await ctx.kv.get(`books/${id}/meta/progress.json`);
+  if (progressRaw) {
+    try {
+      const progress = JSON.parse(progressRaw) as { completed_chapters?: number[]; chapter_word_counts?: Record<string, number> };
+      const completed = new Set(progress.completed_chapters ?? []);
+      const outlineRaw = await ctx.kv.get(`books/${id}/meta/outline.json`);
+      const outline = outlineRaw ? (JSON.parse(outlineRaw) as Array<{ chapter?: number; title?: string }>) : [];
+      for (const item of outline) {
+        if (typeof item.chapter === "number" && completed.has(item.chapter)) chapters.push({ chapter: item.chapter, title: item.title ?? `第 ${item.chapter} 章`, words: progress.chapter_word_counts?.[String(item.chapter)] ?? 0, status: "completed" });
+      }
+    } catch { /* 目录缺失时返回空 */ }
+  }
+  return json({ entry, chapters });
+}
+
+async function shelfChapter(ctx: Ctx, id: string, chapter: number): Promise<Response> {
+  const file = await loadShelf(ctx);
+  const entry = (file.entries as Array<Record<string, unknown>>).find((item) => item.id === id && item.visibility !== "private");
+  if (!entry) return fail("章节不存在", 404);
+  const text = await ctx.kv.get(`books/${id}/chapters/${String(chapter).padStart(2, "0")}.md`);
+  if (text === null) return fail("章节不存在", 404);
+  const progressRaw = await ctx.kv.get(`books/${id}/meta/progress.json`);
+  const completed = progressRaw ? ((JSON.parse(progressRaw) as { completed_chapters?: number[] }).completed_chapters ?? []).slice().sort((a, b) => a - b) : [];
+  const index = completed.indexOf(chapter);
+  const outlineRaw = await ctx.kv.get(`books/${id}/meta/outline.json`);
+  const outline = outlineRaw ? (JSON.parse(outlineRaw) as Array<{ chapter?: number; title?: string }>) : [];
+  return json({ title: outline.find((item) => item.chapter === chapter)?.title ?? `第 ${chapter} 章`, text, words: [...text.replace(/\s/g, "")].length, prev: completed[index - 1] ?? null, next: completed[index + 1] ?? null });
+}
+
+/** ---------- 认证 ---------- */
+
+async function authSetup(request: Request, ctx: Ctx): Promise<Response> {
+  if (ctx.mode === "commercial") return fail("商用模式通过邀请码注册", 403);
+  const body = await readBody(request);
+  const name = text(body.name, "用户名");
+  const password = text(body.password, "密码");
+  if (password.length < 8) return fail("密码至少 8 位", 400);
+  if (await ctx.users.count() > 0) return fail("管理员已初始化", 403);
+  const now = new Date().toISOString();
+  const id = crypto.randomUUID();
+  const salt = hex(crypto.getRandomValues(new Uint8Array(16)));
+  const hash = await pbkdf2Hex(password, salt);
+  await ctx.users.upsert({ id, name, password_salt: salt, password_hash: hash, role: "admin", status: "active", quota_usd_remaining: 0, quota_usd_used: 0, created_at: now, updated_at: now });
+  await ctx.audit.log(id, "auth.setup", "user:system", { name });
+  return session(ctx, id);
+}
+
+async function authRegister(request: Request, ctx: Ctx): Promise<Response> {
+  if (ctx.mode !== "commercial") return fail("自用模式注册关闭", 403);
+  const body = await readBody(request);
+  const name = text(body.name, "用户名");
+  const password = text(body.password, "密码");
+  const invite = text(body.inviteCode, "邀请码");
+  if (password.length < 8) return fail("密码至少 8 位", 400);
+  if (await ctx.users.byName(name)) return fail("用户名已存在", 409);
+  const claim = await ctx.users.claimInvite(invite, "pending", new Date().toISOString());
+  if (!claim.ok) return fail(claim.expired ? "邀请码已过期" : "邀请码无效或已使用", 400);
+  const now = new Date().toISOString();
+  const id = crypto.randomUUID();
+  const salt = hex(crypto.getRandomValues(new Uint8Array(16)));
+  const hash = await pbkdf2Hex(password, salt);
+  await ctx.users.upsert({ id, name, password_salt: salt, password_hash: hash, role: "writer", status: "active", quota_usd_remaining: claim.grantedUsd, quota_usd_used: 0, created_at: now, updated_at: now });
+  await ctx.users.claimInvite(invite, id, now);
+  await ctx.audit.log(id, "auth.register", `user:${id}`, { invite });
+  return session(ctx, id);
+}
+
+async function authLogin(request: Request, ctx: Ctx): Promise<Response> {
+  const body = await readBody(request);
+  const name = text(body.name, "用户名");
+  const row = await ctx.users.byName(name);
+  if (!row || row.status === "disabled") return fail("用户名或密码错误", 401);
+  const candidate = await pbkdf2Hex(text(body.password, "密码"), row.password_salt);
+  if (candidate !== row.password_hash) return fail("用户名或密码错误", 401);
+  await ctx.audit.log(row.id, "auth.login", `user:${row.id}`);
+  return session(ctx, row.id);
+}
+
+async function session(ctx: Ctx, uid: string): Promise<Response> {
+  const token = await issueToken(uid, await ctx.authSecret);
+  return json({ user: { id: uid } }, 200, { "set-cookie": `sc_token=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${7 * 24 * 3600}` });
+}
+
+function hex(bytes: Uint8Array): string { return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join(""); }
+
+/** PBKDF2-SHA256（100k 轮）替代 Node scrypt：Worker 无 scrypt，格式 salt$hash hex。 */
+async function pbkdf2Hex(password: string, salt: string): Promise<string> {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: new TextEncoder().encode(salt), iterations: 100_000 }, key, 512);
+  return hex(new Uint8Array(bits));
+}
+
+/** ---------- 管理面 ---------- */
+
+async function requireAdmin(ctx: Ctx): Promise<Response | null> {
+  return ctx.user?.role === "admin" ? null : fail("需要管理员权限", 403);
+}
+
+async function inviteList(ctx: Ctx): Promise<Response> {
+  const denied = await requireAdmin(ctx); if (denied) return denied;
+  return json({ codes: await ctx.users.listInvites() });
+}
+
+async function inviteCreate(request: Request, ctx: Ctx): Promise<Response> {
+  const denied = await requireAdmin(ctx); if (denied) return denied;
+  const body = await readBody(request);
+  const count = Math.min(Math.max(Number(body.count ?? 1), 1), 20);
+  const grantedUsd = Math.max(Number(body.grantedUsd ?? 0), 0);
+  const codes: string[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const code = `inv-${hex(crypto.getRandomValues(new Uint8Array(8)))}`;
+    await ctx.users.createInvite(code, grantedUsd, ctx.user!.id, null);
+    codes.push(code);
+  }
+  await ctx.audit.log(ctx.user!.id, "invite.create", `count:${count}`, { grantedUsd });
+  return json({ codes }, 201);
+}
+
+async function rechargeCreate(request: Request, ctx: Ctx): Promise<Response> {
+  const denied = await requireAdmin(ctx); if (denied) return denied;
+  const body = await readBody(request);
+  const count = Math.min(Math.max(Number(body.count ?? 1), 1), 20);
+  const amountUsd = Math.max(Number(body.amountUsd ?? 0), 0);
+  const codes: string[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const code = `rch-${hex(crypto.getRandomValues(new Uint8Array(8)))}`;
+    await ctx.quota.createRechargeCode(code, amountUsd, ctx.user!.id);
+    codes.push(code);
+  }
+  await ctx.audit.log(ctx.user!.id, "recharge.create", `count:${count}`, { amountUsd });
+  return json({ codes }, 201);
+}
+
+async function reportList(ctx: Ctx, status?: string): Promise<Response> {
+  const denied = await requireAdmin(ctx); if (denied) return denied;
+  return json({ reports: await ctx.reports.list(status) });
+}
+
+async function reportHandle(request: Request, ctx: Ctx, id: number): Promise<Response> {
+  const denied = await requireAdmin(ctx); if (denied) return denied;
+  const body = await readBody(request);
+  const action = text(body.action, "action");
+  if (action === "dismissed") {
+    if (!await ctx.reports.handle(id, ctx.user!.id, "dismissed")) return fail("举报不存在", 404);
+    await ctx.audit.log(ctx.user!.id, "report.dismiss", `report:${id}`);
+    return json({ handled: true, status: "dismissed" });
+  }
+  if (action === "takedown") {
+    const rows = await ctx.reports.list(undefined);
+    const report = rows.find((item) => item.id === id);
+    if (!report) return fail("举报不存在", 404);
+    const file = await loadShelf(ctx);
+    const before = file.entries.length;
+    file.entries = (file.entries as Array<Record<string, unknown>>).filter((item) => item.id !== report.entry_id);
+    await saveShelf(ctx, file);
+    await ctx.reports.handle(id, ctx.user!.id, "takedown");
+    await ctx.audit.log(ctx.user!.id, "report.takedown", `report:${id}`, { entry: report.entry_id, removed: before !== file.entries.length });
+    return json({ handled: true, status: "takedown" });
+  }
+  return fail(`未知 action: ${action}`, 400);
+}
+
+/** ---------- 渠道与额度 ---------- */
+
+function channelView(row: ChannelRow, models: string[]): Record<string, unknown> {
+  return { id: row.id, name: row.name, provider: row.provider, baseUrl: row.base_url, models, shared: row.owner_id === null, status: row.status, apiKeyMasked: maskKey(maskedSource(row)), createdAt: row.created_at };
+}
+
+function maskedSource(row: ChannelRow): string { return row.api_key_ct.slice(0, 12); }
+
+async function channelsList(ctx: Ctx): Promise<Response> {
+  const user = ctx.user!;
+  const own = user.role === "admin" ? await ctx.channels.listAll() : await ctx.channels.listForOwner(user.id);
+  const granted = new Set(await ctx.channels.listGrantedIds(user.id));
+  const pool = (await ctx.channels.listAdminPool()).filter((row) => granted.has(row.id));
+  const seen = new Set<string>();
+  const rows = [...own, ...pool].filter((row) => (seen.has(row.id) ? false : (seen.add(row.id), true)));
+  return json({ channels: rows.map((row) => channelView(row, safeModels(row.models))) });
+}
+
+function safeModels(raw: string): string[] { try { const parsed: unknown = JSON.parse(raw); return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : []; } catch { return []; } }
+
+async function channelCreate(request: Request, ctx: Ctx): Promise<Response> {
+  const body = await readBody(request);
+  const name = text(body.name, "名称");
+  const provider = text(body.provider, "provider");
+  const apiKey = text(body.apiKey, "apiKey");
+  const models = Array.isArray(body.models) ? body.models.filter((item): item is string => typeof item === "string") : [];
+  const shared = body.shared === true;
+  if (shared && ctx.user!.role !== "admin") return fail("仅管理员可创建共享渠道", 403);
+  const secret = await ctx.crypto.encrypt(apiKey);
+  const row: ChannelRow = {
+    id: crypto.randomUUID(), owner_id: shared ? null : ctx.user!.id, name, provider,
+    base_url: optional(body.baseUrl) || "https://api.openai.com/v1",
+    api_key_ct: secret.ct, api_key_iv: secret.iv, api_key_tag: secret.tag,
+    models: JSON.stringify(models), weight: 1, status: "active", created_at: new Date().toISOString(),
+  };
+  await ctx.channels.create(row);
+  await ctx.audit.log(ctx.user!.id, "channel.create", `channel:${row.id}`, { provider, shared });
+  return json({ channel: channelView(row, models) }, 201);
+}
+
+async function channelDelete(ctx: Ctx, id: string): Promise<Response> {
+  const row = await ctx.channels.get(id);
+  if (!row) return fail("渠道不存在", 404);
+  if (ctx.user!.role !== "admin" && row.owner_id !== ctx.user!.id) return fail("无权删除该渠道", 403);
+  await ctx.channels.remove(id);
+  await ctx.audit.log(ctx.user!.id, "channel.delete", `channel:${id}`);
+  return json({ removed: true });
+}
+
+async function channelGrant(request: Request, ctx: Ctx, id: string, grant: boolean): Promise<Response> {
+  const denied = await requireAdmin(ctx); if (denied) return denied;
+  const body = await readBody(request);
+  const userId = text(body.userId, "userId");
+  const row = await ctx.channels.get(id);
+  if (!row) return fail("渠道不存在", 404);
+  if (grant) { await ctx.channels.grant(id, userId, new Date().toISOString()); await ctx.audit.log(ctx.user!.id, "channel.grant", `channel:${id}`, { userId }); }
+  else { await ctx.channels.revoke(id, userId); await ctx.audit.log(ctx.user!.id, "channel.revoke", `channel:${id}`, { userId }); }
+  return json({ ok: true });
+}
+
+async function modelsList(ctx: Ctx): Promise<Response> {
+  const rows = await ctx.channels.effective(ctx.user!.id);
+  const models = new Map<string, string>();
+  for (const row of rows) for (const model of safeModels(row.models)) if (!models.has(model)) models.set(model, row.id);
+  return json({ models: [...models.entries()].map(([id, channelId]) => ({ id, channelId })) });
+}
+
+async function quotaGet(ctx: Ctx): Promise<Response> {
+  return json({ ...(await ctx.quota.balance(ctx.user!.id)), ledger: await ctx.quota.ledger(ctx.user!.id, 20) });
+}
+
+async function quotaRedeem(request: Request, ctx: Ctx): Promise<Response> {
+  const body = await readBody(request);
+  const result = await ctx.quota.redeem(text(body.code, "兑换码"), ctx.user!.id, new Date().toISOString());
+  if (!result.ok) return fail("兑换码无效或已使用", 400);
+  await ctx.audit.log(ctx.user!.id, "quota.redeem", `user:${ctx.user!.id}`, { amountUsd: result.amountUsd });
+  return json({ redeemed: true, amountUsd: result.amountUsd });
+}
+
+/** ---------- 发布（D1/KV 版） ---------- */
+
+async function publishList(ctx: Ctx): Promise<Response> {
+  const books = await visibleBookIds(ctx);
+  const file = await loadShelf(ctx);
+  return json({ entries: (file.entries as Array<Record<string, unknown>>).filter((entry) => books.has(String(entry.id))) });
+}
+
+async function visibleBookIds(ctx: Ctx): Promise<Set<string>> {
+  const ids = new Set<string>();
+  const prefix = "books/";
+  for (const key of await ctx.kv.list(`${prefix}`)) {
+    const match = key.match(/^books\/([^/]+)\/meta\/progress\.json$/);
+    if (match) ids.add(match[1]!);
+  }
+  // 管理员可见全部；普通用户仅本人书籍（owner 记录在 kv books/<id>/meta/book.json）
+  if (ctx.user?.role !== "admin") {
+    const owned = new Set<string>();
+    for (const id of ids) {
+      const meta = await ctx.kv.get(`books/${id}/meta/book.json`);
+      if (meta) { try { if ((JSON.parse(meta) as { ownerId?: string }).ownerId === ctx.user!.id) owned.add(id); } catch { /* 忽略 */ } }
+    }
+    return owned;
+  }
+  return ids;
+}
+
+const PublishBody = z.object({ bookId: z.string().min(1), title: z.string().trim().min(1).max(60).optional(), synopsis: z.string().trim().max(300).optional(), tags: z.array(z.string().trim().max(12)).max(6).optional(), visibility: z.enum(["public", "unlisted", "private"]).default("public") });
+
+async function publish(request: Request, ctx: Ctx): Promise<Response> {
+  try {
+    const body = PublishBody.parse(await readBody(request));
+    const id = body.bookId;
+    if (ctx.user?.role !== "admin") {
+      const meta = await ctx.kv.get(`books/${id}/meta/book.json`);
+      const ownerId = meta ? (JSON.parse(meta) as { ownerId?: string }).ownerId : undefined;
+      if (ownerId !== ctx.user!.id) return fail("无权发布该书", 403);
+    }
+    const progressRaw = await ctx.kv.get(`books/${id}/meta/progress.json`);
+    const progress = progressRaw ? JSON.parse(progressRaw) as { completed_chapters?: number[]; total_word_count?: number; novel_name?: string } : null;
+    // 商用安全闸：逐章扫描
+    if (ctx.mode === "commercial") {
+      const findings: string[] = [];
+      for (const chapter of progress?.completed_chapters ?? []) {
+        const chapterText = await ctx.kv.get(`books/${id}/chapters/${String(chapter).padStart(2, "0")}.md`);
+        if (!chapterText) continue;
+        for (const hit of scanSafety(chapterText).hits) findings.push(`第 ${chapter} 章 ${hit.category} x${hit.count}: ${hit.samples.join("、").slice(0, 60)}`);
+      }
+      if (findings.length) return json({ error: "安全扫描未通过，存在严重命中，禁止发布", findings }, 422);
+    }
+    const file = await loadShelf(ctx);
+    const entries = file.entries as Array<Record<string, unknown>>;
+    const existing = entries.find((item) => item.id === id) as { publishedAt?: string } | undefined;
+    const now = new Date().toISOString();
+    const entry = PublishedEntrySchema.parse({
+      id, title: body.title || progress?.novel_name || id, authorName: ctx.user!.name,
+      synopsis: body.synopsis ?? "", tags: body.tags ?? [], visibility: body.visibility,
+      hue: titleHue(body.title || id), publishedAt: existing?.publishedAt ?? now, updatedAt: now, aigcLabel: true,
+      stats: { chapters: progress?.completed_chapters?.length ?? 0, words: progress?.total_word_count ?? 0 },
+    });
+    await saveShelf(ctx, { entries: [...entries.filter((item) => item.id !== id), entry], updatedAt: now });
+    await ctx.audit.log(ctx.user!.id, "publish", `book:${id}`, { visibility: body.visibility });
+    return json({ published: true, entry });
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : String(error), 400);
+  }
+}
+
+async function unpublish(request: Request, ctx: Ctx): Promise<Response> {
+  const body = await readBody(request);
+  const id = text(body.bookId, "bookId");
+  if (ctx.user?.role !== "admin") {
+    const meta = await ctx.kv.get(`books/${id}/meta/book.json`);
+    const ownerId = meta ? (JSON.parse(meta) as { ownerId?: string }).ownerId : undefined;
+    if (ownerId !== ctx.user!.id) return fail("无权下架该书", 403);
+  }
+  const file = await loadShelf(ctx);
+  const entries = file.entries as Array<Record<string, unknown>>;
+  const next = entries.filter((item) => item.id !== id);
+  await saveShelf(ctx, { entries: next, updatedAt: new Date().toISOString() });
+  return json({ unpublished: next.length !== entries.length });
+}
