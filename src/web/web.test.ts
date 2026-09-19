@@ -65,7 +65,7 @@ describe("WebUI", () => {
     expect(html).toContain('aria-label="移动端主导航"');
     const tabbarViews = ["overview", "reader", "entities", "records", "settings"];
     for (const view of tabbarViews) expect(html).toContain(`data-view="${view}" title=`);
-    expect(Buffer.byteLength(html, "utf8")).toBeLessThan(83196 + 30 * 1024);
+    expect(Buffer.byteLength(html, "utf8")).toBeLessThan(100790 + 30 * 1024);
   });
 
   it("applies stitch draft refinements to the console shell", () => {
@@ -523,6 +523,58 @@ describe("WebUI", () => {
       expect(bad.status).toBe(400);
       const list = (await (await fetch(`http://127.0.0.1:${handle.port}/api/entities`)).json()) as { entities: Array<{ name: string }> };
       expect(list.entities).toHaveLength(1);
+    } finally {
+      await handle.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("serves p5 creation workbench endpoints", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "synchronicle-web-p5-"));
+    const output = join(directory, "novel");
+    for (const dir of ["meta", "chapters"]) await mkdir(join(output, dir), { recursive: true });
+    await writeFile(join(output, "chapters", "01.md"), "沈砚推开书局的门。“这么晚还来？”他忽然想起十年前的雨夜，灯光昏黄。");
+    await writeFile(join(output, "premise.md"), "少年沈砚为查父亲失踪真相，凭一本旧账本掀开全城阴谋，逆袭翻盘，杀回旧钟楼。");
+    await writeFile(join(output, "meta", "progress.json"), JSON.stringify({ novel_name: "测试", phase: "writing", current_chapter: 2, total_chapters: 10, completed_chapters: [1], total_word_count: 30, chapter_word_counts: { "1": 30 } }));
+    const configPath = join(directory, "config.json");
+    await writeFile(configPath, JSON.stringify({ provider: "deepseek", model: "deepseek-chat", providers: { deepseek: { base_url: "https://api.deepseek.com/v1", api_key: "secret-key" } }, output_dir: output }));
+    const handle = await startWebServer({ port: 0, configPath });
+    try {
+      const root = `http://127.0.0.1:${handle.port}`;
+
+      await fetch(`${root}/api/entities`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: "shen", name: "沈砚", type: "character", aliases: ["阿砚"], description: "书局掌柜，记忆力异于常人" }) });
+
+      const materialRes = (await (await fetch(`${root}/api/materials`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ type: "line", title: "雨夜对白", content: "“这么晚还来？”" }) }).then((item) => item.json()))) as { saved: boolean; material: { id: string; title: string } };
+      expect(materialRes.saved).toBe(true);
+      const materialList = (await (await fetch(`${root}/api/materials`)).json()) as { materials: Array<{ title: string }> };
+      expect(materialList.materials).toHaveLength(1);
+      const recallAfterMaterial = (await (await fetch(`${root}/api/recall?q=` + encodeURIComponent("雨夜对白"))).json()) as { hits: Array<{ kind: string }> };
+      expect(recallAfterMaterial.hits[0]!.kind).toBe("material");
+      const deleteRes = await fetch(`${root}/api/materials/${materialRes.material.id}`, { method: "DELETE" });
+      expect(deleteRes.status).toBe(200);
+      const missingRes = await fetch(`${root}/api/materials/${materialRes.material.id}`, { method: "DELETE" });
+      expect(missingRes.status).toBe(404);
+
+      const brainstormRes = (await (await fetch(`${root}/api/brainstorm?type=sect&count=5&seed=99`)).json()) as { type: string; items: string[] };
+      expect(brainstormRes.items).toHaveLength(5);
+      const brainstormRepeat = (await (await fetch(`${root}/api/brainstorm?type=sect&count=5&seed=99`)).json()) as { items: string[] };
+      expect(brainstormRepeat.items).toEqual(brainstormRes.items);
+      const badBrainstorm = await fetch(`${root}/api/brainstorm?type=unknown`);
+      expect(badBrainstorm.status).toBe(400);
+
+      const chatRes = (await (await fetch(`${root}/api/character-chat`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ entityId: "shen", message: "钥匙在哪里？" }) }).then((item) => item.json()))) as { reply: string; prompt: string };
+      expect(chatRes.reply).toContain("沈砚");
+      expect(chatRes.prompt).toContain("角色扮演");
+      const missingChat = await fetch(`${root}/api/character-chat`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ entityId: "nobody", message: "在吗" }) });
+      expect(missingChat.status).toBe(404);
+
+      const goldenRes = (await (await fetch(`${root}/api/golden-review`)).json()) as { configured: boolean; report: { reviewed: number; averageScore: number } };
+      expect(goldenRes.configured).toBe(true);
+      expect(goldenRes.report.reviewed).toBe(1);
+
+      const editorRes = (await (await fetch(`${root}/api/editor-review`)).json()) as { configured: boolean; report: { verdict: string; risks: Array<{ check: string }> } };
+      expect(editorRes.configured).toBe(true);
+      expect(["可投稿", "修改后投稿", "建议大改"]).toContain(editorRes.report.verdict);
     } finally {
       await handle.close();
       await rm(directory, { recursive: true, force: true });

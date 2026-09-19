@@ -8,7 +8,7 @@ import type { Store } from "../store/index.js";
  * embedding 可用则向量优先，失败回落 BM25。零新增依赖。
  */
 
-export type RecallKind = "entity" | "summary" | "foreshadow";
+export type RecallKind = "entity" | "summary" | "foreshadow" | "material";
 
 export interface RecallDoc { id: number; kind: RecallKind; source: string; text: string }
 export interface RecallHit { kind: RecallKind; source: string; score: number; snippet: string }
@@ -43,6 +43,11 @@ export async function buildRecallCorpus(store: Store): Promise<RecallDoc[]> {
     if (!thread.trim()) continue;
     docs.push({ id: docs.length, kind: "foreshadow", source: thread.slice(0, 40), text: `[伏笔] ${thread}` });
     void index;
+  }
+
+  const materials = await store.materials.load();
+  for (const material of materials.materials) {
+    docs.push({ id: docs.length, kind: "material", source: material.title, text: `[素材:${material.type}] ${material.title}: ${material.content} ${material.tags.join(" ")}` });
   }
   return docs;
 }

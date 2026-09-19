@@ -16,6 +16,10 @@ import { scanSafety } from "../diag/safety.js";
 import { recall } from "../retrieval/recall.js";
 import { deconstruct } from "../runtime/deconstruct.js";
 import { charCardToEntity, parseCharacterCard } from "../domain/charcard.js";
+import { brainstorm, BRAINSTORM_TYPES, type BrainstormType } from "../runtime/brainstorm.js";
+import { characterReply, type ChatTurn } from "../domain/chatchar.js";
+import { goldenReviewFromStore } from "../diag/golden.js";
+import { editorReview } from "../diag/editorreview.js";
 import { buildRewritePlan } from "../runtime/rewrite.js";
 import { evaluateArenaCandidates } from "../runtime/arena.js";
 import type { ResolvedConfig } from "../config/schemas.js";
@@ -80,6 +84,15 @@ async function route(request: IncomingMessage, response: ServerResponse, context
   if (request.method === "POST" && url.pathname === "/api/deconstruct") return handleDeconstruct(request, response);
   if (request.method === "GET" && url.pathname === "/api/cost-preview") return handleCostPreview(response, context, url);
   if (request.method === "POST" && url.pathname === "/api/safety/scan") return handleSafetyScan(request, response, context);
+  if (url.pathname === "/api/materials") {
+    if (request.method === "GET") return handleMaterialsGet(response, context);
+    if (request.method === "POST") return handleMaterialsPost(request, response, context);
+  }
+  if (request.method === "DELETE" && /^\/api\/materials\/[^/]+$/.test(url.pathname)) return handleMaterialDelete(request, response, context, decodeURIComponent(url.pathname.split("/").pop() ?? ""));
+  if (request.method === "GET" && url.pathname === "/api/brainstorm") return handleBrainstorm(response, context, url);
+  if (request.method === "POST" && url.pathname === "/api/character-chat") return handleCharacterChat(request, response, context);
+  if (request.method === "GET" && url.pathname === "/api/golden-review") return handleGoldenReview(response, context);
+  if (request.method === "GET" && url.pathname === "/api/editor-review") return handleEditorReview(response, context);
   if (request.method === "GET" && url.pathname === "/api/stream") return handleStream(request, response, context);
   sendJson(response, 404, { error: "Not found" });
 }
@@ -406,6 +419,86 @@ async function handleSafetyScan(request: IncomingMessage, response: ServerRespon
     sendJson(response, 200, scanSafety(text, extra));
   } catch (error) {
     sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function handleMaterialsGet(response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.store) return sendJson(response, 200, { configured: false, materials: [] });
+  try {
+    const file = await context.store.materials.load();
+    sendJson(response, 200, { configured: true, ...file });
+  } catch (error) {
+    sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function handleMaterialsPost(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.store) return sendJson(response, 503, { error: "尚未配置小说工作区" });
+  try {
+    const body = await readJson(request);
+    const title = optionalText(body.title);
+    const content = optionalText(body.content);
+    if (!title || !content) return sendJson(response, 400, { error: "title 和 content 必填" });
+    const type = (optionalText(body.type) || "other") as "trope" | "setting" | "line" | "other";
+    const material = await context.store.materials.add({ type, title, content, tags: Array.isArray(body.tags) ? body.tags.map(String) : [], source: body.source === "brainstorm" ? "brainstorm" : "manual" });
+    sendJson(response, 200, { saved: true, material });
+  } catch (error) {
+    sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function handleMaterialDelete(_request: IncomingMessage, response: ServerResponse, context: RuntimeContext, id: string): Promise<void> {
+  if (!context.store) return sendJson(response, 503, { error: "尚未配置小说工作区" });
+  try {
+    const removed = await context.store.materials.remove(id);
+    if (!removed) return sendJson(response, 404, { error: `素材 ${id} 不存在` });
+    sendJson(response, 200, { removed: true, id });
+  } catch (error) {
+    sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function handleBrainstorm(response: ServerResponse, _context: RuntimeContext, url: URL): Promise<void> {
+  const type = (url.searchParams.get("type") || "sect") as BrainstormType;
+  const count = Math.min(24, Number(url.searchParams.get("count")) || 8);
+  const seedParam = Number(url.searchParams.get("seed"));
+  if (!BRAINSTORM_TYPES.includes(type)) return sendJson(response, 400, { error: `type 需为 ${BRAINSTORM_TYPES.join("/")}` });
+  const items = brainstorm(type, count, Number.isFinite(seedParam) && seedParam > 0 ? seedParam : Date.now());
+  sendJson(response, 200, { type, items });
+}
+
+async function handleCharacterChat(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.store) return sendJson(response, 503, { error: "尚未配置小说工作区" });
+  try {
+    const body = await readJson(request);
+    const entityId = optionalText(body.entityId);
+    const message = optionalText(body.message);
+    if (!entityId || !message) return sendJson(response, 400, { error: "entityId 和 message 必填" });
+    const entity = await context.store.entities.getEntity(entityId);
+    if (!entity) return sendJson(response, 404, { error: `实体 ${entityId} 不存在` });
+    const history = Array.isArray(body.history) ? (body.history as ChatTurn[]).filter((turn) => turn && typeof turn.text === "string") : [];
+    const result = characterReply(entity, message, history);
+    sendJson(response, 200, { ...result, entity: { id: entity.id, name: entity.name } });
+  } catch (error) {
+    sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function handleGoldenReview(response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.store) return sendJson(response, 200, { configured: false, report: null });
+  try {
+    sendJson(response, 200, { configured: true, report: await goldenReviewFromStore(context.store) });
+  } catch (error) {
+    sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function handleEditorReview(response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.store) return sendJson(response, 200, { configured: false, report: null });
+  try {
+    sendJson(response, 200, { configured: true, report: await editorReview(context.store) });
+  } catch (error) {
+    sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) });
   }
 }
 

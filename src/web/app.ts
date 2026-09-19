@@ -343,6 +343,19 @@ export function renderWebApp(): string {
                 <div class="rowlines" id="cost-rows"><div class="empty">尚未配置模型。</div></div>
               </div>
               <div class="card">
+                <div class="panel-head"><h3>素材库</h3><span id="material-count">0 条</span></div>
+                <div class="seg" role="radiogroup" aria-label="素材类型">
+                  <label><input type="radio" name="material-type" value="line" checked /><span>桥段</span></label>
+                  <label><input type="radio" name="material-type" value="setting" /><span>设定</span></label>
+                  <label><input type="radio" name="material-type" value="trope" /><span>套路</span></label>
+                  <label><input type="radio" name="material-type" value="other" /><span>其他</span></label>
+                </div>
+                <div class="tf" style="margin-top:10px"><input id="material-title" placeholder=" " /><label for="material-title">素材标题</label></div>
+                <div class="tf" style="margin-top:8px"><textarea id="material-content" style="min-height:64px" placeholder=" "></textarea><label for="material-content">素材内容（桥段/设定/金句）</label></div>
+                <div class="actions" style="margin-top:10px"><small>素材会进入设定检索语料。</small><button id="material-save" class="btn btn-tonal" type="button">保存素材</button></div>
+                <div class="rowlines" id="material-list" style="margin-top:6px"><div class="empty">暂无素材。</div></div>
+              </div>
+              <div class="card">
                 <div class="panel-head"><h3>本书内容</h3><span id="book-phase">—</span></div>
                 <div class="rowlines" id="book-rows"><div class="empty">尚未配置模型，先连接引擎。</div></div>
               </div>
@@ -358,7 +371,7 @@ export function renderWebApp(): string {
           </div>
         </section>
         <section class="page" data-page="reader" aria-label="章节与大纲" hidden>
-          <div class="page-head"><div><h1>章节与大纲</h1><p class="meta">卷弧章三层结构与章节质量详情。</p></div><div class="head-actions"><button id="reader-review-btn" class="btn btn-tonal" type="button">读者评审</button><button id="deconstruct-btn" class="btn btn-tonal" type="button">拆书分析</button></div></div>
+          <div class="page-head"><div><h1>章节与大纲</h1><p class="meta">卷弧章三层结构与章节质量详情。</p></div><div class="head-actions"><button id="reader-review-btn" class="btn btn-tonal" type="button">读者评审</button><button id="golden-btn" class="btn btn-tonal" type="button">黄金三章</button><button id="editor-btn" class="btn btn-tonal" type="button">编辑审稿</button><button id="brainstorm-btn" class="btn btn-tonal" type="button">脑暴</button><button id="deconstruct-btn" class="btn btn-tonal" type="button">拆书分析</button></div></div>
           <div id="reader-review-panel" class="card" style="margin-bottom:18px;background:var(--alpha-4);border:1px dashed var(--line);" hidden>
             <div class="panel-head"><h4 style="margin:0">读者模拟评分与对抗评审</h4><span id="review-avg">—</span></div>
             <div id="review-rows" class="rowlines" style="margin-top:8px"></div>
@@ -366,6 +379,29 @@ export function renderWebApp(): string {
           <div id="deconstruct-panel" class="card" style="margin-bottom:18px;background:var(--alpha-4);border:1px dashed var(--line);" hidden>
             <div class="panel-head"><h4 style="margin:0">拆书报告（结构骨架 / 节奏 / 爽点峰值）</h4><span id="deconstruct-meta">—</span></div>
             <div id="deconstruct-rows" class="rowlines" style="margin-top:8px"></div>
+          </div>
+          <div id="golden-panel" class="card" style="margin-bottom:18px;background:var(--alpha-4);border:1px dashed var(--line);" hidden>
+            <div class="panel-head"><h4 style="margin:0">黄金三章诊断（开局钩子 / 冲突 / 代入感 / 信息倾泻）</h4><span id="golden-verdict">—</span></div>
+            <div id="golden-rows" class="rowlines" style="margin-top:8px"></div>
+          </div>
+          <div id="editor-panel" class="card" style="margin-bottom:18px;background:var(--alpha-4);border:1px dashed var(--line);" hidden>
+            <div class="panel-head"><h4 style="margin:0">编辑视角审稿（过稿风险清单）</h4><span id="editor-verdict">—</span></div>
+            <div id="editor-rows" class="rowlines" style="margin-top:8px"></div>
+          </div>
+          <div id="brainstorm-panel" class="card" style="margin-bottom:18px;background:var(--alpha-4);border:1px dashed var(--line);" hidden>
+            <div class="panel-head"><h4 style="margin:0">节点脑暴（命名要素组合生成）</h4><span id="brainstorm-type-label">门派</span></div>
+            <div class="seg" role="radiogroup" aria-label="脑暴类型">
+              <label><input type="radio" name="brainstorm-type" value="sect" checked /><span>门派</span></label>
+              <label><input type="radio" name="brainstorm-type" value="skill" /><span>功法</span></label>
+              <label><input type="radio" name="brainstorm-type" value="place" /><span>地名</span></label>
+              <label><input type="radio" name="brainstorm-type" value="name" /><span>人名</span></label>
+              <label><input type="radio" name="brainstorm-type" value="faction" /><span>势力</span></label>
+              <label><input type="radio" name="brainstorm-type" value="item" /><span>道具</span></label>
+              <label><input type="radio" name="brainstorm-type" value="title" /><span>书名</span></label>
+              <label><input type="radio" name="brainstorm-type" value="hook" /><span>钩子</span></label>
+            </div>
+            <div class="actions" style="margin-top:10px"><small>同 seed 可复现，产出可入库复用。</small><button id="brainstorm-run" class="btn btn-filled" type="button" style="min-height:32px;font-size:12px">生成 8 条</button></div>
+            <div class="rowlines" id="brainstorm-rows" style="margin-top:8px"></div>
           </div>
           <div class="reader">
             <aside class="card tree-card" aria-label="大纲树">
@@ -476,6 +512,12 @@ export function renderWebApp(): string {
               <div class="card">
                 <div class="panel-head"><h3>实体档案卡片</h3><span id="entities-count">0 位</span></div>
                 <div class="rowlines" id="entities-list"><div class="empty">暂无实体记录。创作进行中或可手动添加。</div></div>
+              </div>
+              <div id="entity-chat-panel" class="card" style="background:var(--alpha-4);border:1px dashed var(--line);" hidden>
+                <div class="panel-head"><h4 style="margin:0">角色对话推演</h4><span id="chat-target">—</span></div>
+                <div id="chat-log" style="display:grid;gap:8px;max-height:220px;overflow:auto;margin:10px 0"></div>
+                <div class="steer-row"><div class="tf"><input id="chat-input" placeholder=" " /><label for="chat-input">对角色说话…</label></div><button id="chat-send" class="btn btn-filled" type="button" style="min-height:36px;font-size:12px">发送</button></div>
+                <div class="actions" style="margin-top:8px"><small>应答由实体卡驱动；提示词可复制给任意对话模型。</small><button id="chat-copy-prompt" class="btn btn-text" type="button">复制提示词</button></div>
               </div>
             </section>
             <aside class="stack">
@@ -1058,6 +1100,172 @@ export function renderWebApp(): string {
         } catch (err) { showNotice(err.message || '角色卡导入失败'); }
         event.target.value = '';
       });
+      async function loadMaterials() {
+        const box = $('material-list');
+        if (!box) return;
+        try {
+          const res = await (await fetch('/api/materials')).json();
+          const items = res.materials || [];
+          $('material-count').textContent = items.length + ' 条';
+          box.replaceChildren();
+          if (!items.length) { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '暂无素材。'; box.append(empty); return; }
+          for (const material of items) {
+            const row = document.createElement('div'); row.className = 'rowline';
+            const left = document.createElement('div');
+            const title = document.createElement('b'); title.textContent = material.title;
+            const pill = document.createElement('span'); pill.className = 'pill muted'; pill.style.marginLeft = '6px'; pill.textContent = material.type;
+            left.append(title, pill);
+            const del = document.createElement('button'); del.className = 'btn btn-text'; del.style.minHeight = '28px'; del.textContent = '删除';
+            del.addEventListener('click', async () => {
+              try {
+                await fetch('/api/materials/' + material.id, { method: 'DELETE' });
+                await loadMaterials();
+              } catch (err) { showNotice(err.message || '删除失败'); }
+            });
+            row.append(left, del);
+            box.append(row);
+          }
+        } catch { box.replaceChildren(); }
+      }
+      $('material-save')?.addEventListener('click', async () => {
+        const title = $('material-title')?.value.trim();
+        const content = $('material-content')?.value.trim();
+        const type = document.querySelector('input[name="material-type"]:checked')?.value || 'other';
+        if (!title || !content) { showNotice('标题与内容必填'); return; }
+        try {
+          await post('/api/materials', { type, title, content, source: 'manual' });
+          $('material-title').value = '';
+          $('material-content').value = '';
+          showNotice('素材已入库。', 'success');
+          await loadMaterials();
+        } catch (err) { showNotice(err.message || '保存失败'); }
+      });
+      let lastBrainstormSeed = 0;
+      $('brainstorm-btn')?.addEventListener('click', () => {
+        const panel = $('brainstorm-panel');
+        if (panel) panel.hidden = !panel.hidden;
+      });
+      $('brainstorm-run')?.addEventListener('click', async () => {
+        const box = $('brainstorm-rows');
+        if (!box) return;
+        const type = document.querySelector('input[name="brainstorm-type"]:checked')?.value || 'sect';
+        const labelMap = { sect: '门派', skill: '功法', place: '地名', name: '人名', faction: '势力', item: '道具', title: '书名', hook: '钩子' };
+        try {
+          lastBrainstormSeed = Date.now();
+          const res = await (await fetch('/api/brainstorm?type=' + type + '&count=8&seed=' + lastBrainstormSeed)).json();
+          $('brainstorm-type-label').textContent = labelMap[type] || type;
+          box.replaceChildren();
+          for (const item of res.items) {
+            const row = document.createElement('div'); row.className = 'rowline';
+            const label = document.createElement('span'); label.textContent = item;
+            const save = document.createElement('button'); save.className = 'btn btn-text'; save.style.minHeight = '28px'; save.textContent = '入库';
+            save.addEventListener('click', async () => {
+              try {
+                await post('/api/materials', { type: 'other', title: item, content: type + ':' + item, tags: ['脑暴'], source: 'brainstorm' });
+                showNotice('【' + item + '】已入库素材。', 'success');
+                await loadMaterials();
+              } catch (err) { showNotice(err.message || '入库失败'); }
+            });
+            row.append(label, save);
+            box.append(row);
+          }
+        } catch (err) { showNotice(err.message || '脑暴失败'); }
+      });
+      $('golden-btn')?.addEventListener('click', async () => {
+        const panel = $('golden-panel');
+        const box = $('golden-rows');
+        if (!panel || !box) return;
+        panel.hidden = !panel.hidden;
+        if (panel.hidden) return;
+        try {
+          const res = await (await fetch('/api/golden-review')).json();
+          box.replaceChildren();
+          if (!res.configured || !res.report || !res.report.reviewed) { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = res.report?.verdict || '暂无可评审章节。'; box.append(empty); $('golden-verdict').textContent = '—'; return; }
+          $('golden-verdict').textContent = res.report.verdict + '（均分 ' + res.report.averageScore + '）';
+          const dimLabel = { openingHook: '开局钩子', conflict: '冲突密度', immersion: '代入感', infoDump: '信息倾泻' };
+          for (const row of res.report.chapters) {
+            const line = document.createElement('div'); line.className = 'rowline';
+            const left = document.createElement('span'); left.textContent = '第 ' + row.chapter + ' 章';
+            const right = document.createElement('div'); right.className = 'pills';
+            const scorePill = document.createElement('span'); scorePill.className = 'pill ' + (row.score >= 70 ? 'ok' : row.score >= 50 ? 'muted' : 'bad'); scorePill.textContent = String(row.score);
+            const dims = document.createElement('small'); dims.style.color = 'var(--faint)'; dims.textContent = Object.entries(row.dimensions).map(([key, value]) => dimLabel[key] + ' ' + value).join(' · ');
+            right.append(scorePill, dims);
+            line.append(left, right);
+            box.append(line);
+          }
+          for (const finding of res.report.findings) {
+            const line = document.createElement('div'); line.className = 'rowline';
+            const left = document.createElement('span'); left.textContent = '⚠ ' + finding.evidence;
+            line.append(left);
+            box.append(line);
+          }
+        } catch { box.replaceChildren(); }
+      });
+      $('editor-btn')?.addEventListener('click', async () => {
+        const panel = $('editor-panel');
+        const box = $('editor-rows');
+        if (!panel || !box) return;
+        panel.hidden = !panel.hidden;
+        if (panel.hidden) return;
+        try {
+          const res = await (await fetch('/api/editor-review')).json();
+          box.replaceChildren();
+          if (!res.configured || !res.report) { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '暂无可评审内容。'; box.append(empty); return; }
+          $('editor-verdict').textContent = res.report.verdict;
+          if (!res.report.risks.length) { const ok = document.createElement('div'); ok.className = 'empty'; ok.textContent = '未发现过稿风险，可以考虑投稿。'; box.append(ok); return; }
+          for (const risk of res.report.risks) {
+            const line = document.createElement('div'); line.className = 'rowline';
+            const left = document.createElement('span'); left.textContent = '⚠ ' + risk.check + '：' + risk.evidence;
+            line.append(left);
+            box.append(line);
+          }
+        } catch { box.replaceChildren(); }
+      });
+      let chatEntityId = '';
+      let chatHistory: Array<{ role: 'user' | 'character'; text: string }> = [];
+      function openEntityChat(entity) {
+        chatEntityId = entity.id;
+        chatHistory = [];
+        const panel = $('entity-chat-panel');
+        if (!panel) return;
+        panel.hidden = false;
+        $('chat-target').textContent = entity.name;
+        $('chat-log').replaceChildren();
+        const intro = document.createElement('div'); intro.className = 'empty'; intro.textContent = '与【' + entity.name + '】对话推演人设一致性。';
+        $('chat-log').append(intro);
+      }
+      async function sendChatMessage() {
+        const input = $('chat-input');
+        const log = $('chat-log');
+        if (!input || !log || !chatEntityId) return;
+        const message = input.value.trim();
+        if (!message) return;
+        input.value = '';
+        const userBubble = document.createElement('div'); userBubble.style.textAlign = 'right'; userBubble.replaceChildren();
+        const userText = document.createElement('span'); userText.className = 'pill muted'; userText.style.whiteSpace = 'normal'; userText.textContent = '你：' + message;
+        userBubble.append(userText);
+        log.append(userBubble);
+        try {
+          const res = await post('/api/character-chat', { entityId: chatEntityId, message, history: chatHistory });
+          chatHistory.push({ role: 'user', text: message });
+          chatHistory.push({ role: 'character', text: res.reply });
+          const charBubble = document.createElement('div'); charBubble.style.textAlign = 'left';
+          const charText = document.createElement('span'); charText.className = 'pill ok'; charText.style.whiteSpace = 'normal'; charText.textContent = res.reply;
+          charBubble.append(charText);
+          log.append(charBubble);
+          log.scrollTop = log.scrollHeight;
+        } catch (err) { showNotice(err.message || '对话失败'); }
+      }
+      $('chat-send')?.addEventListener('click', () => void sendChatMessage());
+      $('chat-input')?.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); void sendChatMessage(); } });
+      $('chat-copy-prompt')?.addEventListener('click', async () => {
+        if (!chatEntityId) return;
+        try {
+          const res = await post('/api/character-chat', { entityId: chatEntityId, message: '（获取人设提示词）', history: [] });
+          await navigator.clipboard?.writeText(res.prompt).catch(() => undefined);
+          showNotice('角色提示词已复制到剪贴板（也可粘贴到任意对话模型使用）。', 'success');
+        } catch (err) { showNotice(err.message || '复制失败'); }
+      });
       async function loadEntities() {
         try {
           const res = await (await fetch('/api/entities')).json();
@@ -1081,8 +1289,15 @@ export function renderWebApp(): string {
             const card = document.createElement('div'); card.className = 'rowline'; card.style.flexDirection = 'column'; card.style.alignItems = 'flex-start'; card.style.gap = '4px';
             const top = document.createElement('div'); top.style.display = 'flex'; top.style.justifyContent = 'space-between'; top.style.width = '100%';
             const name = document.createElement('b'); name.textContent = ent.name + (ent.aliases?.length ? ' (' + ent.aliases.join('/') + ')' : '');
+            const right = document.createElement('div'); right.style.display = 'flex'; right.style.gap = '6px'; right.style.alignItems = 'center';
             const badge = document.createElement('span'); badge.className = 'pill muted'; badge.textContent = ent.type;
-            top.append(name, badge);
+            right.append(badge);
+            if (ent.type === 'character') {
+              const chatBtn = document.createElement('button'); chatBtn.className = 'btn btn-text'; chatBtn.style.minHeight = '26px'; chatBtn.style.fontSize = '11px'; chatBtn.textContent = '对话';
+              chatBtn.addEventListener('click', () => openEntityChat(ent));
+              right.append(chatBtn);
+            }
+            top.append(name, right);
             const desc = document.createElement('small'); desc.style.color = 'var(--muted)'; desc.textContent = ent.description || '暂无描述';
             card.append(top, desc);
             list.append(card);
@@ -1127,6 +1342,7 @@ export function renderWebApp(): string {
       document.querySelectorAll('[data-view="entities"]').forEach((button) => button.addEventListener('click', () => void loadEntities()));
       refresh();
       loadCostPreview();
+      loadMaterials();
       loadBookSummary();
     </script>
   </body>
