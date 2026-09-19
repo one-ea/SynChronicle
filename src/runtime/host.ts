@@ -107,26 +107,28 @@ export class Host {
   private async run(prompt: string, label: string): Promise<void> {
     if (this.state === "running" || this.state === "closed") throw new Error(`host is ${this.state}`);
     this.state = "running";
-    this.runController = new AbortController();
+    const controller = new AbortController();
+    this.runController = controller;
     this.emit(systemEvent(label));
     const injections = await this.consumeInjections();
     const finalPrompt = injections.length ? `${injections.map(text => `[用户干预] ${text}`).join("\n\n")}\n\n${prompt}` : prompt;
     try {
-      const stream = this.agent.run(finalPrompt, this.runController.signal);
+      const stream = this.agent.run(finalPrompt, controller.signal);
       for await (const delta of stream) {
-        this.runController.signal.throwIfAborted();
+        controller.signal.throwIfAborted();
         this.output.write(delta);
         await this.store.runtime.appendQueue({ seq: 0, time: new Date().toISOString(), kind: "stream_delta", priority: "background", payload: { delta } });
       }
-      this.runController.signal.throwIfAborted();
+      controller.signal.throwIfAborted();
       this.state = "completed";
       this.emit(systemEvent("运行完成", "success"));
     } catch (error) {
       this.state = "paused";
       this.emit(errorEvent(error));
-      // 优雅吸收生成级异常，避免未捕获 Promise/WebStream 导致主进程异常退出
+      // 主动中止（abort/steer）时向上抛出取消原因；生成级异常优雅吸收，避免未捕获 Promise/WebStream 导致主进程异常退出
+      if (controller.signal.aborted) throw controller.signal.reason ?? toError(error);
     } finally {
-      this.runController = null;
+      if (this.runController === controller) this.runController = null;
       this.output.end();
     }
   }
