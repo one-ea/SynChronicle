@@ -65,7 +65,7 @@ describe("WebUI", () => {
     expect(html).toContain('aria-label="移动端主导航"');
     const tabbarViews = ["overview", "reader", "entities", "records", "settings"];
     for (const view of tabbarViews) expect(html).toContain(`data-view="${view}" title=`);
-    expect(Buffer.byteLength(html, "utf8")).toBeLessThan(100790 + 30 * 1024);
+    expect(Buffer.byteLength(html, "utf8")).toBeLessThan(148562 + 30 * 1024);
   });
 
   it("applies stitch draft refinements to the console shell", () => {
@@ -668,6 +668,96 @@ describe("WebUI", () => {
       expect(checkoutRes.status).toBe(200);
       const mainContent = await readFile(join(output, "chapters", "01.md"), "utf8");
       expect(mainContent).toBe("分支正文：他最终放下了剑。");
+    } finally {
+      await handle.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("renders the p7 shell with studio rail, bookshelf and skill pack market", () => {
+    const html = renderWebApp();
+    expect(html).toContain('data-page="studio"');
+    expect(html).toContain("三栏写作台");
+    expect(html).toContain(".studio-rail");
+    expect(html).toContain("studio-editor");
+    expect(html).toContain('data-view="studio" title=');
+    expect(html).toContain("书架（多书管理）");
+    expect(html).toContain("技能包市场");
+    expect(html).toContain("版本时光机");
+    expect(html).not.toContain("innerHTML =");
+  });
+
+  it("serves p7 bookshelf, skill packs, versions and studio endpoints", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "synchronicle-web-p7-"));
+    const output = join(directory, "novel");
+    for (const dir of ["meta", "chapters"]) await mkdir(join(output, dir), { recursive: true });
+    await writeFile(join(output, "chapters", "01.md"), "沈砚推开书局的门。雨夜里灯火摇晃。");
+    await writeFile(join(output, "meta", "progress.json"), JSON.stringify({ novel_name: "主书", phase: "writing", current_chapter: 2, total_chapters: 10, completed_chapters: [1], total_word_count: 16, chapter_word_counts: { "1": 16 } }));
+    const configPath = join(directory, "config.json");
+    await writeFile(configPath, JSON.stringify({ provider: "deepseek", model: "deepseek-chat", providers: { deepseek: { base_url: "https://api.deepseek.com/v1", api_key: "secret-key" } }, output_dir: output }));
+    const handle = await startWebServer({ port: 0, configPath });
+    try {
+      const root = `http://127.0.0.1:${handle.port}`;
+      const json = async (path: string, init?: RequestInit): Promise<any> => JSON.parse(await (await fetch(`${root}${path}`, init)).text());
+
+      // 1. 书架：初始迁移当前 output 为激活书籍，新建并切换
+      const initialBooks = await json("/api/books");
+      expect(initialBooks.configured).toBe(true);
+      expect(initialBooks.books).toHaveLength(1);
+      expect(initialBooks.books[0].title).toBe("主书");
+      expect(initialBooks.books[0].active).toBe(true);
+
+      const created = await json("/api/books", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title: "新书《星海》" }) });
+      expect(created.created).toBe(true);
+      expect(created.book.title).toBe("新书《星海》");
+
+      const switched = await json("/api/books/switch", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: created.book.id }) });
+      expect(switched.switched).toBe(true);
+      const activeBook = await json("/api/book");
+      expect(activeBook.book.novelName).toBe("");
+
+      const switchBack = await json("/api/books/switch", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: initialBooks.activeId }) });
+      expect(switchBack.switched).toBe(true);
+      const restoredBook = await json("/api/book");
+      expect(restoredBook.book.novelName).toBe("主书");
+      const unknownSwitch = await fetch(`${root}/api/books/switch`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: "ghost" }) });
+      expect(unknownSwitch.status).toBe(404);
+
+      // 2. 写作台保存 + 版本时光机
+      await json("/api/chapters/1/text", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "沈砚推开书局的门。雨夜里灯火摇晃。" }) });
+      const saved = await json("/api/chapters/1/text", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "沈砚推开书局的门。雨夜里灯火摇晃。他抬头看向旧钟楼。" }) });
+      expect(saved.saved).toBe(true);
+      const chapterAfter = await json("/api/chapters/1");
+      expect(chapterAfter.chapter.text).toContain("旧钟楼");
+
+      const versions = await json("/api/chapters/1/versions");
+      expect(versions.versions.length).toBe(2);
+      expect(versions.versions[0].source).toBe("studio");
+      const firstVersion = versions.versions.at(-1);
+      const restored = await json("/api/chapters/1/versions/restore", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: firstVersion.id }) });
+      expect(restored.restored).toBe(true);
+      const chapterRestored = await json("/api/chapters/1");
+      expect(chapterRestored.chapter.text).not.toContain("旧钟楼");
+      const versionsAfterRestore = await json("/api/chapters/1/versions");
+      expect(versionsAfterRestore.versions[0].source).toBe("restore");
+
+      // 3. 技能包市场：内置列表 / 启用 / 自定义包增删
+      const packs = await json("/api/skillpacks");
+      expect(packs.builtin).toHaveLength(8);
+      expect(packs.enabledCount).toBe(0);
+      const toggled = await json("/api/skillpacks/toggle", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: "golden-opening", enabled: true }) });
+      expect(toggled.enabled).toBe(true);
+      const recallWithPack = await json("/api/recall?q=" + encodeURIComponent("开篇 冲突"));
+      expect(recallWithPack.hits.some((hit: { kind: string }) => hit.kind === "skillpack")).toBe(true);
+
+      const packCreated = await json("/api/skillpacks", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "短句张力包", techniques: "高潮句压到十字内\n多用动词开头" }) });
+      expect(packCreated.created).toBe(true);
+      const packsAfterCreate = await json("/api/skillpacks");
+      expect(packsAfterCreate.custom).toHaveLength(1);
+      const packDeleted = await json(`/api/skillpacks/${packCreated.pack.id}`, { method: "DELETE" });
+      expect(packDeleted.removed).toBe(true);
+      const builtinDelete = await fetch(`${root}/api/skillpacks/golden-opening`, { method: "DELETE" });
+      expect(builtinDelete.status).toBe(404);
     } finally {
       await handle.close();
       await rm(directory, { recursive: true, force: true });

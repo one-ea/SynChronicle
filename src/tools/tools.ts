@@ -150,7 +150,7 @@ export function createTools({ store, askUser, references, normalize, subagents }
     commit_chapter: registered("提交章节终稿", commitChapterSchema, async ({ chapter, summary, characters, key_events, hook_type = "", dominant_strand = "" }) => {
       await store.progress.validateChapterWork(chapter);
       const content = await store.drafts.loadDraft(chapter) || await store.drafts.loadChapterText(chapter); if (!content) throw new Error(`no content found for chapter ${chapter}`);
-      await store.drafts.saveFinalChapter(chapter, content); await store.summaries.saveSummary({ chapter, summary, characters, key_events });
+      await store.drafts.saveFinalChapter(chapter, content); await store.summaries.saveSummary({ chapter, summary, characters, key_events }); await store.versions.record(chapter, content, "commit").catch(() => undefined);
       const known = Object.fromEntries((await store.characters.load()).map((character) => [character.name, true])); await store.cast.mergeAppearances(chapter, characters, [], known);
       if (await store.progress.isChapterCompleted(chapter)) await store.progress.completeRewrite(chapter); else await store.progress.markChapterComplete(chapter, [...content].length, hook_type, dominant_strand);
       await store.checkpoints.appendArtifact(chapterScope(chapter), "commit", `chapters/${pad(chapter)}.md`);

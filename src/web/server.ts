@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { readdir } from "node:fs/promises";
+import { mkdir, readdir } from "node:fs/promises";
+import { join } from "node:path";
 import { loadAssets } from "../assets/load.js";
 import { defaultConfigPath, fillDefaults, loadConfig, needsSetup, saveConfig } from "../config/index.js";
 import { validateConfig } from "../config/validate.js";
@@ -24,11 +25,14 @@ import { platformReviewFromStore, type Platform } from "../diag/platformreview.j
 import { fingerprintScan, rewriteAmplitude } from "../diag/aifingerprint.js";
 import { buildRewritePlan } from "../runtime/rewrite.js";
 import { evaluateArenaCandidates } from "../runtime/arena.js";
+import { BOOKSHELF_PATH, BookshelfFileSchema, createBookId, emptyBookshelf, normalizeTitle, resolveBooksRoot, type BookMeta, type BookshelfFile } from "../domain/bookshelf.js";
+import { BUILTIN_SKILL_PACKS, type SkillPack } from "../domain/skillpack.js";
+import { VERSION_SOURCES } from "../store/versions.js";
 import type { ResolvedConfig } from "../config/schemas.js";
 
 export interface WebServerOptions { port?: number; host?: string; configPath?: string; hostInstance?: Host; }
 export interface WebServerHandle { port: number; close(): Promise<void>; }
-interface RuntimeContext { host?: Host; store?: Store; config?: ResolvedConfig; configured: boolean; configPath: string; error?: string; }
+interface RuntimeContext { host?: Host; store?: Store; config?: ResolvedConfig; configured: boolean; configPath: string; error?: string; bookRoot?: string; bookshelf?: BookshelfFile; }
 
 export async function startWebServer(options: WebServerOptions = {}): Promise<WebServerHandle> {
   const context = await loadRuntime(options.configPath);
@@ -43,10 +47,39 @@ async function loadRuntime(configPath?: string): Promise<RuntimeContext> {
   try {
     if (await needsSetup(configPath)) return { configured: false, configPath: targetPath };
     const config = await loadConfig(configPath);
-    return { config, configured: true, configPath: targetPath, store: new Store(config.output_dir ?? "output/novel") };
+    const context: RuntimeContext = { config, configured: true, configPath: targetPath };
+    await activateInitialBook(context, config);
+    return context;
   } catch (error) {
     return { configured: false, configPath: targetPath, error: error instanceof Error ? error.message : String(error) };
   }
+}
+
+/** 初始化书架：output_dir 父目录为书籍根，当前 output_dir 迁移为默认激活书籍。 */
+async function activateInitialBook(context: RuntimeContext, config: ResolvedConfig): Promise<void> {
+  const outputDir = config.output_dir ?? "output/novel";
+  const root = resolveBooksRoot(outputDir);
+  const io = new FileIO(root);
+  const existing = await io.readJSON<BookshelfFile>(BOOKSHELF_PATH);
+  const parsed = existing ? BookshelfFileSchema.safeParse(existing) : null;
+  let shelf: BookshelfFile;
+  if (parsed?.success && parsed.data.books.length) shelf = parsed.data;
+  else {
+    const now = new Date().toISOString();
+    const fallbackId = outputDir.replace(/\\/g, "/").split("/").filter(Boolean).at(-1) ?? "novel";
+    const progress = await new FileIO(outputDir).readJSON<{ novel_name?: string }>("meta/progress.json").catch(() => null);
+    const title = normalizeTitle(progress?.novel_name || fallbackId) || fallbackId;
+    shelf = { ...emptyBookshelf(), books: [{ id: fallbackId, title, createdAt: now, updatedAt: now }], activeId: fallbackId };
+    await io.writeJSON(BOOKSHELF_PATH, shelf);
+  }
+  if (!shelf.books.some((book) => book.id === shelf.activeId)) shelf = { ...shelf, activeId: shelf.books[0]!.id };
+  context.bookRoot = root;
+  context.bookshelf = shelf;
+  context.store = new Store(join(root, shelf.activeId ?? fallbackDirName(outputDir)));
+}
+
+function fallbackDirName(outputDir: string): string {
+  return outputDir.replace(/\\/g, "/").split("/").filter(Boolean).at(-1) ?? "novel";
 }
 
 async function route(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
@@ -105,6 +138,18 @@ async function route(request: IncomingMessage, response: ServerResponse, context
     if (request.method === "GET") return handleForeshadowsGet(response, context);
     if (request.method === "POST") return handleForeshadowsPost(request, response, context);
   }
+  if (url.pathname === "/api/books") {
+    if (request.method === "GET") return handleBooksList(response, context);
+    if (request.method === "POST") return handleBooksCreate(request, response, context);
+  }
+  if (request.method === "POST" && url.pathname === "/api/books/switch") return handleBooksSwitch(request, response, context);
+  if (request.method === "GET" && /^\/api\/chapters\/\d+\/versions$/.test(url.pathname)) return handleVersionsList(response, context, Number(url.pathname.split("/")[3]));
+  if (request.method === "POST" && /^\/api\/chapters\/\d+\/versions\/restore$/.test(url.pathname)) return handleVersionRestore(request, response, context, Number(url.pathname.split("/")[3]));
+  if (request.method === "POST" && /^\/api\/chapters\/\d+\/text$/.test(url.pathname)) return handleChapterTextSave(request, response, context, Number(url.pathname.split("/")[3]));
+  if (url.pathname === "/api/skillpacks" && request.method === "GET") return handleSkillPacksGet(response, context);
+  if (url.pathname === "/api/skillpacks" && request.method === "POST") return handleSkillPacksCreate(request, response, context);
+  if (request.method === "DELETE" && /^\/api\/skillpacks\/[^/]+$/.test(url.pathname)) return handleSkillPacksDelete(response, context, decodeURIComponent(url.pathname.split("/").pop() ?? ""));
+  if (request.method === "POST" && url.pathname === "/api/skillpacks/toggle") return handleSkillPacksToggle(request, response, context);
   if (request.method === "GET" && url.pathname === "/api/stream") return handleStream(request, response, context);
   sendJson(response, 404, { error: "Not found" });
 }
@@ -330,25 +375,8 @@ async function handleChapterAdopt(request: IncomingMessage, response: ServerResp
     const body = await readJson(request);
     const text = typeof body.text === "string" ? body.text : "";
     if (!text.trim()) return sendJson(response, 400, { error: "text 不能为空" });
-    const store = context.store;
-    await store.drafts.saveFinalChapter(chapter, text);
-    const words = [...text].length;
-    const progress = await store.progress.load();
-    if (progress) {
-      const counts = { ...(progress.chapter_word_counts || {}) };
-      const oldWords = counts[String(chapter)] ?? 0;
-      counts[String(chapter)] = words;
-      const totalWords = Math.max(0, (progress.total_word_count || 0) - oldWords + words);
-      const completed = new Set(progress.completed_chapters || []);
-      completed.add(chapter);
-      await store.progress.save({
-        ...progress,
-        chapter_word_counts: counts,
-        total_word_count: totalWords,
-        completed_chapters: [...completed].sort((a, b) => a - b),
-      });
-    }
-    sendJson(response, 200, { adopted: true, chapter, wordCount: words });
+    const applied = await applyChapterText(context.store, chapter, text, "adopt");
+    sendJson(response, 200, { adopted: true, chapter, wordCount: applied.wordCount });
   } catch (error) {
     sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) });
   }
@@ -723,6 +751,8 @@ async function handleBranchCheckout(request: IncomingMessage, response: ServerRe
     if (!branchId) return sendJson(response, 400, { error: "branchId 必填" });
 
     const result = await context.store.branches.mergeBranchToMain(branchId, chapter);
+    const mergedText = (await context.store.drafts.loadChapterText(chapter)) || "";
+    if (mergedText) await context.store.versions.record(chapter, mergedText, "branch").catch(() => undefined);
     sendJson(response, 200, { success: true, ...result, chapter, branchId });
   } catch (error) {
     sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) });
@@ -860,6 +890,172 @@ async function ensureHost(context: RuntimeContext): Promise<Host> {
   if (!context.config) throw new Error("尚未配置模型，请先准备配置文件");
   try { context.host = await Host.new(context.config, loadAssets(context.config.style)); return context.host; }
   catch (error) { context.error = error instanceof Error ? error.message : String(error); throw error; }
+}
+
+/** ---------- P7-1 多书管理 ---------- */
+
+async function handleBooksList(response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.bookRoot || !context.bookshelf) return sendJson(response, 200, { configured: false, books: [], activeId: null });
+  try {
+    const books = await Promise.all(context.bookshelf.books.map(async (book) => {
+      const progress = await new FileIO(join(context.bookRoot!, book.id)).readJSON<{ novel_name?: string; phase?: string; total_word_count?: number; completed_chapters?: number[] }>("meta/progress.json").catch(() => null);
+      return { ...book, phase: progress?.phase ?? "init", words: progress?.total_word_count ?? 0, chapters: progress?.completed_chapters?.length ?? 0, active: book.id === context.bookshelf?.activeId };
+    }));
+    sendJson(response, 200, { configured: true, books, activeId: context.bookshelf.activeId });
+  } catch (error) { sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) }); }
+}
+
+async function handleBooksCreate(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.bookRoot || !context.bookshelf || !context.config) return sendJson(response, 503, { error: "尚未配置，无法创建书籍" });
+  try {
+    const body = await readJson(request);
+    const title = normalizeTitle(textField(body.title, "书名"));
+    const now = new Date().toISOString();
+    const meta: BookMeta = { id: createBookId(title), title, createdAt: now, updatedAt: now };
+    await mkdir(join(context.bookRoot, meta.id), { recursive: true });
+    const shelf = { ...context.bookshelf, books: [...context.bookshelf.books, meta], updatedAt: now };
+    await new FileIO(context.bookRoot).writeJSON(BOOKSHELF_PATH, shelf);
+    context.bookshelf = shelf;
+    sendJson(response, 201, { created: true, book: meta });
+  } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
+}
+
+async function handleBooksSwitch(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.bookRoot || !context.bookshelf || !context.config) return sendJson(response, 503, { error: "尚未配置，无法切换书籍" });
+  try {
+    const body = await readJson(request);
+    const id = textField(body.id, "书籍 id");
+    if (!context.bookshelf.books.some((book) => book.id === id)) return sendJson(response, 404, { error: `书籍不存在: ${id}` });
+    const now = new Date().toISOString();
+    const shelf = { ...context.bookshelf, activeId: id, updatedAt: now };
+    await new FileIO(context.bookRoot).writeJSON(BOOKSHELF_PATH, shelf);
+    context.bookshelf = shelf;
+    if (context.host) { context.host.abort?.(`切换书籍：${id}`, "warn"); context.host = undefined; }
+    const dir = join(context.bookRoot, id);
+    context.store = new Store(dir);
+    context.config = { ...context.config, output_dir: dir };
+    sendJson(response, 200, { switched: true, activeId: id });
+  } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
+}
+
+/** ---------- P7-2 版本时光机 ---------- */
+
+async function handleVersionsList(response: ServerResponse, context: RuntimeContext, chapter: number): Promise<void> {
+  if (chapter <= 0) return sendJson(response, 400, { error: "chapter 必须是正整数" });
+  if (!context.store) return sendJson(response, 200, { configured: false, versions: [] });
+  try {
+    const versions = await context.store.versions.list(chapter);
+    const current = (await context.store.drafts.loadChapterText(chapter)) || (await context.store.drafts.loadDraft(chapter)) || "";
+    const currentWords = [...current.replace(/\s/g, "")].length;
+    sendJson(response, 200, {
+      configured: true,
+      currentWords,
+      versions: versions.map((version) => ({ id: version.id, ts: version.ts, source: version.source, sourceLabel: VERSION_SOURCES[version.source as keyof typeof VERSION_SOURCES] ?? version.source, words: version.words, delta: version.words - currentWords, preview: version.text.replace(/\s+/g, " ").slice(0, 80) })),
+    });
+  } catch (error) { sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) }); }
+}
+
+async function handleVersionRestore(request: IncomingMessage, response: ServerResponse, context: RuntimeContext, chapter: number): Promise<void> {
+  if (chapter <= 0) return sendJson(response, 400, { error: "chapter 必须是正整数" });
+  if (!context.store) return sendJson(response, 503, { error: "尚未配置小说工作区" });
+  try {
+    const body = await readJson(request);
+    if (typeof body.id !== "number" || !Number.isInteger(body.id) || body.id <= 0) return sendJson(response, 400, { error: "id 必须是正整数" });
+    const version = await context.store.versions.get(chapter, body.id);
+    if (!version) return sendJson(response, 404, { error: `版本不存在: ${body.id}` });
+    const applied = await applyChapterText(context.store, chapter, version.text, "restore");
+    sendJson(response, 200, { restored: true, chapter, versionId: body.id, wordCount: applied.wordCount });
+  } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
+}
+
+/** ---------- P7-4 写作台正文保存 ---------- */
+
+async function handleChapterTextSave(request: IncomingMessage, response: ServerResponse, context: RuntimeContext, chapter: number): Promise<void> {
+  if (chapter <= 0) return sendJson(response, 400, { error: "chapter 必须是正整数" });
+  if (!context.store) return sendJson(response, 503, { error: "尚未配置小说工作区" });
+  try {
+    const body = await readJson(request);
+    const text = typeof body.text === "string" ? body.text : "";
+    if (!text.trim()) return sendJson(response, 400, { error: "text 不能为空" });
+    const applied = await applyChapterText(context.store, chapter, text, "studio");
+    sendJson(response, 200, { saved: true, chapter, wordCount: applied.wordCount });
+  } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
+}
+
+/** 章节正文落盘共用：保存终稿 + 更新进度字数 + 记录版本快照。 */
+async function applyChapterText(store: Store, chapter: number, text: string, source: string): Promise<{ wordCount: number }> {
+  await store.drafts.saveFinalChapter(chapter, text);
+  await store.versions.record(chapter, text, source).catch(() => undefined);
+  const words = [...text].length;
+  const progress = await store.progress.load();
+  if (progress) {
+    const counts = { ...(progress.chapter_word_counts || {}) };
+    const oldWords = counts[String(chapter)] ?? 0;
+    counts[String(chapter)] = words;
+    const totalWords = Math.max(0, (progress.total_word_count || 0) - oldWords + words);
+    const completed = new Set(progress.completed_chapters || []);
+    completed.add(chapter);
+    await store.progress.save({ ...progress, chapter_word_counts: counts, total_word_count: totalWords, completed_chapters: [...completed].sort((a, b) => a - b) });
+  }
+  return { wordCount: words };
+}
+
+/** ---------- P7-3 技能包市场 ---------- */
+
+async function handleSkillPacksGet(response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.store) return sendJson(response, 200, { configured: false, builtin: [], custom: [] });
+  try {
+    const file = await context.store.skillpacks.load();
+    const enabled = new Set(file.enabled);
+    sendJson(response, 200, {
+      configured: true,
+      builtin: BUILTIN_SKILL_PACKS.map((pack) => ({ id: pack.id, name: pack.name, category: pack.category, description: pack.description, techniqueCount: pack.techniques.length, preview: pack.techniques[0], enabled: enabled.has(pack.id) })),
+      custom: file.custom.map((pack) => ({ id: pack.id, name: pack.name, category: pack.category, description: pack.description, techniqueCount: pack.techniques.length, preview: pack.techniques[0], enabled: enabled.has(pack.id) })),
+      enabledCount: enabled.size,
+    });
+  } catch (error) { sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) }); }
+}
+
+async function handleSkillPacksToggle(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.store) return sendJson(response, 503, { error: "尚未配置小说工作区" });
+  try {
+    const body = await readJson(request);
+    const id = textField(body.id, "技能包 id");
+    const enabled = body.enabled === true;
+    await context.store.skillpacks.toggle(id, enabled);
+    sendJson(response, 200, { toggled: true, id, enabled });
+  } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
+}
+
+async function handleSkillPacksCreate(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
+  if (!context.store) return sendJson(response, 503, { error: "尚未配置小说工作区" });
+  try {
+    const body = await readJson(request);
+    const name = normalizePackName(textField(body.name, "技能包名称"));
+    const category = optionalText(body.category) || "自定义";
+    const description = optionalText(body.description).slice(0, 120);
+    const techniquesRaw = Array.isArray(body.techniques)
+      ? body.techniques.filter((item): item is string => typeof item === "string")
+      : typeof body.techniques === "string" ? body.techniques.split("\n") : [];
+    const techniques = techniquesRaw.map((line) => line.trim()).filter(Boolean).slice(0, 20);
+    if (!techniques.length) return sendJson(response, 400, { error: "至少填写一条写作技法（每行一条）" });
+    const pack: SkillPack = { id: `custom-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`, name, category: category.slice(0, 20), description, techniques, origin: "custom" };
+    await context.store.skillpacks.appendCustom(pack);
+    sendJson(response, 201, { created: true, pack });
+  } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
+}
+
+async function handleSkillPacksDelete(response: ServerResponse, context: RuntimeContext, id: string): Promise<void> {
+  if (!context.store) return sendJson(response, 503, { error: "尚未配置小说工作区" });
+  try {
+    const removed = await context.store.skillpacks.removeCustom(id);
+    if (!removed) return sendJson(response, 404, { error: `自定义技能包不存在: ${id}` });
+    sendJson(response, 200, { removed: true, id });
+  } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
+}
+
+function normalizePackName(input: string): string {
+  return input.trim().replace(/\s+/g, " ").slice(0, 40);
 }
 
 function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {

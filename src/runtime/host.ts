@@ -9,6 +9,7 @@ import { RuntimeStream } from "./stream.js";
 import { buildResumePrompt } from "./resume.js";
 import { renderConstitutionText } from "./constitution.js";
 import { emptyConstitution } from "../domain/constitution.js";
+import { effectiveSkillPacks, emptySkillPackFile, renderSkillPacks } from "../domain/skillpack.js";
 import { errorEvent, reflectionEvent, systemEvent } from "./observer.js";
 import { importTextFile } from "./imp/index.js";
 import { exportNovel, type ExportOptions } from "./exp/index.js";
@@ -100,7 +101,7 @@ export class Host {
   stream(includeBoundaries = false): AsyncIterable<string> { return this.output.iterable(includeBoundaries); }
   snapshot() { const progress = { runtimeState: this.state, recoveryLabel: this.recoveryLabel, usage: this.usage.snapshot(), provider: this.config.provider, model: this.config.model, reflection: this.reflection }; return structuredClone(progress); }
   async replayQueue(maxItems = 100): Promise<RuntimeQueueItem[]> { const items = await this.store.runtime.loadQueue(); return items.slice(-Math.max(0, maxItems)); }
-  async importText(path: string): Promise<{ chapters: number }> { const chapters = await importTextFile(path); if (!chapters.length) throw new Error("文本中没有可导入的章节"); const numbers = chapters.map((chapter) => chapter.chapter); if (new Set(numbers).size !== numbers.length || numbers.some((chapter) => chapter <= 0)) throw new Error("导入章节编号必须是唯一的正整数"); for (const chapter of chapters) await this.store.drafts.saveFinalChapter(chapter.chapter, `# ${chapter.title}\n\n${chapter.content}`); for (const chapter of chapters) { await this.store.summaries.saveSummary({ chapter: chapter.chapter, summary: "导入章节", characters: [], key_events: [] }); await this.store.checkpoints.appendArtifact({ kind: "chapter", chapter: chapter.chapter }, "commit", `chapters/${String(chapter.chapter).padStart(2, "0")}.md`); } const words = chapters.reduce((sum, chapter) => sum + [...chapter.content.replace(/\s/g, "")].length, 0); await this.store.progress.save({ novel_name: "", phase: "writing", current_chapter: Math.max(...numbers) + 1, total_chapters: Math.max(...numbers), completed_chapters: numbers, total_word_count: words, chapter_word_counts: Object.fromEntries(chapters.map((chapter) => [String(chapter.chapter), [...chapter.content.replace(/\s/g, "")].length])), flow: "writing", in_progress_chapter: 0, pending_rewrites: [] }); await this.store.signals.clearPendingCommit(); return { chapters: chapters.length }; }
+  async importText(path: string): Promise<{ chapters: number }> { const chapters = await importTextFile(path); if (!chapters.length) throw new Error("文本中没有可导入的章节"); const numbers = chapters.map((chapter) => chapter.chapter); if (new Set(numbers).size !== numbers.length || numbers.some((chapter) => chapter <= 0)) throw new Error("导入章节编号必须是唯一的正整数"); for (const chapter of chapters) { const content = `# ${chapter.title}\n\n${chapter.content}`; await this.store.drafts.saveFinalChapter(chapter.chapter, content); await this.store.versions.record(chapter.chapter, content, "import").catch(() => undefined); } for (const chapter of chapters) { await this.store.summaries.saveSummary({ chapter: chapter.chapter, summary: "导入章节", characters: [], key_events: [] }); await this.store.checkpoints.appendArtifact({ kind: "chapter", chapter: chapter.chapter }, "commit", `chapters/${String(chapter.chapter).padStart(2, "0")}.md`); } const words = chapters.reduce((sum, chapter) => sum + [...chapter.content.replace(/\s/g, "")].length, 0); await this.store.progress.save({ novel_name: "", phase: "writing", current_chapter: Math.max(...numbers) + 1, total_chapters: Math.max(...numbers), completed_chapters: numbers, total_word_count: words, chapter_word_counts: Object.fromEntries(chapters.map((chapter) => [String(chapter.chapter), [...chapter.content.replace(/\s/g, "")].length])), flow: "writing", in_progress_chapter: 0, pending_rewrites: [] }); await this.store.signals.clearPendingCommit(); return { chapters: chapters.length }; }
   export(options: ExportOptions) { return exportNovel(this.store, options); }
   simulate(options: { sources: string[] }) { return simulateSources(options.sources); }
 
@@ -115,7 +116,9 @@ export class Host {
     const injections = await this.consumeInjections();
     const loadedConstitution = await this.store.constitution.load().catch(() => null);
     const constitutionText = renderConstitutionText(loadedConstitution ?? emptyConstitution());
-    const finalPrompt = `${constitutionText ? constitutionText + "\n\n" : ""}${injections.length ? `${injections.map(text => `[用户干预] ${text}`).join("\n\n")}\n\n` : ""}${prompt}`;
+    const loadedSkillPacks = await this.store.skillpacks.load().catch(() => null);
+    const skillPackText = renderSkillPacks(effectiveSkillPacks(loadedSkillPacks ?? emptySkillPackFile()));
+    const finalPrompt = `${constitutionText ? constitutionText + "\n\n" : ""}${skillPackText ? skillPackText + "\n\n" : ""}${injections.length ? `${injections.map(text => `[用户干预] ${text}`).join("\n\n")}\n\n` : ""}${prompt}`;
     try {
       const stream = this.agent.run(finalPrompt, controller.signal);
       for await (const delta of stream) {

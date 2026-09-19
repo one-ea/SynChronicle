@@ -158,6 +158,14 @@ export function renderWebApp(): string {
       .panel-head span { color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; }
       .live-text { max-height: 220px; overflow: auto; font-size: 13px; line-height: 1.8; color: var(--muted); white-space: pre-wrap; word-break: break-word; }
       .reader { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 20px; align-items: start; }
+      .studio-rail { display: grid; grid-template-columns: 240px minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
+      .studio-list { display: grid; gap: 2px; max-height: calc(100vh - 210px); overflow: auto; }
+      .studio-list button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 34px; padding: 4px 8px; border: 0; border-radius: var(--btn-radius); background: transparent; color: var(--ink); font-size: 12.5px; text-align: left; }
+      .studio-list button:hover { background: var(--alpha-4); }
+      .studio-list button.active { background: var(--heat-8); box-shadow: inset 0 0 0 1px var(--heat-20); }
+      .studio-editor { width: 100%; min-height: 56vh; resize: vertical; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper); color: var(--ink); font-family: inherit; font-size: 14.5px; line-height: 1.9; padding: 16px; }
+      .studio-editor:focus { outline: 2px solid var(--heat-40, rgba(250, 93, 25, 0.4)); outline-offset: -1px; }
+      .studio-tools { display: grid; gap: 14px; }
       .tree-card { padding: 16px; }
       .tree { display: grid; gap: 1px; max-height: 70vh; overflow: auto; align-content: start; }
       .vol { margin: 12px 4px 4px; color: var(--faint); font-size: 10.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
@@ -202,6 +210,8 @@ export function renderWebApp(): string {
         .side-foot { display: none; }
         .stat-row { grid-template-columns: repeat(2, 1fr); }
         .grid, .reader { grid-template-columns: 1fr; }
+        .studio-rail { grid-template-columns: 190px minmax(0, 1fr); }
+        .studio-tools { grid-column: 1 / -1; }
         .tree { max-height: 40vh; }
         .main { padding: var(--space-5) var(--space-4) 56px; }
       }
@@ -212,6 +222,8 @@ export function renderWebApp(): string {
         .main { padding: var(--space-4) var(--space-4) calc(64px + env(safe-area-inset-bottom, 0px)); }
         .stat-row { grid-template-columns: repeat(2, 1fr); }
         .grid, .reader { grid-template-columns: 1fr; }
+        .studio-rail { grid-template-columns: 1fr; }
+        .studio-list { max-height: 32vh; }
         .tree { max-height: 32vh; }
         .page-head h1 { font-size: 22px; }
         .topbar { padding: 0 var(--space-4); }
@@ -253,6 +265,7 @@ export function renderWebApp(): string {
         </nav>
         <div class="side-label">内容</div>
         <nav class="side-nav">
+          <button type="button" data-view="studio" title="写作台"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="5" height="15" rx="1.5"/><rect x="9.5" y="4.5" width="5" height="15" rx="1.5"/><path d="M16.5 6l3.2.9-2.9 10.9"/></svg><span class="nv-t">写作台</span></button>
           <button type="button" data-view="reader" title="章节与大纲"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6.2C10.4 4.5 8 4 4 4v13.5c4 0 6.4.5 8 2.3 1.6-1.8 4-2.3 8-2.3V4c-4 0-6.4.5-8 2.2z"/><path d="M12 6.2v13.6"/></svg><span class="nv-t">章节与大纲</span><span class="nav-count" id="nav-count-chapters" hidden></span></button>
           <button type="button" data-view="entities" title="人物图谱"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="12" cy="18" r="3"/><line x1="8.5" y1="7.5" x2="15.5" y2="7.5"/><line x1="7.5" y1="8.5" x2="10.5" y2="15.5"/><line x1="16.5" y1="8.5" x2="13.5" y2="15.5"/></svg><span class="nv-t">人物图谱</span><span class="nav-count" id="nav-count-entities" hidden></span></button>
           <button type="button" data-view="records" title="运行记录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h9"/></svg><span class="nv-t">运行记录</span></button>
@@ -365,6 +378,18 @@ export function renderWebApp(): string {
                 <div class="rowlines" id="material-list" style="margin-top:6px"><div class="empty">暂无素材。</div></div>
               </div>
               <div class="card">
+                <div class="panel-head"><h3>书架（多书管理）</h3><span id="bookshelf-count">0 本</span></div>
+                <div class="rowlines" id="bookshelf-rows"><div class="empty">尚未配置模型，先连接引擎。</div></div>
+                <div class="steer-row" style="margin-top:10px"><div class="tf"><input id="new-book-title" placeholder=" " /><label for="new-book-title">新书名（独立工作区）</label></div><button id="book-create" class="btn btn-tonal" type="button">新建书</button></div>
+              </div>
+              <div class="card">
+                <div class="panel-head"><h3>技能包市场</h3><span id="skillpack-count">0 启用</span></div>
+                <div class="rowlines" id="skillpack-rows"><div class="empty">尚未配置模型，先连接引擎。</div></div>
+                <div class="tf" style="margin-top:10px"><input id="skillpack-name" placeholder=" " /><label for="skillpack-name">自定义包名称</label></div>
+                <div class="tf" style="margin-top:8px"><textarea id="skillpack-techniques" style="min-height:64px" placeholder=" "></textarea><label for="skillpack-techniques">写作技法（每行一条）</label></div>
+                <div class="actions" style="margin-top:10px"><small>启用的技法随宪法注入每轮生成。</small><button id="skillpack-create" class="btn btn-tonal" type="button">创建自定义包</button></div>
+              </div>
+              <div class="card">
                 <div class="panel-head"><h3>本书内容</h3><span id="book-phase">—</span></div>
                 <div class="rowlines" id="book-rows"><div class="empty">尚未配置模型，先连接引擎。</div></div>
               </div>
@@ -421,6 +446,10 @@ export function renderWebApp(): string {
             </div>
             <div id="platform-rows" class="rowlines" style="margin-top:8px"></div>
           </div>
+          <div id="versions-panel" class="card" style="margin-bottom:18px;background:var(--alpha-4);border:1px dashed var(--line);" hidden>
+            <div class="panel-head"><h4 style="margin:0">版本时光机（当前章节历史快照）</h4><span id="versions-meta">—</span></div>
+            <div id="versions-rows" class="rowlines" style="margin-top:8px"></div>
+          </div>
           <div class="reader">
             <aside class="card tree-card" aria-label="大纲树">
               <div class="panel-head"><h3 id="book-title">大纲</h3><span id="book-progress">—</span></div>
@@ -429,7 +458,7 @@ export function renderWebApp(): string {
             <article class="card" aria-label="章节内容">
               <header class="chapter-head">
                 <h2 id="ch-title">选择左侧章节开始阅读</h2>
-                <div style="display:flex;gap:8px;align-items:center"><span id="ch-status" class="chip small" hidden></span><span id="ch-tone" class="chip small" hidden></span><span id="ch-words" class="meta"></span><button id="safety-btn" class="btn btn-tonal" type="button" style="min-height:30px;padding:4px 12px;font-size:12px;" hidden>安全扫描</button><button id="fingerprint-btn" class="btn btn-tonal" type="button" style="min-height:30px;padding:4px 12px;font-size:12px;" hidden>AI 痕迹</button><button id="open-rewrite" class="btn btn-tonal" type="button" style="min-height:30px;padding:4px 12px;font-size:12px;" hidden>文风重构 / 去AI味</button><button id="open-arena" class="btn btn-tonal" type="button" style="min-height:30px;padding:4px 12px;font-size:12px;" hidden>A/B 双模型竞写</button><button id="open-branch" class="btn btn-tonal" type="button" style="min-height:30px;padding:4px 12px;font-size:12px;" hidden>剧情分支</button></div>
+                <div style="display:flex;gap:8px;align-items:center"><span id="ch-status" class="chip small" hidden></span><span id="ch-tone" class="chip small" hidden></span><span id="ch-words" class="meta"></span><button id="safety-btn" class="btn btn-tonal" type="button" style="min-height:30px;padding:4px 12px;font-size:12px;" hidden>安全扫描</button><button id="fingerprint-btn" class="btn btn-tonal" type="button" style="min-height:30px;padding:4px 12px;font-size:12px;" hidden>AI 痕迹</button><button id="versions-btn" class="btn btn-tonal" type="button" style="min-height:30px;padding:4px 12px;font-size:12px;" hidden>版本时光机</button><button id="open-rewrite" class="btn btn-tonal" type="button" style="min-height:30px;padding:4px 12px;font-size:12px;" hidden>文风重构 / 去AI味</button><button id="open-arena" class="btn btn-tonal" type="button" style="min-height:30px;padding:4px 12px;font-size:12px;" hidden>A/B 双模型竞写</button><button id="open-branch" class="btn btn-tonal" type="button" style="min-height:30px;padding:4px 12px;font-size:12px;" hidden>剧情分支</button></div>
               </header>
               <div id="arena-panel" class="card" style="margin:14px 0;background:var(--alpha-4);border:1px dashed var(--line);" hidden>
                 <div class="panel-head"><h4 style="margin:0">多模型同章 A/B 竞写 & 盲审对比</h4><span id="arena-status">就绪</span></div>
@@ -497,6 +526,40 @@ export function renderWebApp(): string {
               <div id="ch-review" class="review-block" hidden></div>
               <div id="ch-text" class="chapter-text"><div class="empty">章节正文将在这里展示。</div></div>
             </article>
+          </div>
+        </section>
+        <section class="page" data-page="studio" aria-label="写作台" hidden>
+          <div class="page-head">
+            <div><h1>三栏写作台</h1><p class="meta">目录 · 正文 · 工具同屏，编辑即归档版本。</p></div>
+            <div class="head-actions"><span id="studio-book-name" class="meta">—</span></div>
+          </div>
+          <div class="studio-rail">
+            <aside class="card tree-card" aria-label="章节目录">
+              <div class="panel-head"><h3>目录</h3><span id="studio-progress">—</span></div>
+              <div id="studio-list" class="studio-list"><div class="empty">尚未开始创作。</div></div>
+            </aside>
+            <article class="card" aria-label="正文编辑">
+              <header class="chapter-head">
+                <h2 id="studio-ch-title">选择左侧章节</h2>
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span id="studio-ch-status" class="chip small" hidden></span><span id="studio-words" class="meta">0 字</span><button id="studio-save" class="btn btn-filled" type="button" style="min-height:30px;padding:4px 14px;font-size:12px;" disabled>保存并归档版本</button></div>
+              </header>
+              <textarea id="studio-editor" class="studio-editor" aria-label="章节正文编辑器" placeholder="选择章节后在这里直接修改正文，保存时自动写入版本时光机。" disabled></textarea>
+            </article>
+            <aside class="studio-tools" aria-label="写作工具">
+              <div class="card">
+                <div class="panel-head"><h3>设定检索</h3><span class="meta">RRF</span></div>
+                <div class="steer-row"><div class="tf"><input id="studio-recall-query" placeholder=" " /><label for="studio-recall-query">检索设定 / 伏笔 / 技法</label></div><button id="studio-recall-run" class="btn btn-tonal" type="button">检索</button></div>
+                <div class="rowlines" id="studio-recall-rows" style="margin-top:8px"><div class="empty">输入关键词检索。</div></div>
+              </div>
+              <div class="card">
+                <div class="panel-head"><h3>版本时光机</h3><span id="studio-versions-meta">—</span></div>
+                <div class="rowlines" id="studio-versions-rows"><div class="empty">选择章节后展示历史版本。</div></div>
+              </div>
+              <div class="card">
+                <div class="panel-head"><h3>快捷质检</h3><span class="meta">本章</span></div>
+                <div class="actions" style="margin-top:8px"><small>AI 痕迹四信号扫描。</small><button id="studio-fingerprint" class="btn btn-tonal" type="button" style="min-height:32px;font-size:12px" disabled>AI 痕迹扫描</button></div>
+              </div>
+            </aside>
           </div>
         </section>
         <section class="page" data-page="entities" aria-label="人物图谱" hidden>
@@ -591,6 +654,7 @@ export function renderWebApp(): string {
     </div>
     <nav class="tabbar" aria-label="移动端主导航">
       <button type="button" data-view="overview" title="创作概览"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><rect x="13" y="13" width="7" height="7" rx="2"/></svg><span>概览</span></button>
+      <button type="button" data-view="studio" title="写作台"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4.5" width="5" height="15" rx="1.5"/><rect x="9.5" y="4.5" width="5" height="15" rx="1.5"/><path d="M16.5 6l3.2.9-2.9 10.9"/></svg><span>写作台</span></button>
       <button type="button" data-view="reader" title="章节与大纲"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6.2C10.4 4.5 8 4 4 4v13.5c4 0 6.4.5 8 2.3 1.6-1.8 4-2.3 8-2.3V4c-4 0-6.4.5-8 2.2z"/><path d="M12 6.2v13.6"/></svg><span>章节</span></button>
       <button type="button" data-view="entities" title="人物图谱"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="12" cy="18" r="3"/><line x1="8.5" y1="7.5" x2="15.5" y2="7.5"/><line x1="7.5" y1="8.5" x2="10.5" y2="15.5"/><line x1="16.5" y1="8.5" x2="13.5" y2="15.5"/></svg><span>图谱</span></button>
       <button type="button" data-view="records" title="运行记录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h9"/></svg><span>记录</span></button>
@@ -632,7 +696,7 @@ export function renderWebApp(): string {
       es.addEventListener('runtime', (e) => pushEvent(JSON.parse(e.data)));
       es.addEventListener('delta', (e) => appendDelta(JSON.parse(e.data).value));
       es.onerror = () => { if (sseErrored) { es.close(); startPolling(); } sseErrored = true; };
-      function showView(view) { document.querySelectorAll('.page').forEach((page) => { page.hidden = page.dataset.page !== view; }); document.querySelectorAll('[data-view]').forEach((button) => { if (button.dataset.view === view) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current'); }); if (view === 'reader') void loadBook(); }
+      function showView(view) { document.querySelectorAll('.page').forEach((page) => { page.hidden = page.dataset.page !== view; }); document.querySelectorAll('[data-view]').forEach((button) => { if (button.dataset.view === view) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current'); }); if (view === 'reader') void loadBook(); if (view === 'studio') void loadStudio(); }
       document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => showView(button.dataset.view)));
       function flatten(book) { const rows = []; for (const volume of book.volumes) for (const arc of volume.arcs) for (const chapter of arc.chapters) rows.push(chapter); return rows; }
       function rowPill(label, count, tone) { const pill = document.createElement('span'); pill.className = 'pill ' + tone; pill.textContent = count + ' ' + label; return pill; }
@@ -659,6 +723,8 @@ export function renderWebApp(): string {
            if (sfBtn) sfBtn.hidden = !view.text;
            const fpBtn = $('fingerprint-btn');
            if (fpBtn) fpBtn.hidden = !view.text;
+           const verBtn = $('versions-btn');
+           if (verBtn) verBtn.hidden = !view.text;
           const rwPanel = $('rewrite-panel');
           if (rwPanel) rwPanel.hidden = true;
           const arPanel = $('arena-panel');
@@ -1399,6 +1465,216 @@ export function renderWebApp(): string {
         } catch (err) { showNotice(err.message || '扫描失败'); }
       });
       function err0(res) { return res.error || '扫描失败'; }
+      async function loadBookshelf() {
+        const box = $('bookshelf-rows');
+        if (!box) return;
+        try {
+          const res = await (await fetch('/api/books')).json();
+          if (!res.configured) { box.replaceChildren(); const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '尚未配置模型，先连接引擎。'; box.append(empty); $('bookshelf-count').textContent = '0 本'; return; }
+          $('bookshelf-count').textContent = res.books.length + ' 本';
+          box.replaceChildren();
+          if (!res.books.length) { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '书架为空。'; box.append(empty); return; }
+          for (const book of res.books) {
+            const row = document.createElement('div'); row.className = 'rowline';
+            const left = document.createElement('div');
+            const name = document.createElement('span'); name.style.fontWeight = '600'; name.textContent = book.title + (book.active ? ' ·当前' : '');
+            const meta = document.createElement('small'); meta.style.color = 'var(--faint)'; meta.style.display = 'block'; meta.textContent = book.chapters + ' 章 · ' + formatNumber(book.words) + ' 字';
+            left.append(name, meta);
+            const right = document.createElement('button'); right.type = 'button'; right.className = 'btn btn-text'; right.style.minHeight = '30px'; right.style.fontSize = '12px'; right.textContent = book.active ? '编辑中' : '切换'; right.disabled = Boolean(book.active);
+            right.addEventListener('click', async () => {
+              try { await post('/api/books/switch', { id: book.id }); showNotice('已切换到《' + book.title + '》，刷新页面。', 'success'); setTimeout(() => location.reload(), 600); } catch (err) { showNotice(err.message || '切换失败'); }
+            });
+            row.append(left, right);
+            box.append(row);
+          }
+        } catch { /* 保持现有内容 */ }
+      }
+      $('book-create')?.addEventListener('click', async () => {
+        const title = $('new-book-title')?.value.trim();
+        if (!title) { showNotice('请填写新书名'); return; }
+        try {
+          await post('/api/books', { title });
+          if ($('new-book-title')) $('new-book-title').value = '';
+          showNotice('新书已创建，可在书架中切换。', 'success');
+          await loadBookshelf();
+        } catch (err) { showNotice(err.message || '创建失败'); }
+      });
+      async function loadSkillPacks() {
+        const box = $('skillpack-rows');
+        if (!box) return;
+        try {
+          const res = await (await fetch('/api/skillpacks')).json();
+          if (!res.configured) { box.replaceChildren(); const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '尚未配置模型，先连接引擎。'; box.append(empty); return; }
+          $('skillpack-count').textContent = res.enabledCount + ' 启用';
+          box.replaceChildren();
+          const packs = [...(res.builtin || []), ...(res.custom || [])];
+          for (const pack of packs) {
+            const row = document.createElement('div'); row.className = 'rowline';
+            const left = document.createElement('div');
+            const name = document.createElement('span'); name.style.fontWeight = '600'; name.textContent = pack.name;
+            const pill = document.createElement('span'); pill.className = 'pill ' + (pack.enabled ? 'ok' : 'muted'); pill.style.marginLeft = '6px'; pill.textContent = pack.enabled ? '启用' : '停用';
+            const desc = document.createElement('small'); desc.style.color = 'var(--faint)'; desc.style.display = 'block'; desc.textContent = pack.category + ' · ' + pack.techniqueCount + ' 条 · ' + (pack.description || pack.preview);
+            left.append(name, pill, desc);
+            const right = document.createElement('div'); right.style.display = 'flex'; right.style.gap = '6px';
+            const toggle = document.createElement('button'); toggle.type = 'button'; toggle.className = pack.enabled ? 'btn btn-text' : 'btn btn-tonal'; toggle.style.minHeight = '30px'; toggle.style.fontSize = '12px'; toggle.textContent = pack.enabled ? '停用' : '启用';
+            toggle.addEventListener('click', async () => {
+              try { await post('/api/skillpacks/toggle', { id: pack.id, enabled: !pack.enabled }); await loadSkillPacks(); } catch (err) { showNotice(err.message || '操作失败'); }
+            });
+            right.append(toggle);
+            if (String(pack.id).startsWith('custom-')) {
+              const del = document.createElement('button'); del.type = 'button'; del.className = 'btn btn-text'; del.style.minHeight = '30px'; del.style.fontSize = '12px'; del.textContent = '删除';
+              del.addEventListener('click', async () => {
+                try { const response = await fetch('/api/skillpacks/' + encodeURIComponent(pack.id), { method: 'DELETE' }); const data = await response.json(); if (!response.ok) throw new Error(data.error || '删除失败'); await loadSkillPacks(); showNotice('自定义包已删除。', 'success'); } catch (err) { showNotice(err.message || '删除失败'); }
+              });
+              right.append(del);
+            }
+            row.append(left, right);
+            box.append(row);
+          }
+        } catch { /* 保持现有内容 */ }
+      }
+      $('skillpack-create')?.addEventListener('click', async () => {
+        const name = $('skillpack-name')?.value.trim();
+        const techniques = ($('skillpack-techniques')?.value || '').split('\n').map((line) => line.trim()).filter(Boolean);
+        if (!name) { showNotice('请填写技能包名称'); return; }
+        if (!techniques.length) { showNotice('至少填写一条写作技法（每行一条）'); return; }
+        try {
+          await post('/api/skillpacks', { name, techniques });
+          if ($('skillpack-name')) $('skillpack-name').value = '';
+          if ($('skillpack-techniques')) $('skillpack-techniques').value = '';
+          showNotice('自定义技能包已创建。', 'success');
+          await loadSkillPacks();
+        } catch (err) { showNotice(err.message || '创建失败'); }
+      });
+      $('versions-btn')?.addEventListener('click', async () => {
+        const panel = $('versions-panel');
+        if (!panel) return;
+        panel.hidden = !panel.hidden;
+        if (!panel.hidden && currentChapter) await renderVersions(currentChapter, $('versions-rows'), $('versions-meta'));
+      });
+      async function renderVersions(chapter, rowsEl, metaEl) {
+        if (!rowsEl) return;
+        try {
+          const res = await (await fetch('/api/chapters/' + chapter + '/versions')).json();
+          if (!res.configured) { rowsEl.replaceChildren(); return; }
+          if (metaEl) metaEl.textContent = res.versions.length + ' 份快照';
+          rowsEl.replaceChildren();
+          if (!res.versions.length) { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '本章暂无历史版本，编辑保存后会自动归档。'; rowsEl.append(empty); return; }
+          for (const version of res.versions) {
+            const row = document.createElement('div'); row.className = 'rowline';
+            const left = document.createElement('div');
+            const head = document.createElement('span'); head.style.fontWeight = '600'; head.textContent = '#' + version.id + ' ' + version.sourceLabel;
+            const delta = document.createElement('span'); delta.className = 'pill ' + (version.delta === 0 ? 'muted' : version.delta > 0 ? 'ok' : 'bad'); delta.style.marginLeft = '6px'; delta.textContent = (version.delta > 0 ? '+' : '') + version.delta + ' 字';
+            const metaLine = document.createElement('small'); metaLine.style.color = 'var(--faint)'; metaLine.style.display = 'block'; metaLine.textContent = new Date(version.ts).toLocaleString('zh-CN') + ' · ' + formatNumber(version.words) + ' 字 · ' + (version.preview || '');
+            left.append(head, delta, metaLine);
+            const restore = document.createElement('button'); restore.type = 'button'; restore.className = 'btn btn-text'; restore.style.minHeight = '30px'; restore.style.fontSize = '12px'; restore.textContent = '恢复';
+            restore.addEventListener('click', async () => {
+              try {
+                await post('/api/chapters/' + chapter + '/versions/restore', { id: version.id });
+                showNotice('已恢复版本 #' + version.id + '，恢复前内容已自动备份。', 'success');
+                await renderVersions(chapter, rowsEl, metaEl);
+                if (currentChapter === chapter && !$('versions-panel').hidden) void loadChapter(chapter);
+                if (studioChapter === chapter) void loadStudioChapter(chapter);
+              } catch (err) { showNotice(err.message || '恢复失败'); }
+            });
+            row.append(left, restore);
+            rowsEl.append(row);
+          }
+        } catch { rowsEl.replaceChildren(); }
+      }
+      let studioChapter = 0;
+      async function loadStudio() {
+        try {
+          const data = await (await fetch('/api/book')).json();
+          const list = $('studio-list');
+          if (!data.configured || !data.book) { list.replaceChildren(); const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '尚未配置模型，先连接引擎。'; list.append(empty); return; }
+          const book = data.book;
+          $('studio-book-name').textContent = book.novelName || '未命名作品';
+          const rows = flatten(book);
+          $('studio-progress').textContent = book.completedChapters.length + '/' + (book.totalChapters || rows.length) + ' 章';
+          list.replaceChildren();
+          if (!rows.length) { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '尚未开始创作，先在概览页提交 brief。'; list.append(empty); return; }
+          for (const chapter of rows) {
+            const row = document.createElement('button'); row.type = 'button'; row.dataset.chapter = String(chapter.chapter); row.className = 'srow';
+            const dot = document.createElement('i'); dot.className = 'dot s-' + chapter.status; dot.setAttribute('aria-hidden', 'true');
+            const label = document.createElement('span'); label.textContent = chapter.chapter + '. ' + chapter.title;
+            const words = document.createElement('small'); words.textContent = chapter.wordCount ? formatNumber(chapter.wordCount) + '字' : '';
+            row.append(dot, label, words);
+            row.addEventListener('click', () => selectStudioChapter(chapter.chapter));
+            list.append(row);
+          }
+          const target = studioChapter || (rows.find((row) => row.status === 'in-progress') || [...rows].reverse().find((row) => row.status === 'completed') || rows[0]).chapter;
+          if (target) selectStudioChapter(target);
+        } catch { /* 保持现有内容 */ }
+      }
+      function selectStudioChapter(chapter) {
+        studioChapter = chapter;
+        document.querySelectorAll('#studio-list button').forEach((row) => { row.classList.toggle('active', Number(row.dataset.chapter) === chapter); });
+        void loadStudioChapter(chapter);
+      }
+      async function loadStudioChapter(chapter) {
+        const editor = $('studio-editor');
+        if (!editor) return;
+        try {
+          const res = await (await fetch('/api/chapters/' + chapter)).json();
+          if (!res.configured || !res.chapter) { editor.value = ''; editor.disabled = true; if ($('studio-save')) $('studio-save').disabled = true; return; }
+          const view = res.chapter;
+          $('studio-ch-title').textContent = view.title;
+          const statusChip = $('studio-ch-status');
+          if (statusChip) { statusChip.hidden = false; statusChip.textContent = chapterLabels[view.status] || view.status; }
+          editor.value = view.text || '';
+          editor.disabled = !view.text;
+          if ($('studio-save')) $('studio-save').disabled = !view.text;
+          if ($('studio-fingerprint')) $('studio-fingerprint').disabled = !view.text;
+          updateStudioWords();
+          await renderVersions(chapter, $('studio-versions-rows'), $('studio-versions-meta'));
+        } catch (err) { showNotice(err.message || '加载章节失败'); }
+      }
+      function updateStudioWords() {
+        const editor = $('studio-editor');
+        if (!editor) return;
+        const count = [...editor.value.replace(/\s/g, '')].length;
+        if ($('studio-words')) $('studio-words').textContent = formatNumber(count) + ' 字';
+      }
+      $('studio-editor')?.addEventListener('input', updateStudioWords);
+      $('studio-save')?.addEventListener('click', async () => {
+        const editor = $('studio-editor');
+        if (!editor || !studioChapter || !editor.value.trim()) return;
+        try {
+          await post('/api/chapters/' + studioChapter + '/text', { text: editor.value });
+          showNotice('第 ' + studioChapter + ' 章已保存并归档版本。', 'success');
+          await renderVersions(studioChapter, $('studio-versions-rows'), $('studio-versions-meta'));
+        } catch (err) { showNotice(err.message || '保存失败'); }
+      });
+      $('studio-recall-run')?.addEventListener('click', async () => {
+        const query = $('studio-recall-query')?.value.trim();
+        const box = $('studio-recall-rows');
+        if (!box) return;
+        if (!query) { showNotice('输入检索关键词'); return; }
+        try {
+          const res = await (await fetch('/api/recall?q=' + encodeURIComponent(query))).json();
+          box.replaceChildren();
+          if (!res.hits || !res.hits.length) { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = '没有命中的设定。'; box.append(empty); return; }
+          for (const hit of res.hits.slice(0, 6)) {
+            const row = document.createElement('div'); row.className = 'rowline';
+            const left = document.createElement('div');
+            const kind = document.createElement('span'); kind.className = 'pill muted'; kind.textContent = hit.kind;
+            const text = document.createElement('small'); text.style.display = 'block'; text.style.color = 'var(--muted)'; text.textContent = hit.source + ' · ' + (hit.snippet || '').slice(0, 60);
+            left.append(kind, text);
+            row.append(left);
+            box.append(row);
+          }
+        } catch { box.replaceChildren(); }
+      });
+      $('studio-fingerprint')?.addEventListener('click', async () => {
+        if (!studioChapter) return;
+        try {
+          const res = await (await fetch('/api/ai-fingerprint?chapter=' + studioChapter)).json();
+          if (!res.configured || !res.fingerprint) { showNotice(res.error || '扫描失败'); return; }
+          const f = res.fingerprint;
+          showNotice('第 ' + studioChapter + ' 章 AI 痕迹风险 ' + f.riskScore + '/100（排比 ' + f.signals.parallelism + ' · 工整 ' + f.signals.uniformity + ' · 模板 ' + f.signals.templated + ' · 陈词 ' + f.signals.summaryCliche + '）。' + res.advice, f.riskScore >= 60 ? 'warn' : 'success');
+        } catch (err) { showNotice(err.message || '扫描失败'); }
+      });
       async function loadEntities() {
         try {
           const res = await (await fetch('/api/entities')).json();
@@ -1477,6 +1753,8 @@ export function renderWebApp(): string {
       loadCostPreview();
       loadMaterials();
       loadConstitution();
+      loadBookshelf();
+      loadSkillPacks();
       loadBookSummary();
     </script>
   </body>

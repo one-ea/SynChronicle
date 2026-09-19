@@ -270,4 +270,17 @@ describe("Host inject", () => {
     expect(first).toContain("[用户干预] 只送一次");
     expect(second).not.toContain("只送一次");
   });
+
+  it("injects enabled skill packs as a [写作技法] block and skips them when disabled", async () => {
+    const { value, runtimeAgent } = await host();
+    await value.store.skillpacks.toggle("golden-opening", true);
+    await value.continue("继续");
+    const withPack = (runtimeAgent.run as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string;
+    expect(withPack).toContain("[写作技法]");
+    expect(withPack).toContain("# 黄金开篇");
+    await value.store.skillpacks.toggle("golden-opening", false);
+    await value.continue("继续");
+    const withoutPack = (runtimeAgent.run as ReturnType<typeof vi.fn>).mock.calls[1]?.[0] as string;
+    expect(withoutPack).not.toContain("[写作技法]");
+  });
 });

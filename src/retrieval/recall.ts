@@ -1,5 +1,6 @@
 import { bm25Search } from "./bm25.js";
 import { cosineSimilarity, embedTexts, type EmbeddingConfig } from "./embedding.js";
+import { effectiveSkillPacks } from "../domain/skillpack.js";
 import type { Store } from "../store/index.js";
 
 /**
@@ -8,7 +9,7 @@ import type { Store } from "../store/index.js";
  * embedding 可用则向量优先，失败回落 BM25。零新增依赖。
  */
 
-export type RecallKind = "entity" | "summary" | "foreshadow" | "material" | "constitution";
+export type RecallKind = "entity" | "summary" | "foreshadow" | "material" | "constitution" | "skillpack";
 
 export interface RecallDoc { id: number; kind: RecallKind; source: string; text: string }
 export interface RecallHit { kind: RecallKind; source: string; score: number; snippet: string }
@@ -55,6 +56,13 @@ export async function buildRecallCorpus(store: Store): Promise<RecallDoc[]> {
     const groups: Array<[string, string[]]> = [["世界规则", constitution.worldRules], ["能力代价", constitution.abilityCosts], ["禁写信息", constitution.forbiddenInfo], ["人物行为边界", constitution.characterBoundaries]];
     for (const [label, rules] of groups) for (const rule of rules) docs.push({ id: docs.length, kind: "constitution", source: label, text: `[宪法:${label}] ${rule}` });
     for (const reveal of constitution.secretReveals) docs.push({ id: docs.length, kind: "constitution", source: "秘密揭晓计划", text: `[宪法:秘密] 「${reveal.secret}」计划于${reveal.revealAt}揭晓` });
+  }
+
+  const skillPackFile = await store.skillpacks.load().catch(() => null);
+  if (skillPackFile) {
+    for (const pack of effectiveSkillPacks(skillPackFile)) {
+      for (const technique of pack.techniques) docs.push({ id: docs.length, kind: "skillpack", source: pack.name, text: `[技法:${pack.name}] ${technique}` });
+    }
   }
 
   const foreshadowStore = (store as Store & { foreshadows?: { load(): Promise<{ items: Array<{ title: string; description: string; type: string; stage: string }> }> } }).foreshadows;
