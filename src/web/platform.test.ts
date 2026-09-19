@@ -193,4 +193,18 @@ describe("p10-a platform registration", () => {
       expect(shelf.entries.some((entry: { id: string }) => entry.id === "novel")).toBe(false);
     } finally { await handle.close(); await rm(dir, { recursive: true, force: true }); if (previousKey === undefined) delete process.env.MASTER_KEY; else process.env.MASTER_KEY = previousKey; }
   });
+
+  it("refuses commercial mode with sqlite database url at cli startup", async () => {
+    const previousMode = process.env.MODE;
+    const previousDb = process.env.DATABASE_URL;
+    process.env.MODE = "commercial";
+    process.env.DATABASE_URL = "sqlite:data/synchronicle.db";
+    try {
+      const { dispatch } = await import("../cli/dispatch.js");
+      await expect(dispatch({ command: "start", configPath: "", headless: false, web: true, port: 3999, prompt: "", promptFile: "", args: [] })).rejects.toThrow("postgres://");
+    } finally {
+      if (previousMode === undefined) delete process.env.MODE; else process.env.MODE = previousMode;
+      if (previousDb === undefined) delete process.env.DATABASE_URL; else process.env.DATABASE_URL = previousDb;
+    }
+  });
 });
