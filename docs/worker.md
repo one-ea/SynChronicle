@@ -75,6 +75,7 @@ EDGE_RELAY_TOKEN=<与 INTERNAL_TOKEN 相同>
 | 对话式生成 | 支持（渠道直连流式 + 计费） | 支持 |
 | 两段式流水线（策划→成章） | 支持（agent=compose 计费） | 支持（多智能体完整版） |
 | 一致性记忆（角色/伏笔/前文） | 支持（BM25 + schema 兼容） | 支持 |
+| 章末摘要/弧级评审 | 支持（agent=review 计费） | 支持 |
 | 自动驾驶/Steer/多智能体 | 未支持 | 支持 |
 | 文件导入导出 | txt 导入/导出（R2 可选存储） | 支持（含 EPUB） |
 
@@ -113,4 +114,11 @@ EDGE_RELAY_TOKEN=<与 INTERNAL_TOKEN 相同>
   - 【登场角色】相关角色卡 + 最新情绪/目标（BM25 排序取前 6）
   - 【未回收伏笔】非 resolved 伏笔按紧迫度排序（取前 8）
 
-后续里程碑：C8 卷级评审与摘要自动化（Editor 角色边缘化）。
+### Editor 评审（P11-C8）
+
+- compose 每章写完自动调用模型生成 120 字摘要，替换大纲占位写入 `summaries/NN.json`（摘要 usage 计入当次结算）。
+- `POST /api/review {bookId, from?, to?, premise?, model?}`：弧级评审——汇编区间内章节摘要（缺失时回退正文前 160 字），要求模型输出 JSON 报告（score/verdict/issues/suggestions，容错解析 markdown 围栏，解析失败降级为纯文本 verdict），报告持久化 `meta/reviews.json`，商用按 `agent=review` 结算。
+- `GET /api/reviews?book=<id>`：最近 20 份报告（新到旧）。
+- 评审开始/完成事件推送 RuntimeHub。
+
+后续里程碑：C9 边缘自动驾驶（compose × review 循环 + 分数阈值重写）。

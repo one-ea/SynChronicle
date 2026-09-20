@@ -166,8 +166,9 @@ describe("compose with memory injection", () => {
     expect(compose.status).toBe(200);
     await readAll(compose.body as ReadableStream<Uint8Array>);
 
-    // 第 2 章的 system prompt 应含记忆块：角色状态 + 未回收伏笔 + 第 1 章摘要（来自导入 summaries？导入不写摘要，本章写完后才有）
-    const chapterTwoPrompt = systemPrompts[1] ?? "";
+    // 第 2 章写手 system prompt 应含记忆块（过滤掉穿插的摘要/评审调用）
+    const writerPrompts = systemPrompts.filter((prompt) => prompt.includes("写手"));
+    const chapterTwoPrompt = writerPrompts[1] ?? "";
     expect(chapterTwoPrompt).toContain("【登场角色】");
     expect(chapterTwoPrompt).toContain("沈砚");
     expect(chapterTwoPrompt).toContain("【未回收伏笔】");

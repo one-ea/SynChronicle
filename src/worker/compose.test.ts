@@ -148,11 +148,11 @@ describe("worker compose pipeline", () => {
     const outline = JSON.parse((db.prepare("SELECT content FROM kv_files WHERE path = ?").get(`books/${bookId}/meta/outline.json`) as { content: string }).content) as Array<{ chapter: number; title: string }>;
     expect(outline.map((entry) => entry.title)).toEqual(["雨夜", "追猎"]);
 
-    // 商用结算：一次 compose 账本（plan + 2 章 usage 合并）
+    // 商用结算：一次 compose 账本（plan + 2 章 + 2 次章末摘要 usage 合并）
     const ledger = db.prepare("SELECT * FROM usage_ledger WHERE agent = 'compose'").all() as Array<{ tokens_in: number; tokens_out: number; cost_usd: number }>;
     expect(ledger).toHaveLength(1);
-    expect(ledger[0]!.tokens_in).toBe(2100);
-    expect(ledger[0]!.tokens_out).toBe(800);
+    expect(ledger[0]!.tokens_in).toBeGreaterThan(2100);
+    expect(ledger[0]!.tokens_out).toBeGreaterThan(800);
     expect(ledger[0]!.cost_usd).toBeGreaterThan(0);
 
     // 枢纽收到策划/章节事件

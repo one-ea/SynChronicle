@@ -15,6 +15,7 @@ import { scanSafety } from "../src/diag/safety.js";
 import { splitChapters } from "../src/runtime/imp/chapters.js";
 import { buildUpstreamRequest, collectUpstream, settleCost, sseEvent, CHAT_SYSTEM_PROMPT, type ChatTurn } from "./chat.js";
 import { buildChapterContext, renderMemoryBlock } from "./memory.js";
+import { SUMMARY_SYSTEM_PROMPT, REVIEW_SYSTEM_PROMPT, normalizeReport, type EdgeReviewReport } from "./review.js";
 import { D1KvStore, type Env } from "./types.js";
 import { WorkerCrypto, issueToken, verifyToken, maskKey, toHex, pbkdf2Hex } from "./crypto.js";
 import { RuntimeHub } from "./object.js";
@@ -275,6 +276,10 @@ async function route(request: Request, ctx: Ctx): Promise<Response> {
     if (method === "GET") return foreshadowsList(ctx, url.searchParams.get("book") ?? "");
     if (method === "POST") return foreshadowUpsert(request, ctx);
   }
+
+  // Editor 评审（P11-C8）：弧级报告与列表
+  if (method === "POST" && path === "/api/review") return review(request, ctx);
+  if (method === "GET" && path === "/api/reviews") return reviewsList(ctx, url.searchParams.get("book") ?? "");
 
   return fail("接口不存在（自动驾驶/Steer 等完整引擎仍需 Node 主线）", 404);
 }
@@ -938,6 +943,16 @@ async function compose(request: Request, ctx: Ctx): Promise<Response> {
             const words = [...chapterText.text.replace(/\s/g, "")].length;
             await ctx.kv.set(`books/${bookId}/chapters/${String(item.chapter).padStart(2, "0")}.md`, `# ${item.title}\n\n${chapterText.text}`);
             await ctx.kv.set(`books/${bookId}/summaries/${String(item.chapter).padStart(2, "0")}.json`, JSON.stringify({ chapter: item.chapter, summary: item.outline.slice(0, 200), characters: [], key_events: [] }));
+            // C8 章末摘要自动化：模型生成高质量摘要替换大纲占位
+            const summaryText = await generateOnce(resolved, [
+              { role: "system", content: SUMMARY_SYSTEM_PROMPT },
+              { role: "user", content: `第 ${item.chapter} 章 ${item.title}\n\n${chapterText.text.slice(0, 6000)}` },
+            ]);
+            if (summaryText !== null && summaryText.text) {
+              await ctx.kv.set(`books/${bookId}/summaries/${String(item.chapter).padStart(2, "0")}.json`, JSON.stringify({ chapter: item.chapter, summary: summaryText.text.slice(0, 300), characters: [], key_events: [] }));
+              totalUsage.input += summaryText.usage.input;
+              totalUsage.output += summaryText.usage.output;
+            }
             await publish("runtime", { type: "system", message: `第 ${item.chapter} 章完成`, words });
           }
           // 进度/大纲/书架元数据落库
@@ -1048,6 +1063,82 @@ async function foreshadowUpsert(request: Request, ctx: Ctx): Promise<Response> {
     await ctx.kv.set(`books/${body.bookId}/meta/foreshadows.json`, JSON.stringify({ items, updatedAt: new Date().toISOString() }));
     await ctx.audit.log(ctx.user!.id, "foreshadow.upsert", `book:${body.bookId}`, { id: input.id, stage: input.stage });
     return json({ saved: true, foreshadow: record }, 201);
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : String(error), 400);
+  }
+}
+
+/** ---------- Editor 评审（P11-C8） ---------- */
+
+const ReviewBody = z.object({ bookId: z.string().trim().min(1).max(64), from: z.number().int().positive().optional(), to: z.number().int().positive().optional(), premise: z.string().trim().max(4000).optional(), model: z.string().trim().min(1).max(120).optional() });
+
+const REVIEWS_LIMIT = 20;
+
+async function loadReviews(ctx: Ctx, bookId: string): Promise<EdgeReviewReport[]> {
+  const raw = await ctx.kv.get(`books/${bookId}/meta/reviews.json`);
+  if (!raw) return [];
+  try { const parsed = JSON.parse(raw) as { reports?: EdgeReviewReport[] }; return Array.isArray(parsed.reports) ? parsed.reports : []; } catch { return []; }
+}
+
+async function reviewsList(ctx: Ctx, bookId: string): Promise<Response> {
+  if (!bookId) return json({ reports: [] });
+  const denied = await requireBookAccess(ctx, bookId);
+  if (denied) return denied;
+  const reports = await loadReviews(ctx, bookId);
+  return json({ reports: reports.slice(-REVIEWS_LIMIT).reverse() });
+}
+
+async function review(request: Request, ctx: Ctx): Promise<Response> {
+  try {
+    const body = ReviewBody.parse(await readBody(request));
+    const bookId = body.bookId;
+    const denied = await requireBookAccess(ctx, bookId);
+    if (denied) return denied;
+    const resolved = await resolveGenerationChannel(ctx, body.model);
+    if ("error" in resolved) return resolved.error;
+    if (ctx.mode === "commercial") {
+      const balance = await ctx.quota.balance(ctx.user!.id);
+      if (balance.remaining <= 0) return fail("额度已用尽，请兑换或联系管理员", 402);
+    }
+
+    // 汇编章节摘要（评审上下文）
+    const progressRaw = await ctx.kv.get(`books/${bookId}/meta/progress.json`);
+    const progress = progressRaw ? JSON.parse(progressRaw) as { completed_chapters?: number[]; novel_name?: string } : null;
+    const completed = (progress?.completed_chapters ?? []).filter((chapter) => chapter >= (body.from ?? 1) && chapter <= (body.to ?? Number.MAX_SAFE_INTEGER)).sort((a, b) => a - b);
+    if (!completed.length) return fail("没有可评审的已完成章节", 400);
+    const digest: string[] = [];
+    for (const chapter of completed) {
+      const summaryRaw = await ctx.kv.get(`books/${bookId}/summaries/${String(chapter).padStart(2, "0")}.json`);
+      let summary = "";
+      if (summaryRaw) {
+        try {
+          const parsed = JSON.parse(summaryRaw) as { summary?: unknown };
+          if (typeof parsed.summary === "string") summary = parsed.summary;
+        } catch { /* 忽略 */ }
+      }
+      if (typeof summary !== "string" || !summary) {
+        const text = await ctx.kv.get(`books/${bookId}/chapters/${String(chapter).padStart(2, "0")}.md`);
+        summary = text ? `${text.replace(/^#\s*[^\n]*\n+/, "").slice(0, 160)}…` : "（无摘要）";
+      }
+      digest.push(`第 ${chapter} 章：${summary}`);
+    }
+
+    const hub = ctx.env.RUNTIME.get(ctx.env.RUNTIME.idFromName(`${ctx.user!.id}:${bookId}`));
+    await hub.fetch(new Request("https://runtime/events", { method: "POST", headers: { "content-type": "application/json", "x-internal-token": ctx.env.INTERNAL_TOKEN ?? "" }, body: JSON.stringify({ event: "runtime", data: { type: "system", message: "弧级评审开始", chapters: completed.length } }) })).catch(() => undefined);
+
+    const result = await generateOnce(resolved, [
+      { role: "system", content: REVIEW_SYSTEM_PROMPT },
+      { role: "user", content: `作品：${progress?.novel_name || bookId}\n前提：${body.premise ?? "（未提供）"}\n\n各章摘要：\n${digest.join("\n")}` },
+    ]);
+    if (result === null) return fail("上游模型调用失败", 502);
+    const report = normalizeReport(result.text, completed, result.usage, new Date().toISOString());
+    await settleAndAudit(ctx, bookId, "review", resolved.model, result.usage);
+
+    const reviews = await loadReviews(ctx, bookId);
+    reviews.push(report);
+    await ctx.kv.set(`books/${bookId}/meta/reviews.json`, JSON.stringify({ reports: reviews.slice(-50), updatedAt: new Date().toISOString() }));
+    await hub.fetch(new Request("https://runtime/events", { method: "POST", headers: { "content-type": "application/json", "x-internal-token": ctx.env.INTERNAL_TOKEN ?? "" }, body: JSON.stringify({ event: "runtime", data: { type: "system", message: "弧级评审完成", score: report.score, verdict: report.verdict } }) })).catch(() => undefined);
+    return json({ reviewed: true, report }, 201);
   } catch (error) {
     return fail(error instanceof Error ? error.message : String(error), 400);
   }
