@@ -76,6 +76,7 @@ EDGE_RELAY_TOKEN=<与 INTERNAL_TOKEN 相同>
 | 两段式流水线（策划→成章） | 支持（agent=compose 计费） | 支持（多智能体完整版） |
 | 一致性记忆（角色/伏笔/前文） | 支持（BM25 + schema 兼容） | 支持 |
 | 章末摘要/弧级评审 | 支持（agent=review 计费） | 支持 |
+| 自动驾驶（评审×重写循环） | 支持（agent=autopilot 计费） | 支持 |
 | 自动驾驶/Steer/多智能体 | 未支持 | 支持 |
 | 文件导入导出 | txt 导入/导出（R2 可选存储） | 支持（含 EPUB） |
 
@@ -121,4 +122,13 @@ EDGE_RELAY_TOKEN=<与 INTERNAL_TOKEN 相同>
 - `GET /api/reviews?book=<id>`：最近 20 份报告（新到旧）。
 - 评审开始/完成事件推送 RuntimeHub。
 
-后续里程碑：C9 边缘自动驾驶（compose × review 循环 + 分数阈值重写）。
+### 边缘自动驾驶（P11-C9）
+
+- `POST /api/autopilot {bookId, premise, chapters?, wordsPerChapter?, scoreThreshold?=85, maxRewrites?=1, model?}`：
+  - 第一弧：策划 → 带记忆写作 → 章末摘要 → 落库（复用 compose 的 runArc）
+  - 评审循环：弧级评审得分 < 阈值时，取 issues 中的高/中严重章节（最多 3 章）带原文与意见重写，再评审；最多 `maxRewrites` 轮
+  - SSE 事件流：`plan` → `delta` → `review`（每轮得分）→ `rewrite`（重写章节）→ `done`（finalScore/passed）
+  - 全程 usage 合并为一条 `agent=autopilot` 账本结算；枢纽发布每轮事件
+- 组合使用：autopilot 完成后 `POST /api/publish`（商用安全闸）→ 书城可见。
+
+后续里程碑：C10 SPA 控制台边缘化（webui 接入 stream/chat/compose/autopilot）。

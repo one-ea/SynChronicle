@@ -281,6 +281,9 @@ async function route(request: Request, ctx: Ctx): Promise<Response> {
   if (method === "POST" && path === "/api/review") return review(request, ctx);
   if (method === "GET" && path === "/api/reviews") return reviewsList(ctx, url.searchParams.get("book") ?? "");
 
+  // 边缘自动驾驶（P11-C9）：compose × review 循环 + 阈值重写
+  if (method === "POST" && path === "/api/autopilot") return autopilot(request, ctx);
+
   return fail("接口不存在（自动驾驶/Steer 等完整引擎仍需 Node 主线）", 404);
 }
 
@@ -885,6 +888,81 @@ export function parsePlan(text: string, expected: number): Array<{ chapter: numb
   return entries.slice(0, expected);
 }
 
+interface ArcOptions { premise: string; chapters: number; wordsPerChapter: number }
+interface ArcSinks { enqueue(chunk: Uint8Array): void; publish(event: string, data: unknown): Promise<void> }
+interface ArcResult { planned: Array<{ chapter: number; title: string; outline: string }>; completed: PipelineChapter[]; totalUsage: { input: number; output: number } }
+
+/** 策划 → 逐章成文 → 章末摘要 → 进度/大纲落库（compose 与 autopilot 共用）。 */
+async function runArc(ctx: Ctx, resolved: ResolvedChannel, bookId: string, options: ArcOptions, sinks: ArcSinks): Promise<ArcResult | null> {
+  const { premise, wordsPerChapter } = options;
+  await sinks.publish("runtime", { type: "system", message: "策划开始", model: resolved.model, chapters: options.chapters });
+  const planMessages = [
+    { role: "system", content: "你是长篇小说策划。只输出章节计划，每章一行标题行，格式严格为：第 N 章｜标题，随后缩进列出 2-3 条剧情要点。不输出其他内容。" },
+    { role: "user", content: `创作需求：${premise}\n请规划 ${options.chapters} 章的章节计划。` },
+  ];
+  const plan = await generateOnce(resolved, planMessages);
+  if (plan === null) { await sinks.publish("runtime", { type: "error", message: "上游模型调用失败" }); return null; }
+  const planned = parsePlan(plan.text, options.chapters);
+  if (!planned.length) { await sinks.publish("runtime", { type: "error", message: "策划输出无法解析章节计划" }); return null; }
+  await sinks.publish("runtime", { type: "system", message: "策划完成", planned: planned.length, usage: plan.usage });
+
+  const completed: PipelineChapter[] = [];
+  const totalUsage = { input: plan.usage.input, output: plan.usage.output };
+  for (const item of planned) {
+    await sinks.publish("runtime", { type: "system", message: `第 ${item.chapter} 章开始`, title: item.title });
+    const memory = await buildChapterContext(ctx.kv, bookId, item.chapter, `${item.title} ${item.outline}`);
+    const memoryBlock = renderMemoryBlock(memory);
+    const writeMessages = [
+      { role: "system", content: `你是长篇小说写手。依据大纲撰写本章正文，约 ${wordsPerChapter} 字。直接输出正文，不写章节标题，不复述大纲。${memoryBlock ? `\n\n${memoryBlock}` : ""}` },
+      { role: "user", content: `作品前提：${premise}\n\n本章大纲（第 ${item.chapter} 章 ${item.title}）：\n${item.outline}` },
+    ];
+    const chapterText = await generateOnce(resolved, writeMessages, async (delta) => {
+      sinks.enqueue(sseEvent("delta", { chapter: item.chapter, value: delta }));
+      await sinks.publish("delta", { chapter: item.chapter, value: delta });
+    });
+    if (chapterText === null) { sinks.enqueue(sseEvent("error", { message: `第 ${item.chapter} 章生成失败` })); continue; }
+    completed.push({ chapter: item.chapter, title: item.title, outline: item.outline, text: `# ${item.title}\n\n${chapterText.text}`, usage: chapterText.usage });
+    totalUsage.input += chapterText.usage.input;
+    totalUsage.output += chapterText.usage.output;
+    const words = [...chapterText.text.replace(/\s/g, "")].length;
+    await ctx.kv.set(`books/${bookId}/chapters/${String(item.chapter).padStart(2, "0")}.md`, `# ${item.title}\n\n${chapterText.text}`);
+    await ctx.kv.set(`books/${bookId}/summaries/${String(item.chapter).padStart(2, "0")}.json`, JSON.stringify({ chapter: item.chapter, summary: item.outline.slice(0, 200), characters: [], key_events: [] }));
+    // 章末摘要自动化：模型生成高质量摘要替换大纲占位
+    const summaryText = await generateOnce(resolved, [
+      { role: "system", content: SUMMARY_SYSTEM_PROMPT },
+      { role: "user", content: `第 ${item.chapter} 章 ${item.title}\n\n${chapterText.text.slice(0, 6000)}` },
+    ]);
+    if (summaryText !== null && summaryText.text) {
+      await ctx.kv.set(`books/${bookId}/summaries/${String(item.chapter).padStart(2, "0")}.json`, JSON.stringify({ chapter: item.chapter, summary: summaryText.text.slice(0, 300), characters: [], key_events: [] }));
+      totalUsage.input += summaryText.usage.input;
+      totalUsage.output += summaryText.usage.output;
+    }
+    await sinks.publish("runtime", { type: "system", message: `第 ${item.chapter} 章完成`, words });
+  }
+  // 进度/大纲落库
+  const numbers = completed.map((item) => item.chapter);
+  const wordCount = completed.reduce((sum, item) => sum + [...item.text.replace(/\s/g, "")].length, 0);
+  const progressRaw = await ctx.kv.get(`books/${bookId}/meta/progress.json`);
+  const previous = progressRaw ? JSON.parse(progressRaw) as { completed_chapters?: number[]; total_word_count?: number; novel_name?: string } : null;
+  const mergedChapters = [...new Set([...(previous?.completed_chapters ?? []), ...numbers])].sort((a, b) => a - b);
+  await ctx.kv.set(`books/${bookId}/meta/progress.json`, JSON.stringify({
+    novel_name: previous?.novel_name ?? "", phase: "writing", current_chapter: Math.max(...mergedChapters, 0) + 1, total_chapters: Math.max(...mergedChapters, 0),
+    completed_chapters: mergedChapters, total_word_count: (previous?.total_word_count ?? 0) + wordCount,
+    chapter_word_counts: Object.fromEntries(completed.map((item) => [String(item.chapter), [...item.text.replace(/\s/g, "")].length])),
+    flow: "writing", in_progress_chapter: 0, pending_rewrites: [],
+  }));
+  const outlineRaw = await ctx.kv.get(`books/${bookId}/meta/outline.json`);
+  const outline = outlineRaw ? JSON.parse(outlineRaw) as Array<Record<string, unknown>> : [];
+  for (const item of completed) {
+    const existing = outline.findIndex((entry) => entry.chapter === item.chapter);
+    const entry = { chapter: item.chapter, title: item.title, scenes: [], hook: item.outline.slice(0, 120) };
+    if (existing >= 0) outline[existing] = entry; else outline.push(entry);
+  }
+  outline.sort((a, b) => Number(a.chapter) - Number(b.chapter));
+  await ctx.kv.set(`books/${bookId}/meta/outline.json`, JSON.stringify(outline));
+  return { planned, completed, totalUsage };
+}
+
 async function compose(request: Request, ctx: Ctx): Promise<Response> {
   try {
     const body = ComposeBody.parse(await readBody(request));
@@ -905,81 +983,18 @@ async function compose(request: Request, ctx: Ctx): Promise<Response> {
       body: JSON.stringify({ event, data }),
     })).then(() => undefined, () => undefined);
 
-    // 阶段一：策划（大纲 + 每章要点）
-    await publish("runtime", { type: "system", message: "策划开始", model: resolved.model, chapters: body.chapters });
-    const planMessages = [
-      { role: "system", content: "你是长篇小说策划。只输出章节计划，每章一行标题行，格式严格为：第 N 章｜标题，随后缩进列出 2-3 条剧情要点。不输出其他内容。" },
-      { role: "user", content: `创作需求：${body.premise}\n请规划 ${body.chapters} 章的章节计划。` },
-    ];
-    const plan = await generateOnce(resolved, planMessages);
-    if (plan === null) { await publish("runtime", { type: "error", message: "上游模型调用失败" }); return fail("上游模型调用失败", 502); }
-    const planned = parsePlan(plan.text, body.chapters);
-    if (!planned.length) { await publish("runtime", { type: "error", message: "策划输出无法解析章节计划" }); return fail("策划输出无法解析章节计划", 502); }
-    await publish("runtime", { type: "system", message: "策划完成", planned: planned.length, usage: plan.usage });
-
-    // 阶段二：逐章成文（流式增量推送到 SSE 与枢纽）
-    const completed: PipelineChapter[] = [];
-    const totalUsage = { input: plan.usage.input, output: plan.usage.output };
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         try {
-          controller.enqueue(sseEvent("plan", { chapters: planned.map((item) => ({ chapter: item.chapter, title: item.title })), usage: plan.usage }));
-          for (const item of planned) {
-            await publish("runtime", { type: "system", message: `第 ${item.chapter} 章开始`, title: item.title });
-            const memory = await buildChapterContext(ctx.kv, bookId, item.chapter, `${item.title} ${item.outline}`);
-            const memoryBlock = renderMemoryBlock(memory);
-            const writeMessages = [
-              { role: "system", content: `你是长篇小说写手。依据大纲撰写本章正文，约 ${body.wordsPerChapter} 字。直接输出正文，不写章节标题，不复述大纲。${memoryBlock ? `\n\n${memoryBlock}` : ""}` },
-              { role: "user", content: `作品前提：${body.premise}\n\n本章大纲（第 ${item.chapter} 章 ${item.title}）：\n${item.outline}` },
-            ];
-            const chapterText = await generateOnce(resolved, writeMessages, async (delta) => {
-              controller.enqueue(sseEvent("delta", { chapter: item.chapter, value: delta }));
-              await publish("delta", { chapter: item.chapter, value: delta });
-            });
-            if (chapterText === null) { controller.enqueue(sseEvent("error", { message: `第 ${item.chapter} 章生成失败` })); continue; }
-            completed.push({ chapter: item.chapter, title: item.title, outline: item.outline, text: `# ${item.title}\n\n${chapterText.text}`, usage: chapterText.usage });
-            totalUsage.input += chapterText.usage.input;
-            totalUsage.output += chapterText.usage.output;
-            const words = [...chapterText.text.replace(/\s/g, "")].length;
-            await ctx.kv.set(`books/${bookId}/chapters/${String(item.chapter).padStart(2, "0")}.md`, `# ${item.title}\n\n${chapterText.text}`);
-            await ctx.kv.set(`books/${bookId}/summaries/${String(item.chapter).padStart(2, "0")}.json`, JSON.stringify({ chapter: item.chapter, summary: item.outline.slice(0, 200), characters: [], key_events: [] }));
-            // C8 章末摘要自动化：模型生成高质量摘要替换大纲占位
-            const summaryText = await generateOnce(resolved, [
-              { role: "system", content: SUMMARY_SYSTEM_PROMPT },
-              { role: "user", content: `第 ${item.chapter} 章 ${item.title}\n\n${chapterText.text.slice(0, 6000)}` },
-            ]);
-            if (summaryText !== null && summaryText.text) {
-              await ctx.kv.set(`books/${bookId}/summaries/${String(item.chapter).padStart(2, "0")}.json`, JSON.stringify({ chapter: item.chapter, summary: summaryText.text.slice(0, 300), characters: [], key_events: [] }));
-              totalUsage.input += summaryText.usage.input;
-              totalUsage.output += summaryText.usage.output;
-            }
-            await publish("runtime", { type: "system", message: `第 ${item.chapter} 章完成`, words });
-          }
-          // 进度/大纲/书架元数据落库
-          const numbers = completed.map((item) => item.chapter);
-          const wordCount = completed.reduce((sum, item) => sum + [...item.text.replace(/\s/g, "")].length, 0);
-          const progressRaw = await ctx.kv.get(`books/${bookId}/meta/progress.json`);
-          const previous = progressRaw ? JSON.parse(progressRaw) as { completed_chapters?: number[]; total_word_count?: number; novel_name?: string } : null;
-          const mergedChapters = [...new Set([...(previous?.completed_chapters ?? []), ...numbers])].sort((a, b) => a - b);
-          await ctx.kv.set(`books/${bookId}/meta/progress.json`, JSON.stringify({
-            novel_name: previous?.novel_name ?? "", phase: "writing", current_chapter: Math.max(...mergedChapters, 0) + 1, total_chapters: Math.max(...mergedChapters, 0),
-            completed_chapters: mergedChapters, total_word_count: (previous?.total_word_count ?? 0) + wordCount,
-            chapter_word_counts: Object.fromEntries(completed.map((item) => [String(item.chapter), [...item.text.replace(/\s/g, "")].length])),
-            flow: "writing", in_progress_chapter: 0, pending_rewrites: [],
-          }));
-          const outlineRaw = await ctx.kv.get(`books/${bookId}/meta/outline.json`);
-          const outline = outlineRaw ? JSON.parse(outlineRaw) as Array<Record<string, unknown>> : [];
-          for (const item of completed) {
-            const existing = outline.findIndex((entry) => entry.chapter === item.chapter);
-            const entry = { chapter: item.chapter, title: item.title, scenes: [], hook: item.outline.slice(0, 120) };
-            if (existing >= 0) outline[existing] = entry; else outline.push(entry);
-          }
-          outline.sort((a, b) => Number(a.chapter) - Number(b.chapter));
-          await ctx.kv.set(`books/${bookId}/meta/outline.json`, JSON.stringify(outline));
-
-          const costUsd = await settleAndAudit(ctx, bookId, "compose", resolved.model, totalUsage);
-          controller.enqueue(sseEvent("done", { chapters: completed.map((item) => item.chapter), usage: totalUsage, costUsd }));
-          await publish("runtime", { type: "system", message: "流水线完成", chapters: numbers, usage: totalUsage, costUsd });
+          const result = await runArc(ctx, resolved, bookId, { premise: body.premise, chapters: body.chapters, wordsPerChapter: body.wordsPerChapter }, {
+            enqueue: (chunk) => controller.enqueue(chunk),
+            publish,
+          });
+          if (result === null) { controller.enqueue(sseEvent("error", { message: "弧生成失败" })); return; }
+          controller.enqueue(sseEvent("plan", { chapters: result.planned.map((item) => ({ chapter: item.chapter, title: item.title })), usage: result.totalUsage }));
+          const costUsd = await settleAndAudit(ctx, bookId, "compose", resolved.model, result.totalUsage);
+          controller.enqueue(sseEvent("done", { chapters: result.completed.map((item) => item.chapter), usage: result.totalUsage, costUsd }));
+          await publish("runtime", { type: "system", message: "流水线完成", chapters: result.completed.map((item) => item.chapter), usage: result.totalUsage, costUsd });
         } catch (error) {
           controller.enqueue(sseEvent("error", { message: error instanceof Error ? error.message : String(error) }));
         } finally {
@@ -1100,45 +1115,165 @@ async function review(request: Request, ctx: Ctx): Promise<Response> {
       const balance = await ctx.quota.balance(ctx.user!.id);
       if (balance.remaining <= 0) return fail("额度已用尽，请兑换或联系管理员", 402);
     }
+    const outcome = await runReviewCore(ctx, resolved, bookId, { from: body.from, to: body.to, premise: body.premise });
+    if ("error" in outcome) return outcome.error;
+    return json({ reviewed: true, report: outcome.report }, 201);
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : String(error), 400);
+  }
+}
 
-    // 汇编章节摘要（评审上下文）
-    const progressRaw = await ctx.kv.get(`books/${bookId}/meta/progress.json`);
-    const progress = progressRaw ? JSON.parse(progressRaw) as { completed_chapters?: number[]; novel_name?: string } : null;
-    const completed = (progress?.completed_chapters ?? []).filter((chapter) => chapter >= (body.from ?? 1) && chapter <= (body.to ?? Number.MAX_SAFE_INTEGER)).sort((a, b) => a - b);
-    if (!completed.length) return fail("没有可评审的已完成章节", 400);
-    const digest: string[] = [];
-    for (const chapter of completed) {
-      const summaryRaw = await ctx.kv.get(`books/${bookId}/summaries/${String(chapter).padStart(2, "0")}.json`);
-      let summary = "";
-      if (summaryRaw) {
-        try {
-          const parsed = JSON.parse(summaryRaw) as { summary?: unknown };
-          if (typeof parsed.summary === "string") summary = parsed.summary;
-        } catch { /* 忽略 */ }
-      }
-      if (typeof summary !== "string" || !summary) {
-        const text = await ctx.kv.get(`books/${bookId}/chapters/${String(chapter).padStart(2, "0")}.md`);
-        summary = text ? `${text.replace(/^#\s*[^\n]*\n+/, "").slice(0, 160)}…` : "（无摘要）";
-      }
-      digest.push(`第 ${chapter} 章：${summary}`);
+interface ReviewOutcome { report: EdgeReviewReport }
+
+/** 评审核心：摘要汇编 → 模型评审 → 报告持久化 + 结算 + 枢纽事件（review 与 autopilot 共用）。 */
+async function runReviewCore(ctx: Ctx, resolved: ResolvedChannel, bookId: string, options: { from?: number; to?: number; premise?: string }): Promise<ReviewOutcome | { error: Response }> {
+  const progressRaw = await ctx.kv.get(`books/${bookId}/meta/progress.json`);
+  const progress = progressRaw ? JSON.parse(progressRaw) as { completed_chapters?: number[]; novel_name?: string } : null;
+  const completed = (progress?.completed_chapters ?? []).filter((chapter) => chapter >= (options.from ?? 1) && chapter <= (options.to ?? Number.MAX_SAFE_INTEGER)).sort((a, b) => a - b);
+  if (!completed.length) return { error: fail("没有可评审的已完成章节", 400) };
+  const digest: string[] = [];
+  for (const chapter of completed) {
+    const summaryRaw = await ctx.kv.get(`books/${bookId}/summaries/${String(chapter).padStart(2, "0")}.json`);
+    let summary = "";
+    if (summaryRaw) {
+      try {
+        const parsed = JSON.parse(summaryRaw) as { summary?: unknown };
+        if (typeof parsed.summary === "string") summary = parsed.summary;
+      } catch { /* 忽略 */ }
+    }
+    if (typeof summary !== "string" || !summary) {
+      const text = await ctx.kv.get(`books/${bookId}/chapters/${String(chapter).padStart(2, "0")}.md`);
+      summary = text ? `${text.replace(/^#\s*[^\n]*\n+/, "").slice(0, 160)}…` : "（无摘要）";
+    }
+    digest.push(`第 ${chapter} 章：${summary}`);
+  }
+
+  const hub = ctx.env.RUNTIME.get(ctx.env.RUNTIME.idFromName(`${ctx.user!.id}:${bookId}`));
+  await hub.fetch(new Request("https://runtime/events", { method: "POST", headers: { "content-type": "application/json", "x-internal-token": ctx.env.INTERNAL_TOKEN ?? "" }, body: JSON.stringify({ event: "runtime", data: { type: "system", message: "弧级评审开始", chapters: completed.length } }) })).catch(() => undefined);
+
+  const result = await generateOnce(resolved, [
+    { role: "system", content: REVIEW_SYSTEM_PROMPT },
+    { role: "user", content: `作品：${progress?.novel_name || bookId}\n前提：${options.premise ?? "（未提供）"}\n\n各章摘要：\n${digest.join("\n")}` },
+  ]);
+  if (result === null) return { error: fail("上游模型调用失败", 502) };
+  const report = normalizeReport(result.text, completed, result.usage, new Date().toISOString());
+  await settleAndAudit(ctx, bookId, "review", resolved.model, result.usage);
+
+  const reviews = await loadReviews(ctx, bookId);
+  reviews.push(report);
+  await ctx.kv.set(`books/${bookId}/meta/reviews.json`, JSON.stringify({ reports: reviews.slice(-50), updatedAt: new Date().toISOString() }));
+  await hub.fetch(new Request("https://runtime/events", { method: "POST", headers: { "content-type": "application/json", "x-internal-token": ctx.env.INTERNAL_TOKEN ?? "" }, body: JSON.stringify({ event: "runtime", data: { type: "system", message: "弧级评审完成", score: report.score, verdict: report.verdict } }) })).catch(() => undefined);
+  return { report };
+}
+
+/** ---------- 边缘自动驾驶（P11-C9）：compose × review 循环 ---------- */
+
+const AUTOPILOT_BODY = z.object({
+  bookId: z.string().trim().min(1).max(64),
+  premise: z.string().trim().min(1).max(4000),
+  chapters: z.number().int().min(1).max(12).default(3),
+  wordsPerChapter: z.number().int().min(200).max(8000).default(800),
+  scoreThreshold: z.number().int().min(50).max(100).default(85),
+  maxRewrites: z.number().int().min(0).max(3).default(1),
+  model: z.string().trim().min(1).max(120).optional(),
+});
+
+interface RewriteChapter { chapter: number; note: string }
+
+/** 按评审意见重写单章：带原文与问题重生成，更新章节/摘要。 */
+async function rewriteChapter(ctx: Ctx, resolved: ResolvedChannel, bookId: string, target: RewriteChapter, premise: string, wordsPerChapter: number, outline: string): Promise<{ usage: { input: number; output: number }; words: number } | null> {
+  const memory = await buildChapterContext(ctx.kv, bookId, target.chapter, `${target.chapter} ${outline}`);
+  const memoryBlock = renderMemoryBlock(memory);
+  const previous = await ctx.kv.get(`books/${bookId}/chapters/${String(target.chapter).padStart(2, "0")}.md`) ?? "";
+  const rewriteMessages = [
+    { role: "system", content: `你是长篇小说改稿人。依据评审意见重写本章，约 ${wordsPerChapter} 字，保留可取之处，修复指出的问题。直接输出正文。${memoryBlock ? `\n\n${memoryBlock}` : ""}` },
+    { role: "user", content: `作品前提：${premise}\n\n本章大纲（第 ${target.chapter} 章）：\n${outline}\n\n当前稿件：\n${previous.slice(0, 8000)}\n\n评审意见：${target.note}` },
+  ];
+  const result = await generateOnce(resolved, rewriteMessages);
+  if (result === null) return null;
+  await ctx.kv.set(`books/${bookId}/chapters/${String(target.chapter).padStart(2, "0")}.md`, `# 第 ${target.chapter} 章\n\n${result.text}`);
+  await ctx.kv.set(`books/${bookId}/summaries/${String(target.chapter).padStart(2, "0")}.json`, JSON.stringify({ chapter: target.chapter, summary: result.text.slice(0, 300), characters: [], key_events: [] }));
+  return { usage: result.usage, words: [...result.text.replace(/\s/g, "")].length };
+}
+
+async function autopilot(request: Request, ctx: Ctx): Promise<Response> {
+  try {
+    const body = AUTOPILOT_BODY.parse(await readBody(request));
+    const bookId = body.bookId;
+    const denied = await requireBookAccess(ctx, bookId);
+    if (denied) return denied;
+    const resolved = await resolveGenerationChannel(ctx, body.model);
+    if ("error" in resolved) return resolved.error;
+    if (ctx.mode === "commercial") {
+      const balance = await ctx.quota.balance(ctx.user!.id);
+      if (balance.remaining <= 0) return fail("额度已用尽，请兑换或联系管理员", 402);
     }
 
     const hub = ctx.env.RUNTIME.get(ctx.env.RUNTIME.idFromName(`${ctx.user!.id}:${bookId}`));
-    await hub.fetch(new Request("https://runtime/events", { method: "POST", headers: { "content-type": "application/json", "x-internal-token": ctx.env.INTERNAL_TOKEN ?? "" }, body: JSON.stringify({ event: "runtime", data: { type: "system", message: "弧级评审开始", chapters: completed.length } }) })).catch(() => undefined);
+    const publish = (event: string, data: unknown): Promise<void> => hub.fetch(new Request("https://runtime/events", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-internal-token": ctx.env.INTERNAL_TOKEN ?? "" },
+      body: JSON.stringify({ event, data }),
+    })).then(() => undefined, () => undefined);
 
-    const result = await generateOnce(resolved, [
-      { role: "system", content: REVIEW_SYSTEM_PROMPT },
-      { role: "user", content: `作品：${progress?.novel_name || bookId}\n前提：${body.premise ?? "（未提供）"}\n\n各章摘要：\n${digest.join("\n")}` },
-    ]);
-    if (result === null) return fail("上游模型调用失败", 502);
-    const report = normalizeReport(result.text, completed, result.usage, new Date().toISOString());
-    await settleAndAudit(ctx, bookId, "review", resolved.model, result.usage);
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        const totalUsage = { input: 0, output: 0 };
+        const rounds: Array<{ round: number; score: number | null; rewritten: number[] }> = [];
+        try {
+          // 第一弧：策划 + 写作 + 摘要 + 落库
+          const arc = await runArc(ctx, resolved, bookId, { premise: body.premise, chapters: body.chapters, wordsPerChapter: body.wordsPerChapter }, {
+            enqueue: (chunk) => controller.enqueue(chunk),
+            publish,
+          });
+          if (arc === null) { controller.enqueue(sseEvent("error", { message: "弧生成失败" })); return; }
+          totalUsage.input += arc.totalUsage.input;
+          totalUsage.output += arc.totalUsage.output;
+          controller.enqueue(sseEvent("plan", { chapters: arc.planned.map((item) => ({ chapter: item.chapter, title: item.title })), usage: arc.totalUsage }));
 
-    const reviews = await loadReviews(ctx, bookId);
-    reviews.push(report);
-    await ctx.kv.set(`books/${bookId}/meta/reviews.json`, JSON.stringify({ reports: reviews.slice(-50), updatedAt: new Date().toISOString() }));
-    await hub.fetch(new Request("https://runtime/events", { method: "POST", headers: { "content-type": "application/json", "x-internal-token": ctx.env.INTERNAL_TOKEN ?? "" }, body: JSON.stringify({ event: "runtime", data: { type: "system", message: "弧级评审完成", score: report.score, verdict: report.verdict } }) })).catch(() => undefined);
-    return json({ reviewed: true, report }, 201);
+          // 评审 → 重写循环
+          for (let round = 0; round <= body.maxRewrites; round += 1) {
+            const outcome = await runReviewCore(ctx, resolved, bookId, { premise: body.premise });
+            if ("error" in outcome) { controller.enqueue(sseEvent("error", { message: "评审失败" })); return; }
+            totalUsage.input += outcome.report.usage.input;
+            totalUsage.output += outcome.report.usage.output;
+            const score = outcome.report.score;
+            controller.enqueue(sseEvent("review", { round, score, verdict: outcome.report.verdict, issues: outcome.report.issues }));
+            rounds.push({ round, score, rewritten: [] });
+            if (score === null || score >= body.scoreThreshold || round === body.maxRewrites) {
+              controller.enqueue(sseEvent("done", { rounds: rounds.length, finalScore: score, passed: score !== null && score >= body.scoreThreshold, usage: totalUsage }));
+              await publish("runtime", { type: "system", message: "自动驾驶完成", finalScore: score, rounds: rounds.length });
+              return;
+            }
+            // 选择重写目标：issues 中的章节（限定本弧范围），缺省为低分弧全部章节
+            const arcChapters = new Set(arc.completed.map((item) => item.chapter));
+            let targets = outcome.report.issues
+              .filter((issue) => arcChapters.has(issue.chapter) && (issue.severity === "high" || issue.severity === "medium"))
+              .map((issue) => ({ chapter: issue.chapter, note: issue.note }))
+              .slice(0, 3);
+            if (!targets.length) targets = arc.completed.slice(0, 1).map((item) => ({ chapter: item.chapter, note: outcome.report.verdict }));
+            controller.enqueue(sseEvent("rewrite", { round, chapters: targets.map((target) => target.chapter) }));
+            await publish("runtime", { type: "system", message: `第 ${round + 1} 轮重写开始`, chapters: targets.map((target) => target.chapter) });
+            for (const target of targets) {
+              const planned = arc.planned.find((item) => item.chapter === target.chapter);
+              const result = await rewriteChapter(ctx, resolved, bookId, target, body.premise, body.wordsPerChapter, planned?.outline ?? "");
+              if (result === null) { controller.enqueue(sseEvent("error", { message: `第 ${target.chapter} 章重写失败` })); continue; }
+              totalUsage.input += result.usage.input;
+              totalUsage.output += result.usage.output;
+              rounds.at(-1)!.rewritten.push(target.chapter);
+              await publish("runtime", { type: "system", message: `第 ${target.chapter} 章重写完成`, words: result.words });
+            }
+          }
+        } catch (error) {
+          controller.enqueue(sseEvent("error", { message: error instanceof Error ? error.message : String(error) }));
+        } finally {
+          // 统一结算与状态落盘
+          if (totalUsage.input + totalUsage.output > 0) await settleAndAudit(ctx, bookId, "autopilot", resolved.model, totalUsage);
+          controller.close();
+        }
+      },
+    });
+    return new Response(stream, { headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-store" } });
   } catch (error) {
     return fail(error instanceof Error ? error.message : String(error), 400);
   }
