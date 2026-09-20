@@ -1,8 +1,10 @@
 import { ConfigSchema, type PartialConfig, type ResolvedConfig } from "./schemas.js";
+import { knownProviderType } from "../providers/mapping.js";
 
 const knownRoles = new Set(["coordinator", "architect", "writer", "editor", "reviewer"]);
 const knownProviders = new Set(["openai", "anthropic", "gemini", "openrouter", "deepseek", "qwen", "glm", "grok", "mimo", "bedrock"]);
-const knownNotifyEvents = new Set(["run_end", "repeat", "budget"]);
+// 事件名与文档示例对齐（run/error 为实际发送粒度，run_end 经 Notifier 别名兼容；repeat/budget/pause_point 为文档承诺的预留名）
+const knownNotifyEvents = new Set(["run", "error", "run_end", "repeat", "budget", "pause_point"]);
 
 function validateText(label: string, value = ""): void {
   if (/\p{Cc}/u.test(value)) {
@@ -16,6 +18,9 @@ function requiresApiKey(name: string, type?: string): boolean {
 
 function providerType(name: string, type?: string): string {
   if (type) return type;
+  // 运行时协议（openai/google/...）而非 provider 名，与 resolveProviderType 口径一致：deepseek 等兼容渠道可配 api
+  const protocol = knownProviderType(name);
+  if (protocol) return protocol;
   if (knownProviders.has(name)) return name;
   throw new Error(`provider ${JSON.stringify(name)} 缺少 type，且不在已知 provider 列表中`);
 }

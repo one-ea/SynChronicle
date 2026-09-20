@@ -36,10 +36,15 @@ export function failoverModel(role: string, primary: ModelTarget, fallbacks: Mod
     try { return attachIdentity(await primary.instance[method](options) as T, primary); }
     catch (error) {
       const why = reason(error);
-      const next = fallbacks.find(target => target.provider !== primary.provider || target.model !== primary.model);
-      if (!why || !next) throw error;
-      report?.({ role, reason: why, fromProvider: primary.provider, fromModel: primary.model, toProvider: next.provider, toModel: next.model, error });
-      return attachIdentity(await next.instance[method](options) as T, next);
+      if (!why) throw error;
+      // 按序尝试全部备选（跳过与主目标相同的条目），全部失败抛出最后一个错误
+      const chain = fallbacks.filter(target => target.provider !== primary.provider || target.model !== primary.model);
+      let lastError = error;
+      for (const next of chain) {
+        report?.({ role, reason: why, fromProvider: primary.provider, fromModel: primary.model, toProvider: next.provider, toModel: next.model, error: lastError });
+        try { return attachIdentity(await next.instance[method](options) as T, next); } catch (nextError) { lastError = nextError; }
+      }
+      throw lastError;
     }
   };
   return {

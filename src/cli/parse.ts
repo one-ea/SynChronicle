@@ -1,6 +1,7 @@
 export type CLIOptions =
   | { command: "eval"; argv: string[] }
   | { command: "version" }
+  | { command: "help" }
   | { command: "update"; updateVersion: string }
   | { command: "mcp"; configPath: string }
   | { command: "migrate-files"; booksRoot: string; dbUrl: string }
@@ -26,11 +27,12 @@ export function parseCLIOptions(argv: string[]): CLIOptions {
   }
   let configPath = "", prompt = "", promptFile = "", updateVersion = "";
   let port = 3000, web = true, webFlag = false;
-  let headless = false, version = false, update = false;
+  let headless = false, version = false, update = false, help = false;
   const args: string[] = [];
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i]!;
-    if (arg === "--version" || arg === "-v") version = true;
+    if (arg === "--help" || arg === "-h") help = true;
+    else if (arg === "--version" || arg === "-v") version = true;
     else if (arg === "version") { if (i + 1 < argv.length) throw new Error("version 不接受参数"); version = true; }
     else if (arg === "update") {
       if (update) throw new Error("update 只能指定一次");
@@ -48,8 +50,10 @@ export function parseCLIOptions(argv: string[]): CLIOptions {
   }
   if (prompt && promptFile) throw new Error("--prompt 和 --prompt-file 不能同时使用");
   if ((prompt || promptFile) && !headless) throw new Error("--prompt/--prompt-file 仅能在 --headless 模式下使用");
+  if (help && (update || configPath || headless || webFlag || port !== 3000 || prompt || promptFile || args.length)) throw new Error("help 不能与其他参数混用");
   if (version && (update || configPath || headless || webFlag || port !== 3000 || prompt || promptFile || args.length)) throw new Error("version 不能与其他启动参数混用");
   if (update && (configPath || headless || webFlag || port !== 3000 || prompt || promptFile || args.length)) throw new Error("update 不能与其他启动参数混用");
+  if (help) return { command: "help" };
   if (version) return { command: "version" };
   if (update) return { command: "update", updateVersion };
   return { command: "start", configPath, headless, web, port, prompt, promptFile, args };

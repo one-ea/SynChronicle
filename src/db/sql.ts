@@ -33,7 +33,7 @@ async function openSqlite(target: string): Promise<SqlDatabase> {
   db.pragma("journal_mode = WAL");
   return {
     dialect: "sqlite",
-    async run(sql, params = []) { db.prepare(sql).run(...params); },
+    async run(sql, params = []) { return db.prepare(sql).run(...params).changes; },
     async get<T>(sql: string, params: unknown[] = []) { return (db.prepare(sql).get(...params) ?? null) as T | null; },
     async all<T>(sql: string, params: unknown[] = []) { return db.prepare(sql).all(...params) as T[]; },
     async close() { db.close(); },
@@ -45,7 +45,7 @@ async function openPostgres(target: string): Promise<SqlDatabase> {
   const pool = new Pool({ connectionString: target });
   return {
     dialect: "postgres",
-    async run(sql, params = []) { await pool.query(toPg(sql), params); },
+    async run(sql, params = []) { const result = await pool.query(toPg(sql), params); return result.rowCount ?? 0; },
     async get<T>(sql: string, params: unknown[] = []) { const result = await pool.query(toPg(sql), params); return (result.rows[0] ?? null) as T | null; },
     async all<T>(sql: string, params: unknown[] = []) { const result = await pool.query(toPg(sql), params); return result.rows as T[]; },
     async close() { await pool.end(); },
@@ -57,7 +57,7 @@ async function openMysql(target: string): Promise<SqlDatabase> {
   const pool = mysql.createPool(target);
   return {
     dialect: "mysql",
-    async run(sql, params = []) { await pool.query({ sql, values: params }); },
+    async run(sql, params = []) { const [result] = await pool.query({ sql, values: params }); return Number((result as { affectedRows?: number }).affectedRows ?? 0); },
     async get<T>(sql: string, params: unknown[] = []) { const [rows] = await pool.query({ sql, values: params }); return ((rows as unknown[])[0] ?? null) as T | null; },
     async all<T>(sql: string, params: unknown[] = []) { const [rows] = await pool.query({ sql, values: params }); return rows as T[]; },
     async close() { await pool.end(); },

@@ -44,7 +44,7 @@ type SqlDb = SqlDatabase;
 function d1Adapter(db: D1Database): SqlDb {
   return {
     dialect: "sqlite" as const,
-    run: async (sql, params = []) => { await db.prepare(sql).bind(...params).run(); },
+    run: async (sql, params = []) => { const { meta } = await db.prepare(sql).bind(...params).run(); return meta.changes ?? 0; },
     get: async <T>(sql: string, params: unknown[] = []) => { const { results } = await db.prepare(sql).bind(...params).all<T>(); return results[0] ?? null; },
     all: async <T>(sql: string, params: unknown[] = []) => { const { results } = await db.prepare(sql).bind(...params).all<T>(); return results; },
     close: async () => {},
@@ -53,7 +53,8 @@ function d1Adapter(db: D1Database): SqlDb {
 
 let schemaReady: Promise<void> | null = null;
 function ensureReady(db: D1Database): Promise<void> {
-  schemaReady ??= ensureSchema(d1Adapter(db));
+  // 失败时清空缓存允许下次重试，避免 D1 瞬时故障把 rejected promise 永久缓存在 isolate 里
+  schemaReady ??= ensureSchema(d1Adapter(db)).catch((error) => { schemaReady = null; throw error; });
   return schemaReady;
 }
 
@@ -331,11 +332,16 @@ async function shelfChapter(ctx: Ctx, id: string, chapter: number): Promise<Resp
   if (!entry) return fail("章节不存在", 404);
   const text = await ctx.kv.get(`books/${id}/chapters/${String(chapter).padStart(2, "0")}.md`);
   if (text === null) return fail("章节不存在", 404);
-  const progressRaw = await ctx.kv.get(`books/${id}/meta/progress.json`);
-  const completed = progressRaw ? ((JSON.parse(progressRaw) as { completed_chapters?: number[] }).completed_chapters ?? []).slice().sort((a, b) => a - b) : [];
+  // 目录文件损坏时降级为无目录信息，不向匿名访客抛 500
+  let completed: number[] = [];
+  let outline: Array<{ chapter?: number; title?: string }> = [];
+  try {
+    const progressRaw = await ctx.kv.get(`books/${id}/meta/progress.json`);
+    completed = progressRaw ? ((JSON.parse(progressRaw) as { completed_chapters?: number[] }).completed_chapters ?? []).slice().sort((a, b) => a - b) : [];
+    const outlineRaw = await ctx.kv.get(`books/${id}/meta/outline.json`);
+    outline = outlineRaw ? (JSON.parse(outlineRaw) as Array<{ chapter?: number; title?: string }>) : [];
+  } catch { /* 目录缺失或损坏时返回空 */ }
   const index = completed.indexOf(chapter);
-  const outlineRaw = await ctx.kv.get(`books/${id}/meta/outline.json`);
-  const outline = outlineRaw ? (JSON.parse(outlineRaw) as Array<{ chapter?: number; title?: string }>) : [];
   return json({ title: outline.find((item) => item.chapter === chapter)?.title ?? `第 ${chapter} 章`, text, words: [...text.replace(/\s/g, "")].length, prev: completed[index - 1] ?? null, next: completed[index + 1] ?? null });
 }
 
@@ -377,13 +383,28 @@ async function authRegister(request: Request, ctx: Ctx): Promise<Response> {
   return session(ctx, id);
 }
 
+/** 登录失败限流（isolate 内存级，对齐 Node 主线 LoginRateLimiter 的安全基线）。 */
+const loginFails = new Map<string, { fails: number; lockUntil: number }>();
+const LOGIN_MAX_FAILS = 5;
+const LOGIN_LOCK_MS = 15 * 60_000;
+function loginFail(key: string, now: number): void {
+  const entry = loginFails.get(key) ?? { fails: 0, lockUntil: 0 };
+  entry.fails += 1;
+  if (entry.fails >= LOGIN_MAX_FAILS) entry.lockUntil = now + LOGIN_LOCK_MS;
+  loginFails.set(key, entry);
+}
+
 async function authLogin(request: Request, ctx: Ctx): Promise<Response> {
   const body = await readBody(request);
   const name = text(body.name, "用户名");
+  const key = `${request.headers.get("cf-connecting-ip") ?? "unknown"}|${name}`;
+  const now = Date.now();
+  if ((loginFails.get(key)?.lockUntil ?? 0) > now) return fail("尝试过于频繁，请稍后再试", 429);
   const row = await ctx.users.byName(name);
-  if (!row || row.status === "disabled") return fail("用户名或密码错误", 401);
+  if (!row || row.status === "disabled") { loginFail(key, now); return fail("用户名或密码错误", 401); }
   const candidate = await pbkdf2Hex(text(body.password, "密码"), row.password_salt);
-  if (candidate !== row.password_hash) return fail("用户名或密码错误", 401);
+  if (candidate !== row.password_hash) { loginFail(key, now); return fail("用户名或密码错误", 401); }
+  loginFails.delete(key);
   await ctx.audit.log(row.id, "auth.login", `user:${row.id}`);
   return session(ctx, row.id);
 }
@@ -750,6 +771,41 @@ async function generateOnce(resolved: ResolvedChannel, messages: Array<{ role: s
   return { text: result.text.trim(), usage: result.usage };
 }
 
+/** RuntimeHub 事件发布器：delta 事件按 200ms 窗口合并转发——逐 delta 一次 DO fetch 会耗尽 Worker subrequest 配额（免费版 50/请求）。 */
+function createHubPublisher(hub: DurableObjectStub, internalToken: string): (event: string, data: unknown) => Promise<void> {
+  const post = (event: string, data: unknown): Promise<void> => hub.fetch(new Request("https://runtime/events", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-internal-token": internalToken },
+    body: JSON.stringify({ event, data }),
+  })).then(() => undefined, () => undefined);
+  let buffer = "";
+  let bufferedChapter = -1;
+  let flushTimer: ReturnType<typeof setTimeout> | null = null;
+  let flushing: Promise<void> = Promise.resolve();
+  const flush = (): Promise<void> => {
+    if (!buffer) return flushing;
+    const value = buffer;
+    const chapter = bufferedChapter;
+    buffer = "";
+    bufferedChapter = -1;
+    if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+    flushing = flushing.then(() => post("delta", { chapter, value }));
+    return flushing;
+  };
+  return (event, data) => {
+    if (event === "delta" && data !== null && typeof data === "object" && typeof (data as { value?: unknown }).value === "string") {
+      const { chapter, value } = data as { chapter: number; value: string };
+      if (buffer && chapter !== bufferedChapter) void flush();
+      if (!buffer) bufferedChapter = chapter;
+      buffer += value;
+      if (!flushTimer) flushTimer = setTimeout(() => { flushTimer = null; void flush(); }, 200);
+      return Promise.resolve();
+    }
+    // 非 delta 事件先冲刷缓冲的 delta，保持事件顺序
+    return flush().then(() => post(event, data));
+  };
+}
+
 /** 结算并审计一次生成（chat 与 compose 共用）。 */
 async function settleAndAudit(ctx: Ctx, bookId: string, agent: string, model: string, usage: { input: number; output: number }): Promise<number> {
   const costUsd = settleCost(model, usage.input, usage.output);
@@ -815,11 +871,7 @@ async function chatTurn(request: Request, ctx: Ctx): Promise<Response> {
     ];
 
     const hub = ctx.env.RUNTIME.get(ctx.env.RUNTIME.idFromName(`${ctx.user!.id}:${bookId}`));
-    const publish = (event: string, data: unknown): Promise<void> => hub.fetch(new Request("https://runtime/events", {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-internal-token": ctx.env.INTERNAL_TOKEN ?? "" },
-      body: JSON.stringify({ event, data }),
-    })).then(() => undefined, () => undefined);
+    const publish = createHubPublisher(hub, ctx.env.INTERNAL_TOKEN ?? "");
 
     const upstream = await fetch(buildUpstreamRequest(picked, apiKey, model, messages));
     if (!upstream.ok || !upstream.body) {
@@ -941,14 +993,15 @@ async function runArc(ctx: Ctx, resolved: ResolvedChannel, bookId: string, optio
   }
   // 进度/大纲落库
   const numbers = completed.map((item) => item.chapter);
-  const wordCount = completed.reduce((sum, item) => sum + [...item.text.replace(/\s/g, "")].length, 0);
   const progressRaw = await ctx.kv.get(`books/${bookId}/meta/progress.json`);
-  const previous = progressRaw ? JSON.parse(progressRaw) as { completed_chapters?: number[]; total_word_count?: number; novel_name?: string } : null;
+  const previous = progressRaw ? JSON.parse(progressRaw) as { completed_chapters?: number[]; total_word_count?: number; novel_name?: string; chapter_word_counts?: Record<string, number> } : null;
   const mergedChapters = [...new Set([...(previous?.completed_chapters ?? []), ...numbers])].sort((a, b) => a - b);
+  // 逐章字数按章号合并（本弧章节覆盖旧值），总字数由合并表重算，避免多弧覆盖清零与同章重跑重复累加
+  const mergedCounts: Record<string, number> = { ...(previous?.chapter_word_counts ?? {}), ...Object.fromEntries(completed.map((item) => [String(item.chapter), [...item.text.replace(/\s/g, "")].length])) };
   await ctx.kv.set(`books/${bookId}/meta/progress.json`, JSON.stringify({
     novel_name: previous?.novel_name ?? "", phase: "writing", current_chapter: Math.max(...mergedChapters, 0) + 1, total_chapters: Math.max(...mergedChapters, 0),
-    completed_chapters: mergedChapters, total_word_count: (previous?.total_word_count ?? 0) + wordCount,
-    chapter_word_counts: Object.fromEntries(completed.map((item) => [String(item.chapter), [...item.text.replace(/\s/g, "")].length])),
+    completed_chapters: mergedChapters, total_word_count: Object.values(mergedCounts).reduce((sum, value) => sum + value, 0),
+    chapter_word_counts: mergedCounts,
     flow: "writing", in_progress_chapter: 0, pending_rewrites: [],
   }));
   const outlineRaw = await ctx.kv.get(`books/${bookId}/meta/outline.json`);
@@ -977,11 +1030,7 @@ async function compose(request: Request, ctx: Ctx): Promise<Response> {
     }
 
     const hub = ctx.env.RUNTIME.get(ctx.env.RUNTIME.idFromName(`${ctx.user!.id}:${bookId}`));
-    const publish = (event: string, data: unknown): Promise<void> => hub.fetch(new Request("https://runtime/events", {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-internal-token": ctx.env.INTERNAL_TOKEN ?? "" },
-      body: JSON.stringify({ event, data }),
-    })).then(() => undefined, () => undefined);
+    const publish = createHubPublisher(hub, ctx.env.INTERNAL_TOKEN ?? "");
 
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
@@ -1035,12 +1084,13 @@ async function entityUpsert(request: Request, ctx: Ctx): Promise<Response> {
     const entities = await loadEntities(ctx, body.bookId);
     const input = body.entity;
     const existingIndex = entities.findIndex((item) => item.id === input.id);
-    const existing = existingIndex >= 0 ? entities[existingIndex] as { states?: Array<Record<string, unknown>> } : {};
+    const existing = existingIndex >= 0 ? entities[existingIndex] as { states?: Array<Record<string, unknown>>; relations?: unknown[]; firstAppearedChapter?: number } : {};
     const states = Array.isArray(existing.states) ? [...existing.states] : [];
     if (input.mood !== undefined || input.goals !== undefined || input.chapter !== undefined) {
       states.push({ chapter: input.chapter ?? 1, mood: input.mood ?? "平淡", goals: input.goals ?? [] });
     }
-    const record = { id: input.id, name: input.name, type: input.type, aliases: input.aliases, description: input.description, relations: [], states, firstAppearedChapter: input.chapter };
+    // 更新分支保留旧记录的 relations 与 firstAppearedChapter，避免边缘写入静默破坏主线数据
+    const record = { id: input.id, name: input.name, type: input.type, aliases: input.aliases, description: input.description, relations: Array.isArray(existing.relations) ? existing.relations : [], states, firstAppearedChapter: existing.firstAppearedChapter ?? input.chapter };
     if (existingIndex >= 0) entities[existingIndex] = record; else entities.push(record);
     await ctx.kv.set(`books/${body.bookId}/meta/entities.json`, JSON.stringify(entities));
     await ctx.audit.log(ctx.user!.id, "entity.upsert", `book:${body.bookId}`, { id: input.id, name: input.name });
@@ -1073,7 +1123,9 @@ async function foreshadowUpsert(request: Request, ctx: Ctx): Promise<Response> {
     const { items } = await loadForeshadows(ctx, body.bookId);
     const input = body.foreshadow;
     const existingIndex = items.findIndex((item) => item.id === input.id);
-    const record = { ...input, lastUpdatedChapter: input.plantedChapter, ...(input.stage === "resolved" ? { resolvedChapter: input.plantedChapter } : {}), missedRecoveries: 0 };
+    // 更新分支保留旧记录的 missedRecoveries / resolvedChapter 等累计字段
+    const existing = existingIndex >= 0 ? items[existingIndex] as Record<string, unknown> : {};
+    const record = { ...input, lastUpdatedChapter: input.plantedChapter, ...(input.stage === "resolved" ? { resolvedChapter: input.plantedChapter } : (existing.resolvedChapter !== undefined ? { resolvedChapter: existing.resolvedChapter } : {})), missedRecoveries: existing.missedRecoveries ?? 0, ...(existing.targetArc !== undefined ? { targetArc: existing.targetArc } : {}) };
     if (existingIndex >= 0) items[existingIndex] = record; else items.push(record);
     await ctx.kv.set(`books/${body.bookId}/meta/foreshadows.json`, JSON.stringify({ items, updatedAt: new Date().toISOString() }));
     await ctx.audit.log(ctx.user!.id, "foreshadow.upsert", `book:${body.bookId}`, { id: input.id, stage: input.stage });
@@ -1126,7 +1178,7 @@ async function review(request: Request, ctx: Ctx): Promise<Response> {
 interface ReviewOutcome { report: EdgeReviewReport }
 
 /** 评审核心：摘要汇编 → 模型评审 → 报告持久化 + 结算 + 枢纽事件（review 与 autopilot 共用）。 */
-async function runReviewCore(ctx: Ctx, resolved: ResolvedChannel, bookId: string, options: { from?: number; to?: number; premise?: string }): Promise<ReviewOutcome | { error: Response }> {
+async function runReviewCore(ctx: Ctx, resolved: ResolvedChannel, bookId: string, options: { from?: number; to?: number; premise?: string }, settle = true): Promise<ReviewOutcome | { error: Response }> {
   const progressRaw = await ctx.kv.get(`books/${bookId}/meta/progress.json`);
   const progress = progressRaw ? JSON.parse(progressRaw) as { completed_chapters?: number[]; novel_name?: string } : null;
   const completed = (progress?.completed_chapters ?? []).filter((chapter) => chapter >= (options.from ?? 1) && chapter <= (options.to ?? Number.MAX_SAFE_INTEGER)).sort((a, b) => a - b);
@@ -1157,7 +1209,8 @@ async function runReviewCore(ctx: Ctx, resolved: ResolvedChannel, bookId: string
   ]);
   if (result === null) return { error: fail("上游模型调用失败", 502) };
   const report = normalizeReport(result.text, completed, result.usage, new Date().toISOString());
-  await settleAndAudit(ctx, bookId, "review", resolved.model, result.usage);
+  // settle=false 时由调用方（autopilot finally 统一结算）负责，避免同一份 usage 双重扣费
+  if (settle) await settleAndAudit(ctx, bookId, "review", resolved.model, result.usage);
 
   const reviews = await loadReviews(ctx, bookId);
   reviews.push(report);
@@ -1210,11 +1263,7 @@ async function autopilot(request: Request, ctx: Ctx): Promise<Response> {
     }
 
     const hub = ctx.env.RUNTIME.get(ctx.env.RUNTIME.idFromName(`${ctx.user!.id}:${bookId}`));
-    const publish = (event: string, data: unknown): Promise<void> => hub.fetch(new Request("https://runtime/events", {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-internal-token": ctx.env.INTERNAL_TOKEN ?? "" },
-      body: JSON.stringify({ event, data }),
-    })).then(() => undefined, () => undefined);
+    const publish = createHubPublisher(hub, ctx.env.INTERNAL_TOKEN ?? "");
 
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
@@ -1233,7 +1282,7 @@ async function autopilot(request: Request, ctx: Ctx): Promise<Response> {
 
           // 评审 → 重写循环
           for (let round = 0; round <= body.maxRewrites; round += 1) {
-            const outcome = await runReviewCore(ctx, resolved, bookId, { premise: body.premise });
+            const outcome = await runReviewCore(ctx, resolved, bookId, { premise: body.premise }, false);
             if ("error" in outcome) { controller.enqueue(sseEvent("error", { message: "评审失败" })); return; }
             totalUsage.input += outcome.report.usage.input;
             totalUsage.output += outcome.report.usage.output;

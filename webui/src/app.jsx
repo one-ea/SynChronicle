@@ -121,9 +121,11 @@ function BookDetail({ id }) {
 }
 
 function Reader({ id, chapter }) {
-  const [data, setData] = useState(null);
-  useEffect(() => { api(`/api/shelf/${encodeURIComponent(id)}/chapters/${chapter}`).then(setData).catch(() => setData(null)); }, [id, chapter]);
-  if (data === null) return <main className="wrap"><div className="empty">加载中…</div></main>;
+  // undefined=未加载（显示加载中），null=加载失败（显示错误），与初始态区分
+  const [data, setData] = useState(undefined);
+  useEffect(() => { setData(undefined); api(`/api/shelf/${encodeURIComponent(id)}/chapters/${chapter}`).then(setData).catch(() => setData(null)); }, [id, chapter]);
+  if (data === undefined) return <main className="wrap"><div className="empty">加载中…</div></main>;
+  if (data === null) return <main className="wrap"><div className="empty">章节加载失败，请稍后重试。</div></main>;
   if (!data.title) return <main className="wrap"><div className="empty">章节不存在或尚未完成。</div></main>;
   return (
     <main className="wrap">

@@ -50,9 +50,9 @@ export function evaluateArenaCandidates(
 
   const dimensions: DimensionVerdict[] = [];
 
-  // 1. 去 AI 味自然度维度 (AI-Tone score 越高越自然)
-  const scoreA = aitoneA?.score ?? 100;
-  const scoreB = aitoneB?.score ?? 100;
+  // 1. 去 AI 味自然度维度 (AI-Tone score 越高越自然；空文本无法评分按 0 处理，与 advisor 口径一致)
+  const scoreA = aitoneA?.score ?? 0;
+  const scoreB = aitoneB?.score ?? 0;
   const aitoneWinner = scoreA > scoreB ? "A" : scoreB > scoreA ? "B" : "tie";
   dimensions.push({
     dimension: "语言去AI味自然度",

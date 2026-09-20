@@ -61,13 +61,11 @@ export class QuotaDao {
     return { remaining: Number(row?.quota_usd_remaining ?? 0), used: Number(row?.quota_usd_used ?? 0) };
   }
 
-  /** 原子扣减：余额不足返回 false（不产生负债）。 */
+  /** 记账并扣减额度：允许透支至负值，由调用方预检（remaining <= 0）在下次请求拦截。 */
   async settle(userId: string, entry: Omit<LedgerRow, "id">): Promise<boolean> {
     await this.db.run("INSERT INTO usage_ledger (user_id, book_id, agent, tokens_in, tokens_out, cost_usd, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", [entry.user_id, entry.book_id, entry.agent, entry.tokens_in, entry.tokens_out, entry.cost_usd, entry.created_at]);
-    const result = await this.db.run("UPDATE users SET quota_usd_remaining = quota_usd_remaining - ?, quota_usd_used = quota_usd_used + ? WHERE id = ? AND quota_usd_remaining >= ?", [entry.cost_usd, entry.cost_usd, userId, entry.cost_usd]);
-    void result;
-    const after = await this.balance(userId);
-    return after.remaining >= 0 && after.used >= 0;
+    await this.db.run("UPDATE users SET quota_usd_remaining = quota_usd_remaining - ?, quota_usd_used = quota_usd_used + ? WHERE id = ?", [entry.cost_usd, entry.cost_usd, userId]);
+    return true;
   }
 
   async grantQuota(userId: string, amountUsd: number): Promise<void> { await this.db.run("UPDATE users SET quota_usd_remaining = quota_usd_remaining + ? WHERE id = ?", [amountUsd, userId]); }
@@ -80,11 +78,13 @@ export class QuotaDao {
 
   async listRechargeCodes(): Promise<Array<{ code: string; amount_usd: number; issued_by: string; used_by: string | null; used_at: string | null }>> { return this.db.all("SELECT code, amount_usd, issued_by, used_by, used_at FROM recharge_codes ORDER BY code"); }
 
-  /** 原子兑换：仅当未使用时核销并加额。 */
+  /** 原子兑换：仅当未使用时核销并加额（按受影响行数判定，防并发双兑）。 */
   async redeem(code: string, userId: string, now: string): Promise<{ ok: boolean; amountUsd: number }> {
     const row = await this.db.get<{ amount_usd: number }>("SELECT amount_usd FROM recharge_codes WHERE code = ? AND used_by IS NULL", [code]);
     if (!row) return { ok: false, amountUsd: 0 };
-    await this.db.run("UPDATE recharge_codes SET used_by = ?, used_at = ? WHERE code = ? AND used_by IS NULL", [userId, now, code]);
+    const affected = await this.db.run("UPDATE recharge_codes SET used_by = ?, used_at = ? WHERE code = ? AND used_by IS NULL", [userId, now, code]);
+    // SELECT 与 UPDATE 之间的 await 间隙可被并发兑换插入，0 行命中说明已被他人核销
+    if (affected === 0) return { ok: false, amountUsd: 0 };
     await this.grantQuota(userId, Number(row.amount_usd));
     return { ok: true, amountUsd: Number(row.amount_usd) };
   }

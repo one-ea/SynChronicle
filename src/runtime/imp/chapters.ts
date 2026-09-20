@@ -6,7 +6,8 @@ export interface ImportedChapter { chapter: number; title: string; content: stri
 
 const ARABIC = "[0-9]+";
 const CHINESE = "[零〇一二三四五六七八九十百千万两]+";
-const MARKER = new RegExp(`^(?:#{1,3}\\s*)?(?:第\\s*(${ARABIC}|${CHINESE})\\s*[章节回卷部篇]|chapter\\s+(${ARABIC}))[ \\t]*([^\\n]*)$`, "gim");
+// 「卷/部/篇」与章是两套编号体系（第一卷下含第一章），混入严格递增校验会把卷引言当章节并撞号，故不作为章节标记
+const MARKER = new RegExp(`^(?:#{1,3}\\s*)?(?:第\\s*(${ARABIC}|${CHINESE})\\s*[章节回]|chapter\\s+(${ARABIC}))[ \\t]*([^\\n]*)$`, "gim");
 
 /** 纯文本 → 章节切分（拆书/导入共用，specs/2026-09-19-p4-competitive-parity R3）。 */
 export function splitChapters(rawText: string): ImportedChapter[] {

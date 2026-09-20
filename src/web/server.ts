@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdir } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { randomBytes } from "node:crypto";
 import { loadAssets } from "../assets/load.js";
 import { defaultConfigPath, fillDefaults, loadConfig, needsSetup, saveConfig } from "../config/index.js";
@@ -52,7 +53,11 @@ import { startEdgeSync, stopEdgeSync } from "../platform/edgesync.js";
 export type PlatformMode = "selfhost" | "commercial";
 export interface WebServerOptions { port?: number; host?: string; configPath?: string; hostInstance?: Host; auth?: boolean; storage?: "fs" | "db"; dbUrl?: string; mode?: PlatformMode; }
 export interface WebServerHandle { port: number; close(): Promise<void>; }
-interface RuntimeContext { host?: Host; store?: Store; config?: ResolvedConfig; configured: boolean; configPath: string; error?: string; bookRoot?: string; bookshelf?: BookshelfFile; autopilot?: AutopilotRunner; user?: SessionUser; authEnabled: boolean; authStore: AuthStore; rateLimiter: LoginRateLimiter; registerLimiter: LoginRateLimiter; mode: PlatformMode; storageMode: "fs" | "db"; db?: SqlDatabase; usersDao?: UsersDao; channelsDao?: ChannelsDao; quotaDao?: QuotaDao; crypto?: PlatformCrypto; pool?: HostPool; audit?: AuditDao; reports?: ReportsDao; }
+interface RuntimeContext { host?: Host; store?: Store; config?: ResolvedConfig; configured: boolean; configPath: string; error?: string; bookRoot?: string; bookshelf?: BookshelfFile; autopilot?: AutopilotRunner; authEnabled: boolean; authStore: AuthStore; rateLimiter: LoginRateLimiter; registerLimiter: LoginRateLimiter; mode: PlatformMode; storageMode: "fs" | "db"; db?: SqlDatabase; usersDao?: UsersDao; channelsDao?: ChannelsDao; quotaDao?: QuotaDao; crypto?: PlatformCrypto; pool?: HostPool; audit?: AuditDao; reports?: ReportsDao; }
+
+/** 按请求隔离的认证身份：共享 context 上存 user 会在并发请求间互相覆盖（身份串号/越权/错账）。 */
+const requestUser = new AsyncLocalStorage<SessionUser | undefined>();
+function currentUser(): SessionUser | undefined { return requestUser.getStore(); }
 
 export async function startWebServer(options: WebServerOptions = {}): Promise<WebServerHandle> {
   const mode: PlatformMode = options.mode ?? (process.env.MODE === "commercial" ? "commercial" : "selfhost");
@@ -87,7 +92,15 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
       getBookshelf: async () => (context.bookshelf?.books ?? []).map((book) => ({ id: book.id, ownerId: book.ownerId, title: book.title })),
     });
   }
-  const server = createServer((request, response) => void route(request, response, context));
+  const server = createServer((request, response) => {
+    // 每个请求独立的 async 上下文承载认证身份；顶层兜底让 handler 抛错只影响本请求
+    requestUser.run(undefined, () => {
+      route(request, response, context).catch(() => {
+        if (response.destroyed) return;
+        try { if (!response.headersSent) sendJson(response, 500, { error: "服务器内部错误" }); else response.end(); } catch { /* 响应已不可写 */ }
+      });
+    });
+  });
   const port = await listen(server, options.port ?? 3000, options.host ?? "127.0.0.1");
   return { port, close: async () => { stopEdgeSync(); await close(server, context.host); if (storageMode === "db" && context.db) { setStoreBackend(null); await context.db.close(); } } };
 }
@@ -185,8 +198,8 @@ async function route(request: IncomingMessage, response: ServerResponse, context
   if (request.method === "GET" && url.pathname === "/studio/legacy") return send(response, 200, renderWebApp(), "text/html; charset=utf-8");
   if (request.method === "GET" && url.pathname === "/favicon.ico") { response.writeHead(204); response.end(); return; }
   if (request.method === "GET" && url.pathname === "/api/shelf") return handleShelfList(response, context);
-  if (request.method === "GET" && /^\/api\/shelf\/[^/]+$/.test(url.pathname)) return handleShelfBook(response, context, decodeURIComponent(url.pathname.split("/")[3] ?? ""));
-  if (request.method === "GET" && /^\/api\/shelf\/[^/]+\/chapters\/\d+$/.test(url.pathname)) return handleShelfChapter(response, context, decodeURIComponent(url.pathname.split("/")[3] ?? ""), Number(url.pathname.split("/")[5]));
+  if (request.method === "GET" && /^\/api\/shelf\/[^/]+$/.test(url.pathname)) return handleShelfBook(response, context, safeBookSegment(url.pathname.split("/")[3]));
+  if (request.method === "GET" && /^\/api\/shelf\/[^/]+\/chapters\/\d+$/.test(url.pathname)) return handleShelfChapter(response, context, safeBookSegment(url.pathname.split("/")[3]), Number(url.pathname.split("/")[5]));
   if (request.method === "POST" && url.pathname === "/api/auth/setup") return handleAuthSetup(request, response, context);
   if (request.method === "POST" && url.pathname === "/api/auth/login") return handleAuthLogin(request, response, context);
   if (request.method === "POST" && url.pathname === "/api/auth/register") return handleAuthRegister(request, response, context);
@@ -195,14 +208,14 @@ async function route(request: IncomingMessage, response: ServerResponse, context
   if (context.authEnabled) {
     const user = await authenticate(request, context.authStore);
     if (!user) return sendJson(response, 401, { error: "未登录" });
-    context.user = user;
+    requestUser.enterWith(user);
     configureRelayScope(context);
     const bookChooser = url.pathname === "/api/books" || url.pathname === "/api/books/switch";
     if (!bookChooser && !(await assertBookAccess(context))) return sendJson(response, 403, { error: "无权访问当前书籍" });
     if (request.method !== "GET" && request.headers["x-requested-with"] !== "fetch") return sendJson(response, 403, { error: "请求缺少安全标识" });
   }
   if (request.method === "POST" && url.pathname === "/api/auth/logout") return handleAuthLogout(response);
-  if (request.method === "GET" && url.pathname === "/api/auth/me") return sendJson(response, 200, { user: context.user ?? null });
+  if (request.method === "GET" && url.pathname === "/api/auth/me") return sendJson(response, 200, { user: currentUser() ?? null });
   if (request.method === "GET" && url.pathname === "/api/users") return handleUsersGet(response, context);
   if (request.method === "POST" && url.pathname === "/api/users") return handleUsersCreate(request, response, context);
   if (url.pathname === "/api/admin/invite-codes") {
@@ -242,17 +255,24 @@ async function route(request: IncomingMessage, response: ServerResponse, context
   return dispatchRoute(request, response, context, url);
 }
 
+/** 公开路由的路径段安全解码：白名单校验（书籍 ID 为 [A-Za-z0-9-]），非法段返回空串走 404。 */
+function safeBookSegment(raw: string | undefined): string {
+  let decoded = "";
+  try { decoded = decodeURIComponent(raw ?? ""); } catch { return ""; }
+  return /^[A-Za-z0-9][A-Za-z0-9-]{0,127}$/.test(decoded) ? decoded : "";
+}
+
 function publishStore(context: RuntimeContext): PublishStore { if (!context.bookRoot) throw new Error("书架未初始化"); return new PublishStore(new FileIO(context.bookRoot)); }
 async function handleShelfList(response: ServerResponse, context: RuntimeContext): Promise<void> { try { const file = await publishStore(context).load(); sendJson(response, 200, { entries: file.entries.filter((item) => item.visibility === "public").sort((a, b) => b.publishedAt.localeCompare(a.publishedAt)) }); } catch { sendJson(response, 200, { entries: [] }); } }
 async function shelfEntry(context: RuntimeContext, id: string) { const entry = (await publishStore(context).load()).entries.find((item) => item.id === id && item.visibility !== "private"); return entry ?? null; }
 async function handleShelfBook(response: ServerResponse, context: RuntimeContext, id: string): Promise<void> { try { const entry = await shelfEntry(context, id); if (!entry || !context.bookRoot) return sendJson(response, 404, { error: "书籍不存在" }); const store = new Store(join(context.bookRoot, id)); const [progress, outline] = await Promise.all([store.progress.load(), store.outline.loadOutline()]); const completed = new Set(progress?.completed_chapters ?? []); const chapters = outline.filter((item) => completed.has(item.chapter)).map((item) => ({ chapter: item.chapter, title: item.title, words: progress?.chapter_word_counts?.[String(item.chapter)] ?? 0, status: "completed" })); sendJson(response, 200, { entry, chapters }); } catch { sendJson(response, 404, { error: "书籍不存在" }); } }
 async function handleShelfChapter(response: ServerResponse, context: RuntimeContext, id: string, chapter: number): Promise<void> { try { const entry = await shelfEntry(context, id); if (!entry || !context.bookRoot) return sendJson(response, 404, { error: "章节不存在" }); const store = new Store(join(context.bookRoot, id)); const progress = await store.progress.load(); if (!progress?.completed_chapters.includes(chapter)) return sendJson(response, 404, { error: "章节不存在" }); const text = await store.drafts.loadChapterText(chapter); if (!text) return sendJson(response, 404, { error: "章节不存在" }); const outline = await store.outline.loadOutline(); const completed = [...progress.completed_chapters].sort((a, b) => a - b); const index = completed.indexOf(chapter); sendJson(response, 200, { title: outline.find((item) => item.chapter === chapter)?.title ?? `第 ${chapter} 章`, text, words: progress.chapter_word_counts?.[String(chapter)] ?? [...text].length, prev: completed[index - 1] ?? null, next: completed[index + 1] ?? null }); } catch { sendJson(response, 404, { error: "章节不存在" }); } }
-async function handlePublishList(response: ServerResponse, context: RuntimeContext): Promise<void> { const ids = new Set((context.bookshelf?.books ?? []).filter((book) => context.user?.role === "admin" || book.ownerId === context.user?.id).map((book) => book.id)); sendJson(response, 200, { entries: (await publishStore(context).load()).entries.filter((entry) => ids.has(entry.id)) }); }
-async function handlePublish(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> { try { const body = await readJson(request); const bookId = textField(body.bookId, "bookId"); const book = context.bookshelf?.books.find((item) => item.id === bookId); if (!book) return sendJson(response, 404, { error: "书籍不存在" }); if (context.user?.role !== "admin" && book.ownerId !== context.user?.id) return sendJson(response, 403, { error: "无权发布该书" }); const store = new Store(join(context.bookRoot!, bookId)); const progress = await store.progress.load();
+async function handlePublishList(response: ServerResponse, context: RuntimeContext): Promise<void> { const ids = new Set((context.bookshelf?.books ?? []).filter((book) => currentUser()?.role === "admin" || book.ownerId === currentUser()?.id).map((book) => book.id)); sendJson(response, 200, { entries: (await publishStore(context).load()).entries.filter((entry) => ids.has(entry.id)) }); }
+async function handlePublish(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> { try { const body = await readJson(request); const bookId = textField(body.bookId, "bookId"); const book = context.bookshelf?.books.find((item) => item.id === bookId); if (!book) return sendJson(response, 404, { error: "书籍不存在" }); if (currentUser()?.role !== "admin" && book.ownerId !== currentUser()?.id) return sendJson(response, 403, { error: "无权发布该书" }); const store = new Store(join(context.bookRoot!, bookId)); const progress = await store.progress.load();
 if (context.mode === "commercial") { const findings: string[] = []; for (const chapter of progress?.completed_chapters ?? []) { const text = await store.drafts.loadChapterText(chapter); if (!text) continue; const result = scanSafety(text); for (const hit of result.hits) findings.push(`第 ${chapter} 章 ${hit.category} x${hit.count}: ${hit.samples.join("、").slice(0, 60)}`); }
 if (findings.length) return sendJson(response, 422, { error: "安全扫描未通过，存在严重命中，禁止发布", findings }); }
-const existing = (await publishStore(context).load()).entries.find((item) => item.id === bookId); const now = new Date().toISOString(); const entry = PublishedEntrySchema.parse({ id: bookId, title: optionalText(body.title) || book.title, authorName: context.user?.name || "匿名", synopsis: optionalText(body.synopsis), tags: Array.isArray(body.tags) ? body.tags : optionalText(body.tags).split(/[,，]/).filter(Boolean), visibility: optionalText(body.visibility) || "public", hue: titleHue(optionalText(body.title) || book.title), publishedAt: existing?.publishedAt ?? now, updatedAt: now, aigcLabel: true, stats: { chapters: progress?.completed_chapters.length ?? 0, words: progress?.total_word_count ?? 0 } }); await publishStore(context).upsert(entry); await context.audit?.log(context.user?.id ?? "admin", "publish", `book:${bookId}`, { visibility: entry.visibility }); sendJson(response, 200, { published: true, entry }); } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); } }
-async function handleUnpublish(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> { const body = await readJson(request); const id = textField(body.bookId, "bookId"); const book = context.bookshelf?.books.find((item) => item.id === id); if (!book) return sendJson(response, 404, { error: "书籍不存在" }); if (context.user?.role !== "admin" && book.ownerId !== context.user?.id) return sendJson(response, 403, { error: "无权下架该书" }); sendJson(response, 200, { unpublished: await publishStore(context).remove(id) }); }
+const existing = (await publishStore(context).load()).entries.find((item) => item.id === bookId); const now = new Date().toISOString(); const entry = PublishedEntrySchema.parse({ id: bookId, title: optionalText(body.title) || book.title, authorName: currentUser()?.name || "匿名", synopsis: optionalText(body.synopsis), tags: Array.isArray(body.tags) ? body.tags : optionalText(body.tags).split(/[,，]/).filter(Boolean), visibility: optionalText(body.visibility) || "public", hue: titleHue(optionalText(body.title) || book.title), publishedAt: existing?.publishedAt ?? now, updatedAt: now, aigcLabel: true, stats: { chapters: progress?.completed_chapters.length ?? 0, words: progress?.total_word_count ?? 0 } }); await publishStore(context).upsert(entry); await context.audit?.log(currentUser()?.id ?? "admin", "publish", `book:${bookId}`, { visibility: entry.visibility }); sendJson(response, 200, { published: true, entry }); } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); } }
+async function handleUnpublish(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> { const body = await readJson(request); const id = textField(body.bookId, "bookId"); const book = context.bookshelf?.books.find((item) => item.id === id); if (!book) return sendJson(response, 404, { error: "书籍不存在" }); if (currentUser()?.role !== "admin" && book.ownerId !== currentUser()?.id) return sendJson(response, 403, { error: "无权下架该书" }); sendJson(response, 200, { unpublished: await publishStore(context).remove(id) }); }
 
 async function handleEvolutionGet(response: ServerResponse, context: RuntimeContext): Promise<void> { if (!context.store) return sendJson(response, 200, { lessons: [], chapterScores: [], stats: { active: 0, retired: 0, avgDelta: 0 } }); const file = await context.store.evolution.load(); const deltas = file.lessons.flatMap((item) => item.scoreDeltas); sendJson(response, 200, { lessons: file.lessons, chapterScores: file.chapterScores.slice(-20), stats: { active: file.lessons.filter((item) => item.status === "active").length, retired: file.lessons.filter((item) => item.status === "retired").length, avgDelta: deltas.length ? deltas.reduce((sum, value) => sum + value, 0) / deltas.length : 0 } }); }
 async function handleEvolutionDistill(response: ServerResponse, context: RuntimeContext): Promise<void> { if (!context.store) return sendJson(response, 503, { error: "尚未配置小说工作区" }); sendJson(response, 200, { lessons: await new EvolutionEngine(context.store).distill() }); }
@@ -314,20 +334,19 @@ async function handlePrepAction(request: IncomingMessage, response: ServerRespon
   } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
 }
 
-function requireAdmin(context: RuntimeContext, response: ServerResponse): boolean {
-  if (context.user?.role === "admin") return true;
+function requireAdmin(response: ServerResponse): boolean {  if (currentUser()?.role === "admin") return true;
   sendJson(response, 403, { error: "仅管理员可执行此操作" });
   return false;
 }
 
 async function handleUsersGet(response: ServerResponse, context: RuntimeContext): Promise<void> {
-  if (!requireAdmin(context, response)) return;
+  if (!requireAdmin(response)) return;
   const users = (await context.authStore.loadUsers()).users.map(({ salt, hash, ...user }) => user);
   sendJson(response, 200, { users });
 }
 
 async function handleUsersCreate(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
-  if (!requireAdmin(context, response)) return;
+  if (!requireAdmin(response)) return;
   try {
     const body = await readJson(request);
     const name = textField(body.name, "用户名");
@@ -344,12 +363,12 @@ async function handleUsersCreate(request: IncomingMessage, response: ServerRespo
 }
 
 async function handleUserDisable(response: ServerResponse, context: RuntimeContext, id: string): Promise<void> {
-  if (!requireAdmin(context, response)) return;
+  if (!requireAdmin(response)) return;
   try {
     const file = await context.authStore.loadUsers();
     const target = file.users.find((user) => user.id === id);
     if (!target) return sendJson(response, 404, { error: "用户不存在" });
-    if (target.role === "admin" && target.id === context.user?.id) return sendJson(response, 400, { error: "不能停用当前管理员" });
+    if (target.role === "admin" && target.id === currentUser()?.id) return sendJson(response, 400, { error: "不能停用当前管理员" });
     const disabled = target.disabled === false;
     await context.authStore.saveUsers(file.users.map((user) => user.id === id ? { ...user, disabled } : user));
     if (disabled) context.pool?.invalidateUser(id);
@@ -358,15 +377,17 @@ async function handleUserDisable(response: ServerResponse, context: RuntimeConte
 }
 
 async function assertBookAccess(context: RuntimeContext): Promise<boolean> {
-  if (!context.user || context.user.role === "admin" || !context.bookshelf?.activeId) return true;
+  if (!currentUser() || currentUser()?.role === "admin" || !context.bookshelf?.activeId) return true;
   const active = context.bookshelf.books.find((book) => book.id === context.bookshelf?.activeId);
-  return Boolean(active && (active.ownerId === context.user.id || active.ownerId === ""));
+  return Boolean(active && (active.ownerId === currentUser()?.id || active.ownerId === ""));
 }
 
 async function dispatchRoute(request: IncomingMessage, response: ServerResponse, context: RuntimeContext, url: URL): Promise<void> {
   if (request.method === "GET" && url.pathname === "/api/status") return sendJson(response, 200, await status(context));
   if (request.method === "GET" && url.pathname === "/api/events") return sendJson(response, 200, context.host ? { events: await context.host.replayQueue() } : { events: [] });
-  if (request.method === "POST" && url.pathname === "/api/config") return handleConfig(request, response, context);
+  // 全局配置/系统设置影响所有用户的 Host 构建（provider、key、baseUrl），认证开启后仅管理员可读写
+  const adminOnly = context.authEnabled && currentUser()?.role !== "admin";
+  if (request.method === "POST" && url.pathname === "/api/config") { if (adminOnly) return sendJson(response, 403, { error: "仅管理员可修改模型配置" }); return handleConfig(request, response, context); }
   if (request.method === "POST" && url.pathname === "/api/run") return handleRun(request, response, context);
   if (request.method === "POST" && url.pathname === "/api/continue") return handleContinue(request, response, context);
   if (request.method === "POST" && url.pathname === "/api/resume") return handleResume(response, context);
@@ -378,8 +399,8 @@ async function dispatchRoute(request: IncomingMessage, response: ServerResponse,
   if (request.method === "POST" && url.pathname === "/api/reflection/commit") return handleReflectionCommit(request, response, context);
   if (request.method === "POST" && url.pathname === "/api/export") return handleExport(request, response, context);
   if (request.method === "POST" && url.pathname === "/api/import") return handleImport(request, response, context);
-  if (request.method === "GET" && url.pathname === "/api/settings") return handleSettingsGet(response, context);
-  if (request.method === "POST" && url.pathname === "/api/settings") return handleSettingsPost(request, response, context);
+  if (request.method === "GET" && url.pathname === "/api/settings") { if (adminOnly) return sendJson(response, 403, { error: "仅管理员可访问系统设置" }); return handleSettingsGet(response, context); }
+  if (request.method === "POST" && url.pathname === "/api/settings") { if (adminOnly) return sendJson(response, 403, { error: "仅管理员可修改系统设置" }); return handleSettingsPost(request, response, context); }
   if (request.method === "GET" && /^\/api\/chapters\/\d+$/.test(url.pathname)) return handleChapter(response, context, Number(url.pathname.split("/").pop()));
   if (request.method === "POST" && /^\/api\/chapters\/\d+\/rewrite$/.test(url.pathname)) return handleChapterRewrite(request, response, context, Number(url.pathname.split("/")[3]));
   if (request.method === "POST" && /^\/api\/chapters\/\d+\/adopt$/.test(url.pathname)) return handleChapterAdopt(request, response, context, Number(url.pathname.split("/")[3]));
@@ -505,7 +526,7 @@ async function handleAuthRegister(request: IncomingMessage, response: ServerResp
 }
 
 async function handleInviteCreate(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
-  if (!requireAdmin(context, response)) return;
+  if (!requireAdmin(response)) return;
   if (!context.usersDao) return sendJson(response, 503, { error: "邀请码需要数据库存储" });
   try {
     const body = await readJson(request);
@@ -514,7 +535,7 @@ async function handleInviteCreate(request: IncomingMessage, response: ServerResp
     const codes: string[] = [];
     for (let index = 0; index < count; index += 1) {
       const code = `inv-${randomBytes(8).toString("hex")}`;
-      await context.usersDao.createInvite(code, grantedUsd, context.user?.id ?? "admin", null);
+      await context.usersDao.createInvite(code, grantedUsd, currentUser()?.id ?? "admin", null);
       codes.push(code);
     }
     sendJson(response, 201, { created: true, codes, grantedUsd });
@@ -522,7 +543,7 @@ async function handleInviteCreate(request: IncomingMessage, response: ServerResp
 }
 
 async function handleInviteList(response: ServerResponse, context: RuntimeContext): Promise<void> {
-  if (!requireAdmin(context, response)) return;
+  if (!requireAdmin(response)) return;
   if (!context.usersDao) return sendJson(response, 200, { invites: [] });
   sendJson(response, 200, { invites: await context.usersDao.listInvites() });
 }
@@ -537,15 +558,15 @@ function projectChannel(row: ChannelRow, granted: boolean, crypto?: PlatformCryp
 }
 
 async function handleChannelsList(response: ServerResponse, context: RuntimeContext): Promise<void> {
-  if (!context.channelsDao || !context.user) return sendJson(response, 200, { channels: [] });
-  const isAdmin = context.user.role === "admin";
-  const rows = isAdmin ? await context.channelsDao.listAll() : await context.channelsDao.effective(context.user.id);
-  const grantedIds = new Set(context.user ? await context.channelsDao.listGrantedIds(context.user.id) : []);
+  if (!context.channelsDao || !currentUser()) return sendJson(response, 200, { channels: [] });
+  const isAdmin = currentUser()?.role === "admin";
+  const rows = isAdmin ? await context.channelsDao.listAll() : await context.channelsDao.effective(currentUser()!.id);
+  const grantedIds = new Set(currentUser() ? await context.channelsDao.listGrantedIds(currentUser()!.id) : []);
   sendJson(response, 200, { channels: rows.map((row) => projectChannel(row, grantedIds.has(row.id), context.crypto)) });
 }
 
 async function handleChannelCreate(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
-  if (!context.channelsDao || !context.crypto || !context.user) return sendJson(response, 503, { error: "渠道管理需要数据库存储" });
+  if (!context.channelsDao || !context.crypto || !currentUser()) return sendJson(response, 503, { error: "渠道管理需要数据库存储" });
   try {
     const body = await readJson(request);
     const name = textField(body.name, "渠道名称");
@@ -554,25 +575,25 @@ async function handleChannelCreate(request: IncomingMessage, response: ServerRes
     const apiKey = textField(body.apiKey, "apiKey");
     const models = Array.isArray(body.models) ? body.models.filter((item): item is string => typeof item === "string") : [];
     if (!models.length) return sendJson(response, 400, { error: "至少提供一个模型名" });
-    const asAdminPool = body.shared === true && context.user.role === "admin";
+    const asAdminPool = body.shared === true && currentUser()?.role === "admin";
     const secret = context.crypto.encrypt(apiKey);
-    const row: ChannelRow = { id: `ch-${randomBytes(6).toString("hex")}`, owner_id: asAdminPool ? null : context.user.id, name: name.slice(0, 40), provider: provider.slice(0, 20), base_url: baseUrl, api_key_ct: secret.ct, api_key_iv: secret.iv, api_key_tag: secret.tag, models: models.join(","), weight: Math.max(Number(body.weight) || 1, 0.1), status: "active", created_at: new Date().toISOString() };
+    const row: ChannelRow = { id: `ch-${randomBytes(6).toString("hex")}`, owner_id: asAdminPool ? null : currentUser()!.id, name: name.slice(0, 40), provider: provider.slice(0, 20), base_url: baseUrl, api_key_ct: secret.ct, api_key_iv: secret.iv, api_key_tag: secret.tag, models: models.join(","), weight: Math.max(Number(body.weight) || 1, 0.1), status: "active", created_at: new Date().toISOString() };
     await context.channelsDao.create(row);
     sendJson(response, 201, { created: true, channel: projectChannel(row, false, context.crypto) });
   } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
 }
 
 async function handleChannelDelete(response: ServerResponse, context: RuntimeContext, id: string): Promise<void> {
-  if (!context.channelsDao || !context.user) return sendJson(response, 503, { error: "渠道管理需要数据库存储" });
+  if (!context.channelsDao || !currentUser()) return sendJson(response, 503, { error: "渠道管理需要数据库存储" });
   const row = await context.channelsDao.get(id);
   if (!row) return sendJson(response, 404, { error: "渠道不存在" });
-  if (context.user.role !== "admin" && row.owner_id !== context.user.id) return sendJson(response, 403, { error: "无权删除该渠道" });
+  if (currentUser()?.role !== "admin" && row.owner_id !== currentUser()?.id) return sendJson(response, 403, { error: "无权删除该渠道" });
   await context.channelsDao.remove(id);
   sendJson(response, 200, { removed: true, id });
 }
 
 async function handleChannelGrant(request: IncomingMessage, response: ServerResponse, context: RuntimeContext, id: string, grant: boolean): Promise<void> {
-  if (!requireAdmin(context, response)) return;
+  if (!requireAdmin(response)) return;
   if (!context.channelsDao) return sendJson(response, 503, { error: "渠道管理需要数据库存储" });
   try {
     const row = await context.channelsDao.get(id);
@@ -587,9 +608,9 @@ async function handleChannelGrant(request: IncomingMessage, response: ServerResp
 }
 
 async function handleModelsList(response: ServerResponse, context: RuntimeContext): Promise<void> {
-  if (!context.channelsDao || !context.user) return sendJson(response, 200, { models: [] });
-  const grantedIds = new Set(await context.channelsDao.listGrantedIds(context.user.id));
-  const rows = await context.channelsDao.effective(context.user.id);
+  if (!context.channelsDao || !currentUser()) return sendJson(response, 200, { models: [] });
+  const grantedIds = new Set(await context.channelsDao.listGrantedIds(currentUser()!.id));
+  const rows = await context.channelsDao.effective(currentUser()!.id);
   const models: Array<{ model: string; channel: string; provider: string; own: boolean }> = [];
   const seen = new Set<string>();
   for (const row of rows) for (const model of row.models.split(",").map((item) => item.trim()).filter(Boolean)) {
@@ -602,24 +623,24 @@ async function handleModelsList(response: ServerResponse, context: RuntimeContex
 }
 
 async function handleQuotaGet(response: ServerResponse, context: RuntimeContext): Promise<void> {
-  if (!context.quotaDao || !context.user) return sendJson(response, 200, { remaining: 0, used: 0, ledger: [], daily: [] });
-  const balance = await context.quotaDao.balance(context.user.id);
-  sendJson(response, 200, { ...balance, ledger: await context.quotaDao.ledger(context.user.id), daily: await context.quotaDao.dailySummary(context.user.id), billing: context.mode === "commercial" });
+  if (!context.quotaDao || !currentUser()) return sendJson(response, 200, { remaining: 0, used: 0, ledger: [], daily: [] });
+  const balance = await context.quotaDao.balance(currentUser()!.id);
+  sendJson(response, 200, { ...balance, ledger: await context.quotaDao.ledger(currentUser()!.id), daily: await context.quotaDao.dailySummary(currentUser()!.id), billing: context.mode === "commercial" });
 }
 
 async function handleQuotaRedeem(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
-  if (!context.quotaDao || !context.user) return sendJson(response, 503, { error: "额度功能需要数据库存储" });
+  if (!context.quotaDao || !currentUser()) return sendJson(response, 503, { error: "额度功能需要数据库存储" });
   try {
     const body = await readJson(request);
     const code = textField(body.code, "code");
-    const result = await context.quotaDao.redeem(code, context.user.id, new Date().toISOString());
+    const result = await context.quotaDao.redeem(code, currentUser()!.id, new Date().toISOString());
     if (!result.ok) return sendJson(response, 400, { error: "兑换码不存在或已被使用" });
-    sendJson(response, 200, { redeemed: true, amountUsd: result.amountUsd, ...await context.quotaDao.balance(context.user.id) });
+    sendJson(response, 200, { redeemed: true, amountUsd: result.amountUsd, ...await context.quotaDao.balance(currentUser()!.id) });
   } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
 }
 
 async function handleRechargeCreate(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
-  if (!requireAdmin(context, response)) return;
+  if (!requireAdmin(response)) return;
   if (!context.quotaDao) return sendJson(response, 503, { error: "额度功能需要数据库存储" });
   try {
     const body = await readJson(request);
@@ -628,10 +649,10 @@ async function handleRechargeCreate(request: IncomingMessage, response: ServerRe
     const codes: string[] = [];
     for (let index = 0; index < count; index += 1) {
       const code = `rc-${randomBytes(8).toString("hex")}`;
-      await context.quotaDao.createRechargeCode(code, amountUsd, context.user?.id ?? "admin");
+      await context.quotaDao.createRechargeCode(code, amountUsd, currentUser()?.id ?? "admin");
       codes.push(code);
     }
-    await context.audit?.log(context.user?.id ?? "admin", "recharge.create", `codes:${count}`, { amountUsd });
+    await context.audit?.log(currentUser()?.id ?? "admin", "recharge.create", `codes:${count}`, { amountUsd });
     sendJson(response, 201, { created: true, codes, amountUsd });
   } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
 }
@@ -650,13 +671,13 @@ async function handleReportCreate(request: IncomingMessage, response: ServerResp
 }
 
 async function handleReportList(response: ServerResponse, context: RuntimeContext, status?: string): Promise<void> {
-  if (!requireAdmin(context, response)) return;
+  if (!requireAdmin(response)) return;
   if (!context.reports) return sendJson(response, 200, { reports: [] });
   sendJson(response, 200, { reports: await context.reports.list(status) });
 }
 
 async function handleReportHandle(request: IncomingMessage, response: ServerResponse, context: RuntimeContext, id: number): Promise<void> {
-  if (!requireAdmin(context, response)) return;
+  if (!requireAdmin(response)) return;
   if (!context.reports) return sendJson(response, 503, { error: "举报功能需要数据库存储" });
   try {
     const body = await readJson(request);
@@ -665,9 +686,9 @@ async function handleReportHandle(request: IncomingMessage, response: ServerResp
       const report = (await context.reports.list()).find((item) => item.id === id);
       if (report) await publishStore(context).remove(report.entry_id);
     }
-    const handled = await context.reports.handle(id, context.user?.id ?? "admin", action);
+    const handled = await context.reports.handle(id, currentUser()?.id ?? "admin", action);
     if (!handled) return sendJson(response, 404, { error: "举报不存在" });
-    await context.audit?.log(context.user?.id ?? "admin", `report.${action}`, `report:${id}`);
+    await context.audit?.log(currentUser()?.id ?? "admin", `report.${action}`, `report:${id}`);
     sendJson(response, 200, { handled: true, id, action });
   } catch (error) { sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) }); }
 }
@@ -740,6 +761,10 @@ async function handleImport(request: IncomingMessage, response: ServerResponse, 
     const body = await readJson(request);
     const path = optionalText(body.path);
     if (!path) return sendJson(response, 400, { error: "path 不能为空（服务器本机上的文本文件路径）" });
+    // 导入路径限制在书籍根目录（本机工作区）内，杜绝认证用户读取服务器任意文件
+    const resolved = resolve(path);
+    const allowedRoot = resolve(context.bookRoot ?? context.config?.output_dir ?? "output");
+    if (resolved !== allowedRoot && !resolved.startsWith(`${allowedRoot}${sep}`)) return sendJson(response, 400, { error: "导入路径必须在书籍工作区内" });
     const host = await ensureHost(context);
     const result = await host.importText(path);
     context.store = host.store;
@@ -1292,12 +1317,12 @@ interface SseSubscription { response: ServerResponse; scope: string }
 const sseClients = new Set<SseSubscription>();
 let sseConsuming = false;
 function sseChunk(event: string, data: unknown): string { return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`; }
-function sseScope(context: RuntimeContext): string { return `${context.user?.id ?? "*"}:${context.bookshelf?.activeId ?? "*"}`; }
+function sseScope(context: RuntimeContext): string { return `${currentUser()?.id ?? "*"}:${context.bookshelf?.activeId ?? "*"}`; }
 
 /** P11-C2 边缘中继：可选把运行事件推给 Cloudflare Worker 的 RuntimeHub DO（EDGE_RELAY_URL 配置时启用）。 */
 let relayScope = { user: "", book: "" };
 function configureRelayScope(context: RuntimeContext): void {
-  relayScope = { user: context.user?.id ?? "", book: context.bookshelf?.activeId ?? "" };
+  relayScope = { user: currentUser()?.id ?? "", book: context.bookshelf?.activeId ?? "" };
 }
 function edgeRelay(event: string, data: unknown): void {
   const base = process.env.EDGE_RELAY_URL;
@@ -1311,13 +1336,17 @@ function broadcast(event: string, data: unknown, scope?: string): void {
   for (const client of sseClients) if (!scope || client.scope === scope) client.response.write(chunk);
   edgeRelay(event, data);
 }
+let sseHost: Host | null = null;
 function startSseConsumption(context: RuntimeContext): void {
   const host = context.host;
-  if (sseConsuming || !host) return;
+  if (!host) return;
+  // host 替换（切书/重建）后重启消费循环，否则 sseConsuming 卡在 true、新 host 事件无人转发
+  if (sseConsuming && sseHost === host) return;
   sseConsuming = true;
+  sseHost = host;
   configureRelayScope(context);
   const scope = sseScope(context);
-  void (async () => { try { for await (const event of host.events()) broadcast("runtime", event, scope); } catch { /* host closed */ } })();
+  void (async () => { try { for await (const event of host.events()) broadcast("runtime", event, scope); } catch { /* host closed */ } finally { if (sseHost === host) { sseConsuming = false; sseHost = null; } } })();
   void (async () => { try { for await (const delta of host.stream(true)) broadcast("delta", { value: delta }, scope); } catch { /* host closed */ } })();
 }
 async function handleStream(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
@@ -1427,14 +1456,14 @@ async function handleSteer(request: IncomingMessage, response: ServerResponse, c
 }
 
 async function ensureHost(context: RuntimeContext): Promise<Host> {
-  if (context.user && context.pool && context.bookshelf?.activeId) {
-    const cached = context.pool.get(context.user.id, context.bookshelf.activeId);
+  if (currentUser() && context.pool && context.bookshelf?.activeId) {
+    const cached = context.pool.get(currentUser()!.id, context.bookshelf.activeId);
     if (cached) { context.host = cached; return cached; }
     if (!context.config) throw new Error("尚未配置模型，请先准备配置文件");
     try {
       const host = await Host.new(context.config, loadAssets(context.config.style));
       attachQuotaSettlement(context, host);
-      context.pool.put(context.user.id, context.bookshelf.activeId, host);
+      context.pool.put(currentUser()!.id, context.bookshelf.activeId, host);
       context.host = host;
       return host;
     } catch (error) { context.error = error instanceof Error ? error.message : String(error); throw error; }
@@ -1456,14 +1485,19 @@ export function computeSettlementCost(usage: { inputTokens?: number; outputToken
 
 function attachQuotaSettlement(context: RuntimeContext, host: Host): void {
   if (context.mode !== "commercial" || !context.quotaDao) return;
+  // host 运行在后台（脱离请求的 AsyncLocalStorage 上下文），结算主体在注册时捕获：
+  // 优先记到当前书籍 owner 头上（host 生命周期与书绑定，切书时会失效重建），自用注册用户兜底
+  const activeId = context.bookshelf?.activeId ?? "";
+  const owner = context.bookshelf?.books.find((book) => book.id === activeId)?.ownerId || currentUser()?.id;
+  const bookId = activeId || null;
   host.setUsageListener((agent, usage, model) => {
-    if (!context.user || !usage) return;
+    if (!owner || !usage) return;
     const inputTokens = usage.inputTokens ?? 0;
     const outputTokens = usage.outputTokens ?? 0;
     if (inputTokens + outputTokens <= 0) return;
     const modelName = model?.model ?? context.config?.model ?? "unknown";
     const costUsd = computeSettlementCost(usage, modelName);
-    void context.quotaDao!.settle(context.user.id, { user_id: context.user.id, book_id: context.bookshelf?.activeId ?? null, agent, tokens_in: inputTokens, tokens_out: outputTokens, cost_usd: costUsd, created_at: new Date().toISOString() }).catch(() => undefined);
+    void context.quotaDao!.settle(owner, { user_id: owner, book_id: bookId, agent, tokens_in: inputTokens, tokens_out: outputTokens, cost_usd: costUsd, created_at: new Date().toISOString() }).catch(() => undefined);
   });
 }
 
@@ -1472,7 +1506,7 @@ function attachQuotaSettlement(context: RuntimeContext, host: Host): void {
 async function handleBooksList(response: ServerResponse, context: RuntimeContext): Promise<void> {
   if (!context.bookRoot || !context.bookshelf) return sendJson(response, 200, { configured: false, books: [], activeId: null });
   try {
-    const visibleBooks = context.user?.role === "admin" ? context.bookshelf.books : context.bookshelf.books.filter((book) => !book.ownerId || book.ownerId === context.user?.id);
+    const visibleBooks = currentUser()?.role === "admin" ? context.bookshelf.books : context.bookshelf.books.filter((book) => !book.ownerId || book.ownerId === currentUser()?.id);
     const books = await Promise.all(visibleBooks.map(async (book) => {
       const progress = await new FileIO(join(context.bookRoot!, book.id)).readJSON<{ novel_name?: string; phase?: string; total_word_count?: number; completed_chapters?: number[] }>("meta/progress.json").catch(() => null);
       return { ...book, phase: progress?.phase ?? "init", words: progress?.total_word_count ?? 0, chapters: progress?.completed_chapters?.length ?? 0, active: book.id === context.bookshelf?.activeId };
@@ -1487,7 +1521,7 @@ async function handleBooksCreate(request: IncomingMessage, response: ServerRespo
     const body = await readJson(request);
     const title = normalizeTitle(textField(body.title, "书名"));
     const now = new Date().toISOString();
-    const meta: BookMeta = { id: createBookId(title), title, createdAt: now, updatedAt: now, ownerId: context.user?.id ?? "" };
+    const meta: BookMeta = { id: createBookId(title), title, createdAt: now, updatedAt: now, ownerId: currentUser()?.id ?? "" };
     if (context.storageMode !== "db") await mkdir(join(context.bookRoot, meta.id), { recursive: true });
     const shelf = { ...context.bookshelf, books: [...context.bookshelf.books, meta], updatedAt: now };
     await new FileIO(context.bookRoot).writeJSON(BOOKSHELF_PATH, shelf);
@@ -1503,7 +1537,7 @@ async function handleBooksSwitch(request: IncomingMessage, response: ServerRespo
     const id = textField(body.id, "书籍 id");
     const target = context.bookshelf.books.find((book) => book.id === id);
     if (!target) return sendJson(response, 404, { error: `书籍不存在: ${id}` });
-    if (context.user?.role !== "admin" && target.ownerId && target.ownerId !== context.user?.id) return sendJson(response, 403, { error: "无权切换到该书籍" });
+    if (currentUser()?.role !== "admin" && target.ownerId && target.ownerId !== currentUser()?.id) return sendJson(response, 403, { error: "无权切换到该书籍" });
     const previousBook = context.bookshelf.activeId;
     const now = new Date().toISOString();
     const shelf = { ...context.bookshelf, activeId: id, updatedAt: now };
@@ -1663,7 +1697,8 @@ async function handleAutopilotPost(request: IncomingMessage, response: ServerRes
 }
 
 function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
-  return new Promise((resolve, reject) => { let raw = ""; request.setEncoding("utf8"); request.on("data", (chunk: string) => { raw += chunk; if (raw.length > 1_000_000) reject(new Error("request body too large")); }); request.on("end", () => { try { const parsed = JSON.parse(raw || "{}"); resolve(parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {}); } catch { reject(new Error("请求体不是有效 JSON")); } }); request.on("error", reject); });
+  return new Promise((resolve, reject) => { let raw = ""; let settled = false; request.setEncoding("utf8"); request.on("data", (chunk: string) => { raw += chunk; if (raw.length > 1_000_000 && !settled) { settled = true; // 超限即销毁连接，阻止客户端继续推送占内存
+ request.destroy(); reject(new Error("request body too large")); } }); request.on("end", () => { if (settled) return; try { const parsed = JSON.parse(raw || "{}"); resolve(parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {}); } catch { reject(new Error("请求体不是有效 JSON")); } }); request.on("error", (error) => { if (!settled) { settled = true; reject(error); } }); });
 }
 
 function textField(value: unknown, name: string): string { const text = optionalText(value); if (!text) throw new Error(`${name} 不能为空`); return text; }

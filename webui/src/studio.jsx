@@ -75,7 +75,7 @@ function Workbench({ mode }) {
       <section className="card">
         <h2>创作工作台</h2>
         <p className="meta">{mode === "commercial" ? "商用模式：按模型用量计费" : "自用模式：免计费"}{notice ? ` · ${notice}` : ""}</p>
-        <BookPicker books={books} active={active} onPick={setActive} onCreated={() => { loadBooks(); flash("书籍已创建"); }} />
+        <BookPicker books={books} active={active} onPick={setActive} onCreated={() => { loadBooks(); flash("书籍已创建"); }} onError={flash} />
       </section>
       {active ? (
         <>
@@ -91,14 +91,18 @@ function Workbench({ mode }) {
   );
 }
 
-function BookPicker({ books, active, onPick, onCreated }) {
+function BookPicker({ books, active, onPick, onCreated, onError }) {
   const [title, setTitle] = useState("");
   const create = async (event) => {
     event.preventDefault();
     if (!title.trim()) return;
-    await post("/api/import", { title: title.trim(), text: "第1章 开端\n\n（空白起点）" });
-    setTitle("");
-    onCreated();
+    try {
+      await post("/api/import", { title: title.trim(), text: "第1章 开端\n\n（空白起点）" });
+      setTitle("");
+      onCreated();
+    } catch (error) {
+      onError(error.message);
+    }
   };
   return (
     <div className="row">
@@ -142,7 +146,8 @@ function AutopilotPanel({ bookId, flash }) {
         else if (event === "done") { setPhase("done"); setLive(""); setReport(data); push(`完成：最终 ${data.finalScore ?? "?"} 分（${data.passed ? "达标" : "未达标"}），${data.rounds} 轮`); flash("自动驾驶完成"); }
         else if (event === "error") { setPhase("failed"); push(`错误：${data.message ?? "未知"}`); }
       });
-      if (phase === "planning" || phase === "writing" || phase === "reviewing" || phase === "rewriting") setPhase("done");
+      // 兜底：流正常关闭但未收到 done/error（如网关截断）时复位运行态；函数式更新避免 stale closure
+      setPhase((current) => (current === "planning" || current === "writing" || current === "reviewing" || current === "rewriting") ? "done" : current);
     } catch (error) {
       setPhase("failed");
       push(`错误：${error.message}`);
@@ -182,14 +187,22 @@ function MemoryPanel({ bookId, flash }) {
   const addCharacter = async (event) => {
     event.preventDefault();
     if (!name.trim()) return;
-    await post("/api/entities", { bookId, entity: { id: `c-${Date.now().toString(36)}`, name: name.trim(), type: "character", description: description.trim() } });
-    setName(""); setDescription(""); reload(); flash("角色已登记");
+    try {
+      await post("/api/entities", { bookId, entity: { id: `c-${Date.now().toString(36)}`, name: name.trim(), type: "character", description: description.trim() } });
+      setName(""); setDescription(""); reload(); flash("角色已登记");
+    } catch (error) {
+      flash(error.message);
+    }
   };
   const addForeshadow = async (event) => {
     event.preventDefault();
     if (!foreshadowTitle.trim()) return;
-    await post("/api/foreshadows", { bookId, foreshadow: { id: `f-${Date.now().toString(36)}`, title: foreshadowTitle.trim(), description: foreshadowNote.trim(), plantedChapter: 1, urgency: "medium" } });
-    setForeshadowTitle(""); setForeshadowNote(""); reload(); flash("伏笔已登记");
+    try {
+      await post("/api/foreshadows", { bookId, foreshadow: { id: `f-${Date.now().toString(36)}`, title: foreshadowTitle.trim(), description: foreshadowNote.trim(), plantedChapter: 1, urgency: "medium" } });
+      setForeshadowTitle(""); setForeshadowNote(""); reload(); flash("伏笔已登记");
+    } catch (error) {
+      flash(error.message);
+    }
   };
   return (
     <section className="card">

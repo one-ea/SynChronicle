@@ -60,6 +60,13 @@ function stripJsonComments(input: string): string {
       if (index < input.length) output += "\n";
       continue;
     }
+    // 块注释 /* */（JSONC 标准）：跨行剥离至结束符，未闭合时到文件尾
+    if (char === "/" && input[index + 1] === "*") {
+      index += 2;
+      while (index < input.length && !(input[index] === "*" && input[index + 1] === "/")) index += 1;
+      index += 1;
+      continue;
+    }
     output += char;
   }
   return output;

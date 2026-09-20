@@ -25,7 +25,7 @@ function d1(db: Database.Database): unknown {
       let values: unknown[] = [];
       const stmt = {
         bind: (...input: unknown[]) => { values = input; return stmt; },
-        run: async () => { db.prepare(sql).run(...(names.length ? [bindObject(names, values)] : values)); return { success: true }; },
+        run: async () => ({ meta: { changes: db.prepare(sql).run(...(names.length ? [bindObject(names, values)] : values)).changes } }),
         first: async <T>() => (db.prepare(sql).get(...(names.length ? [bindObject(names, values)] : values)) ?? null) as T | null,
         all: async <T>() => ({ results: db.prepare(sql).all(...(names.length ? [bindObject(names, values)] : values)) as T[] }),
       };

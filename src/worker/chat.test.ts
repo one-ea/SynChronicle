@@ -25,7 +25,7 @@ function d1(db: Database.Database): unknown {
       let values: unknown[] = [];
       const stmt = {
         bind: (...input: unknown[]) => { values = input; return stmt; },
-        run: async () => { db.prepare(sql).run(...(names.length ? [bindObject(names, values)] : values)); return { success: true }; },
+        run: async () => ({ meta: { changes: db.prepare(sql).run(...(names.length ? [bindObject(names, values)] : values)).changes } }),
         first: async <T>() => (db.prepare(sql).get(...(names.length ? [bindObject(names, values)] : values)) ?? null) as T | null,
         all: async <T>() => ({ results: db.prepare(sql).all(...(names.length ? [bindObject(names, values)] : values)) as T[] }),
       };
@@ -144,9 +144,10 @@ describe("worker chat engine", () => {
     expect(historyBody.turns.map((turn) => turn.role)).toEqual(["user", "assistant"]);
     expect(historyBody.turns[1]!.content).toContain("钟楼");
 
-    // DO 枢纽收到开始/增量/完成事件
-    const deltaEvents = hubEvents.filter((event) => event.event === "delta");
-    expect(deltaEvents.length).toBeGreaterThanOrEqual(2);
+    // DO 枢纽收到开始/增量/完成事件（增量按 200ms 窗口合并，断言内容完整不丢失）
+    const deltaEvents = hubEvents.filter((event) => event.event === "delta") as Array<{ data: { value: string } }>;
+    expect(deltaEvents.length).toBeGreaterThanOrEqual(1);
+    expect(deltaEvents.map((event) => event.data.value).join("")).toContain("雨夜里的钟楼");
 
     // 自用模式：不写额度账本
     const ledger = db.prepare("SELECT COUNT(*) AS total FROM usage_ledger").get() as { total: number };

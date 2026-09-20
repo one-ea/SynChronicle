@@ -22,7 +22,9 @@ export class SqlKV implements KvBackend {
   async delete(path: string): Promise<void> { await this.db.run("DELETE FROM kv_files WHERE path = ?", [path]); }
 
   async list(prefix: string): Promise<string[]> {
-    const rows = await this.db.all<{ path: string }>("SELECT path FROM kv_files WHERE path LIKE ? ORDER BY path", [`${prefix}%`]);
+    // 转义前缀中的 LIKE 通配符（%/_/!），否则目录名含 _ 时会串到兄弟目录；三方言均支持单字符 ESCAPE
+    const escaped = prefix.replace(/[!%_]/g, (ch) => `!${ch}`);
+    const rows = await this.db.all<{ path: string }>("SELECT path FROM kv_files WHERE path LIKE ? ESCAPE '!' ORDER BY path", [`${escaped}%`]);
     return rows.map((row) => row.path);
   }
 

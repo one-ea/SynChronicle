@@ -43,7 +43,7 @@ export function stopEdgeSync(): void {
 
 function schedule(): void {
   if (timer || flushing) return;
-  timer = setTimeout(() => { timer = null; void flushEdgeSync(); }, DEBOUNCE_MS);
+  timer = setTimeout(() => { timer = null; void flushEdgeSync().catch(() => undefined); }, DEBOUNCE_MS);
   if (typeof timer === "object" && "unref" in timer) (timer as { unref(): void }).unref();
 }
 
@@ -113,7 +113,8 @@ export async function pushBook(config: EdgeSyncOptions, bookId: string): Promise
   const files = await walk(io, ".");
   const writes: Array<{ path: string; content: string }> = [];
   for (const rel of files) {
-    const content = await io.readText(rel);
+    // kv 后端把无子键的空目录也列为文件，读取失败按空内容跳过
+    const content = await io.readText(rel).catch(() => "");
     if (content) writes.push({ path: `books/${bookId}/${rel}`, content });
   }
   const shelf = await config.getBookshelf();
@@ -135,8 +136,9 @@ async function walk(io: FileIO, rel: string): Promise<string[]> {
   const files: string[] = [];
   for (const name of names) {
     const child = rel === "." ? name : `${rel}/${name}`;
-    const nested = await io.listDir(child);
-    if (nested.length) files.push(...(await walk(io, child)));
+    // 用 isDir 区分文件与目录：listDir 对文件也返回 []，旧判据会让文件永不入列
+    if (await io.isDir(child)) files.push(...(await walk(io, child)));
+    else files.push(child);
   }
   return files;
 }

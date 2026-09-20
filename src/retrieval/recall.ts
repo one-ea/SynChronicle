@@ -16,7 +16,7 @@ export interface RecallHit { kind: RecallKind; source: string; score: number; sn
 
 function clip(text: string, max = 120): string {
   const flat = text.replace(/\s+/g, " ").trim();
-  return flat.length <= max ? flat : flat + "…";
+  return flat.length <= max ? flat : `${flat.slice(0, max)}…`;
 }
 
 export async function buildRecallCorpus(store: Store): Promise<RecallDoc[]> {

@@ -242,7 +242,10 @@ export class AutopilotRunner {
           this.state = { ...this.state, rewriteCount: this.state.rewriteCount + 1 };
           await this.persist();
         } else {
-          await this.adoptChapter(chapter, this.bestText || text, this.bestScore, true);
+          const finalText = this.bestText || text;
+          // 重写耗尽仍无任何成稿（如上游持续失败）时明确报错，绝不把空章节标记为完成并推进进度
+          if (!finalText.trim()) throw new Error(`第 ${chapter} 章连续 ${this.state.settings.maxRewrites + 1} 次生成均未产出正文，自动驾驶中止`);
+          await this.adoptChapter(chapter, finalText, this.bestScore, true);
           adopted = true;
         }
       }

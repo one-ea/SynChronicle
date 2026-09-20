@@ -58,7 +58,9 @@ export class D1KvStore implements KvBackend {
   }
 
   async list(prefix: string): Promise<string[]> {
-    const { results } = await this.db.prepare("SELECT path FROM kv_files WHERE path LIKE ?1 ORDER BY path").bind(`${prefix}%`).all<{ path: string }>();
+    // 转义前缀中的 LIKE 通配符（%/_/!），否则目录名含 _ 时会串到兄弟目录
+    const escaped = prefix.replace(/[!%_]/g, (ch) => `!${ch}`);
+    const { results } = await this.db.prepare("SELECT path FROM kv_files WHERE path LIKE ?1 ESCAPE '!' ORDER BY path").bind(`${escaped}%`).all<{ path: string }>();
     return results.map((row) => row.path);
   }
 }

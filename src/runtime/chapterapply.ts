@@ -1,4 +1,5 @@
 import type { Store } from "../store/index.js";
+import { countWords } from "../store/versions.js";
 
 /**
  * 章节正文落盘共用路径（P7 引入，P8 起 server 与 autopilot runner 共享）：
@@ -8,7 +9,8 @@ import type { Store } from "../store/index.js";
 export async function applyChapterText(store: Store, chapter: number, text: string, source: string): Promise<{ wordCount: number }> {
   await store.drafts.saveFinalChapter(chapter, text);
   await store.versions.record(chapter, text, source).catch(() => undefined);
-  const words = [...text].length;
+  // 统一去空白口径（对齐 importText/versions），避免 autopilot 路径字数系统性虚高
+  const words = countWords(text);
   const progress = await store.progress.load();
   if (progress) {
     const counts = { ...(progress.chapter_word_counts || {}) };

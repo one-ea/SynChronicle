@@ -22,7 +22,7 @@ import type { ReflectionEvent } from "../agents/reflection/index.js";
 import { EvolutionEngine } from "./evolution.js";
 
 export interface RuntimeObserver { reflection(event: ReflectionEvent & { agent: string }): void | Promise<void>; usage(agent: string, usage: ModelUsage | undefined, model?: ModelIdentity): void; }
-export interface RuntimeAgent { run(prompt: string, signal?: AbortSignal): AsyncIterable<string>; setObserver?(observer: RuntimeObserver): void; abort(reason: string): void; close(): void | Promise<void>; }
+export interface RuntimeAgent { run(prompt: string, signal?: AbortSignal): AsyncIterable<string>; /** 返回最近一次 run 的完成态 promise（存在时），供流结束后核验上游错误。 */ settle?(): Promise<unknown> | null; setObserver?(observer: RuntimeObserver): void; abort(reason: string): void; close(): void | Promise<void>; }
 export interface UsageListener { (agent: string, usage: ModelUsage | undefined, model: ModelIdentity | undefined): void }
 export interface HostDependencies { agent?: RuntimeAgent; store?: Store; askUser?: AskUserHandler }
 type RuntimeState = "idle" | "running" | "paused" | "completed" | "closed";
@@ -48,7 +48,7 @@ export class Host {
   /** P10 收尾：注入平台额度结算回调（商用 DB 模式由 server 注入，逐次调用上报）。 */
   setUsageListener(listener: UsageListener | null): void { this.usageListener = listener; }
 
-  static async new(config: Config, bundle: Bundle, dependencies: HostDependencies = {}): Promise<Host> { const cfg = ConfigSchema.parse(config); const store = dependencies.store ?? new Store(cfg.output_dir ?? "output/novel"); await store.init(); let runtimeAgent = dependencies.agent; let host: Host | undefined; if (!runtimeAgent) { const models = createModelSet(cfg); try { await prepareUserRules(store, models); } catch { /* 快照缺失不阻断启动 */ } const built = buildCoordinator(cfg, store, models, bundle, (agent, usage, model) => host?.usage.record(agent, normalizeUsage(usage, model)), undefined, undefined, dependencies.askUser, (event) => host?.observeReflection(event), () => host?.hasBudget() ?? true); runtimeAgent = { run(prompt, signal) { const stream = built.coordinator.stream(prompt, signal); return stream.textStream; }, abort() { built.coordinator.clear(); }, close() { built.coordinator.clear(); } }; } host = new Host(cfg, runtimeAgent, store); host.usage.load(await store.usage.load()); for (const item of await store.runtime.loadQueue()) { const payload = item.payload as RuntimeEvent | undefined; if (item.kind === "ui_event" && payload?.id) host.seenEventIds.add(payload.id); } return host; }
+  static async new(config: Config, bundle: Bundle, dependencies: HostDependencies = {}): Promise<Host> { const cfg = ConfigSchema.parse(config); const store = dependencies.store ?? new Store(cfg.output_dir ?? "output/novel"); await store.init(); let runtimeAgent = dependencies.agent; let host: Host | undefined; if (!runtimeAgent) { const models = createModelSet(cfg); try { await prepareUserRules(store, models); } catch { /* 快照缺失不阻断启动 */ } const built = buildCoordinator(cfg, store, models, bundle, (agent, usage, model) => host?.usage.record(agent, normalizeUsage(usage, model)), undefined, undefined, dependencies.askUser, (event) => host?.observeReflection(event), () => host?.hasBudget() ?? true); let lastCompleted: Promise<unknown> | null = null; runtimeAgent = { run(prompt, signal) { const stream = built.coordinator.stream(prompt, signal); lastCompleted = stream.completed; return stream.textStream; }, settle() { return lastCompleted; }, abort() { built.coordinator.clear(); }, close() { built.coordinator.clear(); } }; } host = new Host(cfg, runtimeAgent, store); host.usage.load(await store.usage.load()); for (const item of await store.runtime.loadQueue()) { const payload = item.payload as RuntimeEvent | undefined; if (item.kind === "ui_event" && payload?.id) host.seenEventIds.add(payload.id); } return host; }
 
   async startPrepared(prompt: string): Promise<void> { if (!prompt.trim()) throw new Error("prompt is empty"); await this.run(prompt, "启动创作"); }
   /**
@@ -136,6 +136,8 @@ export class Host {
         await this.store.runtime.appendQueue({ seq: 0, time: new Date().toISOString(), kind: "stream_delta", priority: "background", payload: { delta } });
       }
       controller.signal.throwIfAborted();
+      // 核验上游完成态：textStream 内部吞错（见 agent.ts stream），API 故障只在 completed 上暴露
+      await this.agent.settle?.();
       this.state = "completed";
       this.emit(systemEvent("运行完成", "success"));
     } catch (error) {

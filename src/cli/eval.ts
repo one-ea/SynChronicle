@@ -61,13 +61,20 @@ function parseEvalOptions(argv: string[]): EvalOptions {
       else if (arg === "--variant") out.variant = value;
       else if (arg === "--config") out.config = value;
       else if (arg === "--out") out.out = value;
-      else if (arg === "--max-chapters") out.maxChapters = Number(value);
+      else if (arg === "--max-chapters") out.maxChapters = intOnly(value, arg);
       else if (arg === "--timeout") out.timeout = value;
-      else if (arg === "--repeat") out.repeat = Number(value);
+      else if (arg === "--repeat") out.repeat = intOnly(value, arg);
       else throw new Error(`未知参数 ${arg}`);
     }
   }
   return out;
+}
+
+/** 数字参数校验：NaN/非整数（如 `--repeat abc`）在入口报错，避免静默空跑；具体取值范围留给 evalCommand 校验。 */
+function intOnly(value: string, flag: string): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed)) throw new Error(`${flag} 必须是整数`);
+  return parsed;
 }
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);

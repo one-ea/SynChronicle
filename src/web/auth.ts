@@ -53,6 +53,8 @@ export class LoginRateLimiter {
   isLocked(key: string, now = Date.now()): boolean { return (this.entries.get(key)?.lockUntil ?? 0) > now; }
   fail(key: string, now = Date.now()): void {
     const entry = this.entries.get(key) ?? { fails: 0, lockUntil: 0 };
+    // 仅在「曾锁定且锁已过期」时重新计数，避免历史失败把偶发输错密码的用户长期放大锁定
+    if (entry.lockUntil > 0 && entry.lockUntil <= now) { entry.fails = 0; entry.lockUntil = 0; }
     entry.fails += 1;
     if (entry.fails >= this.maxFails) entry.lockUntil = now + this.lockMs;
     this.entries.set(key, entry);
