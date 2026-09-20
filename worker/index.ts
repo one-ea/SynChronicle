@@ -13,8 +13,9 @@ import { UsersDao } from "../src/db/users.js";
 import { PublishedEntrySchema, titleHue } from "../src/domain/publish.js";
 import { scanSafety } from "../src/diag/safety.js";
 import { splitChapters } from "../src/runtime/imp/chapters.js";
+import { buildUpstreamRequest, parseUpstreamStream, settleCost, sseEvent, CHAT_SYSTEM_PROMPT, type ChatTurn } from "./chat.js";
 import { D1KvStore, type Env } from "./types.js";
-import { WorkerCrypto, issueToken, verifyToken, maskKey } from "./crypto.js";
+import { WorkerCrypto, issueToken, verifyToken, maskKey, toHex, pbkdf2Hex } from "./crypto.js";
 import { RuntimeHub } from "./object.js";
 
 export { D1KvStore } from "./types.js";
@@ -259,7 +260,11 @@ async function route(request: Request, ctx: Ctx): Promise<Response> {
   if (method === "POST" && path === "/api/export") return exportBook(request, ctx);
   if (method === "GET" && path.startsWith("/api/export/file/")) return exportFile(ctx, decodeURIComponent(path.slice("/api/export/file/".length)));
 
-  return fail("接口不存在（Worker 切片当前覆盖平台面；AI 生成请使用 Node 主线）", 404);
+  // 对话式生成（P11-C5）：渠道解密 → OpenAI 兼容流式 → SSE 推送 → 商用结算
+  if (method === "GET" && path === "/api/chat") return chatHistory(ctx, url.searchParams.get("book") || "");
+  if (method === "POST" && path === "/api/chat") return chatTurn(request, ctx);
+
+  return fail("接口不存在（自动驾驶/Steer 等完整引擎仍需 Node 主线）", 404);
 }
 
 /** ---------- 书城（published.json 存于 kv: platform/published.json） ---------- */
@@ -325,7 +330,7 @@ async function authSetup(request: Request, ctx: Ctx): Promise<Response> {
   if (await ctx.users.count() > 0) return fail("管理员已初始化", 403);
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
-  const salt = hex(crypto.getRandomValues(new Uint8Array(16)));
+  const salt = toHex(crypto.getRandomValues(new Uint8Array(16)));
   const hash = await pbkdf2Hex(password, salt);
   await ctx.users.upsert({ id, name, password_salt: salt, password_hash: hash, role: "admin", status: "active", quota_usd_remaining: 0, quota_usd_used: 0, created_at: now, updated_at: now });
   await ctx.audit.log(id, "auth.setup", "user:system", { name });
@@ -344,7 +349,7 @@ async function authRegister(request: Request, ctx: Ctx): Promise<Response> {
   if (!claim.ok) return fail(claim.expired ? "邀请码已过期" : "邀请码无效或已使用", 400);
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
-  const salt = hex(crypto.getRandomValues(new Uint8Array(16)));
+  const salt = toHex(crypto.getRandomValues(new Uint8Array(16)));
   const hash = await pbkdf2Hex(password, salt);
   await ctx.users.upsert({ id, name, password_salt: salt, password_hash: hash, role: "writer", status: "active", quota_usd_remaining: claim.grantedUsd, quota_usd_used: 0, created_at: now, updated_at: now });
   await ctx.users.claimInvite(invite, id, now);
@@ -365,16 +370,7 @@ async function authLogin(request: Request, ctx: Ctx): Promise<Response> {
 
 async function session(ctx: Ctx, uid: string): Promise<Response> {
   const token = await issueToken(uid, await ctx.authSecret);
-  return json({ user: { id: uid } }, 200, { "set-cookie": `sc_token=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${7 * 24 * 3600}` });
-}
-
-function hex(bytes: Uint8Array): string { return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join(""); }
-
-/** PBKDF2-SHA256（100k 轮）替代 Node scrypt：Worker 无 scrypt，格式 salt$hash hex。 */
-async function pbkdf2Hex(password: string, salt: string): Promise<string> {
-  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
-  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: new TextEncoder().encode(salt), iterations: 100_000 }, key, 512);
-  return hex(new Uint8Array(bits));
+   return json({ user: { id: uid } }, 200, { "set-cookie": `sc_token=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${7 * 24 * 3600}` });
 }
 
 /** ---------- 管理面 ---------- */
@@ -395,7 +391,7 @@ async function inviteCreate(request: Request, ctx: Ctx): Promise<Response> {
   const grantedUsd = Math.max(Number(body.grantedUsd ?? 0), 0);
   const codes: string[] = [];
   for (let index = 0; index < count; index += 1) {
-    const code = `inv-${hex(crypto.getRandomValues(new Uint8Array(8)))}`;
+    const code = `inv-${toHex(crypto.getRandomValues(new Uint8Array(8)))}`;
     await ctx.users.createInvite(code, grantedUsd, ctx.user!.id, null);
     codes.push(code);
   }
@@ -410,7 +406,7 @@ async function rechargeCreate(request: Request, ctx: Ctx): Promise<Response> {
   const amountUsd = Math.max(Number(body.amountUsd ?? 0), 0);
   const codes: string[] = [];
   for (let index = 0; index < count; index += 1) {
-    const code = `rch-${hex(crypto.getRandomValues(new Uint8Array(8)))}`;
+    const code = `rch-${toHex(crypto.getRandomValues(new Uint8Array(8)))}`;
     await ctx.quota.createRechargeCode(code, amountUsd, ctx.user!.id);
     codes.push(code);
   }
@@ -703,4 +699,120 @@ async function exportFile(ctx: Ctx, key: string): Promise<Response> {
   const object = await ctx.env.EXPORTS.get(key);
   if (!object) return fail("导出文件不存在", 404);
   return new Response(object.body, { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store", "content-disposition": `attachment; filename="${key.split("/").pop()}"` } });
+}
+
+/** ---------- 对话式生成（P11-C5） ---------- */
+
+const CHAT_HISTORY_LIMIT = 20;
+
+async function loadChatHistory(ctx: Ctx, bookId: string): Promise<ChatTurn[]> {
+  const raw = await ctx.kv.get(`books/${bookId}/meta/chat.jsonl`);
+  if (!raw) return [];
+  const turns: ChatTurn[] = [];
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const value = JSON.parse(line) as { role?: unknown; content?: unknown };
+      if ((value.role === "user" || value.role === "assistant") && typeof value.content === "string") turns.push(value as ChatTurn);
+    } catch { /* 跳过坏行 */ }
+  }
+  return turns.slice(-CHAT_HISTORY_LIMIT);
+}
+
+async function appendChatTurn(ctx: Ctx, bookId: string, turn: ChatTurn): Promise<void> {
+  const key = `books/${bookId}/meta/chat.jsonl`;
+  const current = (await ctx.kv.get(key)) ?? "";
+  await ctx.kv.set(key, `${current}${current.endsWith("\n") || !current ? "" : "\n"}${JSON.stringify(turn)}\n`);
+}
+
+async function chatHistory(ctx: Ctx, bookId: string): Promise<Response> {
+  if (!bookId) return json({ turns: [] });
+  const denied = await requireBookAccess(ctx, bookId);
+  if (denied) return denied;
+  return json({ turns: await loadChatHistory(ctx, bookId) });
+}
+
+const ChatBody = z.object({ bookId: z.string().trim().min(1).max(64), message: z.string().trim().min(1).max(32_000), model: z.string().trim().min(1).max(120).optional() });
+
+async function chatTurn(request: Request, ctx: Ctx): Promise<Response> {
+  let bookId = "";
+  try {
+    const body = ChatBody.parse(await readBody(request));
+    bookId = body.bookId;
+    const denied = await requireBookAccess(ctx, bookId);
+    if (denied) return denied;
+
+    // 渠道选择：包含指定模型（或任一可用模型）的 active 渠道
+    const channels = await ctx.channels.effective(ctx.user!.id);
+    if (!channels.length) return fail("没有可用模型渠道，请先在系统中创建", 400);
+    const channel = body.model ? channels.find((row) => safeModels(row.models).includes(body.model!)) : undefined;
+    const picked = channel ?? channels[0]!;
+    const models = safeModels(picked.models);
+    const model = body.model && models.includes(body.model) ? body.model : models[0];
+    if (!model) return fail("渠道没有配置模型", 400);
+    if (picked.provider === "anthropic" || picked.provider === "google") return fail("该渠道 provider 暂不支持边缘生成（仅 OpenAI 兼容接口）", 400);
+
+    if (ctx.mode === "commercial") {
+      const balance = await ctx.quota.balance(ctx.user!.id);
+      if (balance.remaining <= 0) return fail("额度已用尽，请兑换或联系管理员", 402);
+    }
+
+    const apiKey = await ctx.crypto.decrypt({ ct: picked.api_key_ct, iv: picked.api_key_iv, tag: picked.api_key_tag });
+    const history = await loadChatHistory(ctx, bookId);
+    const messages = [
+      { role: "system", content: CHAT_SYSTEM_PROMPT },
+      ...history.map((turn) => ({ role: turn.role, content: turn.content })),
+      { role: "user", content: body.message },
+    ];
+
+    const hub = ctx.env.RUNTIME.get(ctx.env.RUNTIME.idFromName(`${ctx.user!.id}:${bookId}`));
+    const publish = (event: string, data: unknown): Promise<void> => hub.fetch(new Request("https://runtime/events", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-internal-token": ctx.env.INTERNAL_TOKEN ?? "" },
+      body: JSON.stringify({ event, data }),
+    })).then(() => undefined, () => undefined);
+
+    const upstream = await fetch(buildUpstreamRequest(picked, apiKey, model, messages));
+    if (!upstream.ok || !upstream.body) {
+      const detail = (await upstream.text().catch(() => "")).slice(0, 300);
+      await publish("runtime", { type: "error", message: `上游模型调用失败: ${upstream.status}` });
+      return fail(`上游模型调用失败: ${upstream.status} ${detail}`, 502);
+    }
+
+    const started = new Date().toISOString();
+    await appendChatTurn(ctx, bookId, { role: "user", content: body.message, time: started });
+    await publish("runtime", { type: "system", message: "边缘生成开始", model });
+
+    let full = "";
+    let usage = { input: 0, output: 0 };
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        try {
+          for await (const piece of parseUpstreamStream(upstream.body!)) {
+            if (piece.usage) usage = piece.usage;
+            if (piece.delta) {
+              full += piece.delta;
+              controller.enqueue(sseEvent("delta", { value: piece.delta }));
+              await publish("delta", { value: piece.delta });
+            }
+          }
+          const costUsd = settleCost(model, usage.input, usage.output);
+          if (ctx.mode === "commercial") {
+            await ctx.quota.settle(ctx.user!.id, { user_id: ctx.user!.id, book_id: bookId, agent: "chat", tokens_in: usage.input, tokens_out: usage.output, cost_usd: costUsd, created_at: new Date().toISOString() });
+          }
+          await appendChatTurn(ctx, bookId, { role: "assistant", content: full, model, usage, time: new Date().toISOString() });
+          await ctx.audit.log(ctx.user!.id, "chat", `book:${bookId}`, { model, tokensIn: usage.input, tokensOut: usage.output, costUsd });
+          controller.enqueue(sseEvent("done", { model, usage, costUsd }));
+          await publish("runtime", { type: "system", message: "边缘生成完成", model, usage, costUsd });
+        } catch (error) {
+          controller.enqueue(sseEvent("error", { message: error instanceof Error ? error.message : String(error) }));
+        } finally {
+          controller.close();
+        }
+      },
+    });
+    return new Response(stream, { headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-store" } });
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : String(error), 400);
+  }
 }

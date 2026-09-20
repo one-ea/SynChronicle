@@ -79,3 +79,12 @@ async function hmacHex(payload: string, secret: string): Promise<string> {
   const mac = await crypto.subtle.sign("HMAC", key, encoder.encode(payload));
   return [...new Uint8Array(mac)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
+
+export function toHex(bytes: Uint8Array): string { return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join(""); }
+
+/** PBKDF2-SHA256（100k 轮）密码哈希：Worker 无 scrypt，格式 salt$hash hex。 */
+export async function pbkdf2Hex(password: string, salt: string): Promise<string> {
+  const key = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: encoder.encode(salt), iterations: 100_000 }, key, 512);
+  return toHex(new Uint8Array(bits));
+}

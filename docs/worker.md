@@ -72,7 +72,8 @@ EDGE_RELAY_TOKEN=<与 INTERNAL_TOKEN 相同>
 | 书城/发布（含商用安全闸） | 支持 | 支持 |
 | 书籍内容/进度 | D1 kv（边缘同步） | 本地/数据库 |
 | SSE 实时流 | RuntimeHub DO（中继模式） | 原生 |
-| AI 生成/自动驾驶/Steer | 未支持 | 支持 |
+| 对话式生成 | 支持（渠道直连流式 + 计费） | 支持 |
+| 自动驾驶/Steer/多智能体 | 未支持 | 支持 |
 | 文件导入导出 | txt 导入/导出（R2 可选存储） | 支持（含 EPUB） |
 
 ### 导入导出（P11-C4）
@@ -82,4 +83,13 @@ EDGE_RELAY_TOKEN=<与 INTERNAL_TOKEN 相同>
 - `GET /api/export/file/<key>`：仅文件属主可下载。
 - 启用 R2：在 `wrangler.toml` 取消 `[[r2_buckets]]` 注释并 `npx wrangler r2 bucket create synchronicle-exports`。
 
-后续里程碑：C5 生成引擎 Worker 化。
+### 对话式生成（P11-C5）
+
+- `GET /api/chat?book=<id>`：读取 `books/<id>/meta/chat.jsonl` 会话历史（最近 20 轮）。
+- `POST /api/chat {bookId, message, model?}`：选择可用渠道（OpenAI 兼容），解密密钥后流式调用上游 `chat/completions`：
+  - 响应为 SSE 流（`delta` 增量 → `done` 含 usage/cost），fetch 客户端直接读 `response.body`
+  - 增量同步推送 RuntimeHub DO，订阅 `GET /api/stream?book=<id>` 的客户端实时可见
+  - 会话轮次持久化到 kv；商用模式按上游 usage 结算成本写入 `usage_ledger` 并扣减额度（主线同款价格表）
+  - anthropic/google provider 暂不支持（非 OpenAI 兼容协议）
+
+后续里程碑：C6 多智能体引擎 Worker 化（Coordinator/Architect/Writer/Editor）。
