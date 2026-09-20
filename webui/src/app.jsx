@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import Studio from "./studio.jsx";
 
 const PAGES = ["home", "book", "reader", "login", "studio"];
 
@@ -139,8 +140,7 @@ function Reader({ id, chapter }) {
   );
 }
 
-function Login({ next }) {
-  const [name, setName] = useState("");
+function Login({ next }) {  const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const submit = async (event) => {
@@ -166,12 +166,4 @@ function Login({ next }) {
       </div>
     </main>
   );
-}
-
-function Studio() {
-  const [ready, setReady] = useState(null);
-  useEffect(() => { fetch("/api/auth/me", { headers: { "x-requested-with": "fetch" } }).then((response) => setReady(response.ok)).catch(() => setReady(false)); }, []);
-  if (ready === null) return <main className="wrap"><div className="empty">加载中…</div></main>;
-  if (!ready) { setTimeout(() => navigate("/login?next=/studio"), 0); return <main className="wrap"><div className="empty">跳转登录…</div></main>; }
-  return <iframe className="studio-frame" title="SynChronicle 控制台" src="/studio/legacy" />;
 }

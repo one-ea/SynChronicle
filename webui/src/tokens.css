@@ -76,3 +76,24 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: 0 0 0 2px
 .studio-frame { border: 0; width: 100%; height: calc(100vh - 56px); display: block; }
 @media (max-width: 700px) { .nav { padding: 0 16px; } .wrap { padding: 24px 16px 64px; } .grid { grid-template-columns: 1fr 1fr; gap: 12px; } .card { padding: 14px; } .cover { height: 120px; } }
 @media (max-width: 430px) { .grid { grid-template-columns: 1fr; } .cover { height: 150px; } }
+
+/* P11-C10 创作工作台 */
+.card { border: 1px solid var(--outline, #ddd); border-radius: 14px; padding: 18px; margin: 14px 0; background: var(--surface, #fff); }
+.card h2 { margin: 0 0 6px; font-size: 1.1rem; }
+.card h3 { margin: 0 0 8px; font-size: 0.95rem; }
+.card .meta { color: var(--muted, #777); font-size: 0.85rem; margin: 0 0 10px; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
+.row label { font-size: 0.85rem; color: var(--muted, #777); }
+.row input[type="number"] { width: 72px; }
+.stack { display: flex; flex-direction: column; gap: 8px; max-width: 280px; }
+.stack input { width: 100%; }
+.memory-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.memory-grid ul { padding-left: 18px; margin: 0 0 12px; }
+.memory-grid li { font-size: 0.85rem; margin: 4px 0; }
+.live-draft { background: var(--surface-2, #f6f6f6); border-radius: 10px; padding: 12px; max-height: 180px; overflow: auto; white-space: pre-wrap; font-size: 0.85rem; }
+.run-log { background: var(--surface-2, #f6f6f6); border-radius: 10px; padding: 10px 10px 10px 28px; max-height: 160px; overflow: auto; font-size: 0.82rem; }
+.review-list li { margin: 8px 0; font-size: 0.88rem; }
+.review-list small { display: block; color: var(--muted, #777); }
+textarea { width: 100%; box-sizing: border-box; border-radius: 10px; border: 1px solid var(--outline, #ccc); padding: 10px; font: inherit; resize: vertical; }
+select, input { border-radius: 10px; border: 1px solid var(--outline, #ccc); padding: 8px 10px; font: inherit; }
+@media (max-width: 720px) { .memory-grid { grid-template-columns: 1fr; } }
