@@ -10,6 +10,14 @@ database_name = "synchronicle"
 database_id = "REPLACE_WITH_D1_ID"
 migrations_dir = "migrations"
 
+# RuntimeHub Durable Object：每 userId:bookId 一个实例，承载 SSE 与运行事件回放
+[durable_objects]
+bindings = [{ name = "RUNTIME", class_name = "RuntimeHub" }]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RuntimeHub"]
+
 # KV：可选缓存命名空间（当前切片未强制使用）
 # [[kv_namespaces]]
 # binding = "CONTENT"

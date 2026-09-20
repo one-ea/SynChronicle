@@ -6,6 +6,10 @@
 export interface Env {
   /** D1 数据库绑定（wrangler.toml d1_databases）。 */
   DB: D1Database;
+  /** RuntimeHub Durable Object 绑定：每 userId:bookId 一个实例，承载 SSE 与事件回放。 */
+  RUNTIME: DurableObjectNamespace;
+  /** 内部事件摄入令牌（Node 主线边缘中继使用）；未配置时 /api/internal/events 拒绝写入。 */
+  INTERNAL_TOKEN?: string;
   /** KV 命名空间绑定，存放书稿内容（key 与 Node 版 kv_files 绝对路径键一致）。 */
   CONTENT: KVNamespace;
   /** 信封加密主密钥（64 位 hex），wrangler secret put MASTER_KEY。 */

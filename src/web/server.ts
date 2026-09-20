@@ -186,6 +186,7 @@ async function route(request: IncomingMessage, response: ServerResponse, context
     const user = await authenticate(request, context.authStore);
     if (!user) return sendJson(response, 401, { error: "未登录" });
     context.user = user;
+    configureRelayScope(context);
     const bookChooser = url.pathname === "/api/books" || url.pathname === "/api/books/switch";
     if (!bookChooser && !(await assertBookAccess(context))) return sendJson(response, 403, { error: "无权访问当前书籍" });
     if (request.method !== "GET" && request.headers["x-requested-with"] !== "fetch") return sendJson(response, 403, { error: "请求缺少安全标识" });
@@ -1280,11 +1281,24 @@ function projectReview(review: unknown): { verdict: string; summary: string; dim
 const sseClients = new Set<ServerResponse>();
 let sseConsuming = false;
 function sseChunk(event: string, data: unknown): string { return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`; }
-function broadcast(event: string, data: unknown): void { const chunk = sseChunk(event, data); for (const client of sseClients) client.write(chunk); }
+
+/** P11-C2 边缘中继：可选把运行事件推给 Cloudflare Worker 的 RuntimeHub DO（EDGE_RELAY_URL 配置时启用）。 */
+let relayScope = { user: "", book: "" };
+function configureRelayScope(context: RuntimeContext): void {
+  relayScope = { user: context.user?.id ?? "", book: context.bookshelf?.activeId ?? "" };
+}
+function edgeRelay(event: string, data: unknown): void {
+  const base = process.env.EDGE_RELAY_URL;
+  if (!base) return;
+  const token = process.env.EDGE_RELAY_TOKEN ?? "";
+  void fetch(`${base.replace(/\/$/, "")}/api/internal/events`, { method: "POST", headers: { "content-type": "application/json", "x-internal-token": token }, body: JSON.stringify({ user: relayScope.user, book: relayScope.book, event, data }) }).catch(() => undefined);
+}
+function broadcast(event: string, data: unknown): void { const chunk = sseChunk(event, data); for (const client of sseClients) client.write(chunk); edgeRelay(event, data); }
 function startSseConsumption(context: RuntimeContext): void {
   const host = context.host;
   if (sseConsuming || !host) return;
   sseConsuming = true;
+  configureRelayScope(context);
   void (async () => { try { for await (const event of host.events()) broadcast("runtime", event); } catch { /* host closed */ } })();
   void (async () => { try { for await (const delta of host.stream(true)) broadcast("delta", { value: delta }); } catch { /* host closed */ } })();
 }
@@ -1299,7 +1313,7 @@ async function handleStream(request: IncomingMessage, response: ServerResponse, 
     sseClients.add(response);
     startSseConsumption(context);
   }
-  const heartbeat = setInterval(() => { void lightStatus(context).then((snapshot) => { if (sseClients.has(response)) response.write(sseChunk("snapshot", snapshot)); }); }, 5000);
+  const heartbeat = setInterval(() => { void lightStatus(context).then((snapshot) => { if (sseClients.has(response)) response.write(sseChunk("snapshot", snapshot)); edgeRelay("snapshot", snapshot); }); }, 5000);
   request.on("close", () => { clearInterval(heartbeat); sseClients.delete(response); });
 }
 

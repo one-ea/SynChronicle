@@ -14,8 +14,10 @@ import { PublishedEntrySchema, titleHue } from "../src/domain/publish.js";
 import { scanSafety } from "../src/diag/safety.js";
 import { D1KvStore, type Env } from "./types.js";
 import { WorkerCrypto, issueToken, verifyToken, maskKey } from "./crypto.js";
+import { RuntimeHub } from "./object.js";
 
 export { D1KvStore } from "./types.js";
+export { RuntimeHub };
 
 interface Ctx {
   env: Env;
@@ -143,6 +145,18 @@ async function route(request: Request, ctx: Ctx): Promise<Response> {
     return json({ reported: true }, 201);
   }
 
+  // 内部事件摄入（Node 主线边缘中继）：令牌校验后转发到对应 DO
+  if (method === "POST" && path === "/api/internal/events") {
+    const token = request.headers.get("x-internal-token") ?? "";
+    if (!ctx.env.INTERNAL_TOKEN || token !== ctx.env.INTERNAL_TOKEN) return fail("forbidden", 403);
+    const body = await readBody(request);
+    const user = optional(body.user) || "*";
+    const book = optional(body.book) || "*";
+    const forward = new Request("https://runtime/events", { method: "POST", headers: { "content-type": "application/json", "x-internal-token": token }, body: JSON.stringify({ event: body.event, data: body.data }) });
+    const hub = ctx.env.RUNTIME.get(ctx.env.RUNTIME.idFromName(`${user}:${book}`));
+    return hub.fetch(forward);
+  }
+
   // 认证入口（setup/register/login 无需会话）
   if (method === "POST" && path === "/api/auth/setup") return authSetup(request, ctx);
   if (method === "POST" && path === "/api/auth/register") return authRegister(request, ctx);
@@ -154,7 +168,19 @@ async function route(request: Request, ctx: Ctx): Promise<Response> {
   if (method !== "GET" && request.headers.get("x-requested-with") !== "fetch") return fail("请求缺少安全标识", 403);
 
   if (method === "GET" && path === "/api/auth/me") return json({ user: ctx.user ?? null });
-  if (method === "POST" && path === "/api/auth/logout") return json({ ok: true }, 200, { "set-cookie": "sc_token=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0" });
+  if (method === "POST" && path === "/api/auth/logout") return json({ ok: true }, 200, { "set-cookie": "sc_token=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0" });
+
+  // SSE：转发到该用户书籍级 RuntimeHub DO（回放 + 实时）
+  if (method === "GET" && path === "/api/stream") {
+    const book = url.searchParams.get("book") || "*";
+    return ctx.env.RUNTIME.get(ctx.env.RUNTIME.idFromName(`${ctx.user!.id}:${book}`)).fetch(new Request("https://runtime/stream"));
+  }
+  if (method === "GET" && path === "/api/status") {
+    const book = url.searchParams.get("book") || "*";
+    const source = await ctx.env.RUNTIME.get(ctx.env.RUNTIME.idFromName(`${ctx.user!.id}:${book}`)).fetch(new Request("https://runtime/snapshot"));
+    const payload = (await source.json().catch(() => ({}))) as Record<string, unknown>;
+    return json({ ...payload, user: ctx.user, book });
+  }
 
   if (path === "/api/admin/invite-codes") {
     if (method === "GET") return inviteList(ctx);
