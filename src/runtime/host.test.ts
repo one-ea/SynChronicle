@@ -288,3 +288,28 @@ describe("Host inject", () => {
     expect(withoutPack).not.toContain("[写作技法]");
   });
 });
+
+describe("Host usage listener", () => {
+  it("forwards observer usage events to the settlement listener", async () => {
+    let observer: RuntimeObserver | undefined;
+    const runtimeAgent: RuntimeAgent = {
+      setObserver: (value) => { observer = value; },
+      run: vi.fn(async function* () { yield "正文"; }),
+      abort: vi.fn(),
+      close: vi.fn(),
+    };
+    const dir = await mkdtemp(join(tmpdir(), "runtime-host-listener-"));
+    const value = await Host.new({ provider: "mock", model: "mock", providers: { mock: { api_key: "test" } }, roles: {}, output_dir: dir }, {}, { agent: runtimeAgent });
+    const seen: Array<{ agent: string; input: number | undefined; output: number | undefined; model?: string }> = [];
+    value.setUsageListener((agent, usage, model) => seen.push({ agent, input: usage?.inputTokens, output: usage?.outputTokens, model: model?.model }));
+
+    observer?.usage("writer", { inputTokens: 120, outputTokens: 60, model: { provider: "mock", model: "mock" } }, { provider: "mock", model: "mock" });
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ agent: "writer", input: 120, output: 60, model: "mock" });
+    value.setUsageListener(null);
+    observer?.usage("writer", { inputTokens: 1, outputTokens: 1 }, undefined);
+    expect(seen).toHaveLength(1);
+    await value.close();
+  });
+});

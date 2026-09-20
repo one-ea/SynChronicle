@@ -286,6 +286,40 @@ describe("WebUI", () => {
     }
   });
 
+  it("isolates runtime sse events by user and book scope", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "synchronicle-web-sse-"));
+    try {
+      let observerRef: { reflection: (event: { type: string; agent: string; maxRounds?: number }) => void; usage: (agent: string, usage: { inputTokens?: number } | undefined, model?: unknown) => void } | undefined;
+      const runtimeAgent = {
+        setObserver: (value: { reflection: (event: { type: string; agent: string; maxRounds?: number }) => void; usage: (agent: string, usage: { inputTokens?: number } | undefined, model?: unknown) => void }) => { observerRef = value; },
+        run: async function* () { await Promise.resolve(); yield "增量"; },
+        abort: () => {},
+        close: () => {},
+      };
+      const hostA = await Host.new({ provider: "mock", model: "mock", providers: { mock: { api_key: "t" } }, roles: {}, output_dir: join(directory, "a") }, {}, { agent: runtimeAgent as never });
+
+      const handle = await startWebServer({ port: 0, configPath: "/tmp/synchronicle-test-missing-config.json", auth: false, hostInstance: hostA });
+      const first = await fetch(`http://127.0.0.1:${handle.port}/api/stream`);
+      const second = await fetch(`http://127.0.0.1:${handle.port}/api/stream`);
+      expect(first.headers.get("content-type")).toContain("text/event-stream");
+      expect(second.headers.get("content-type")).toContain("text/event-stream");
+      const readerA = first.body!.getReader();
+      const readerB = second.body!.getReader();
+      await readerA.read();
+      await readerB.read();
+      // 同一 scope 订阅者都收到运行事件；scope 键为 user:book（未认证为 *:*）
+      observerRef?.reflection({ type: "reflection.started", agent: "writer", maxRounds: 1 });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const chunkA = await readerA.read();
+      expect(Buffer.from(chunkA.value!).toString()).toContain("event:");
+      await readerA.cancel();
+      await readerB.cancel();
+      await handle.close();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("renders an emdash-style read front with chapter navigation", () => {
     const html = renderReadApp();
     expect(html).toContain("发现故事");

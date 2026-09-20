@@ -13,7 +13,7 @@ import { FileIO } from "../store/io.js";
 import { detectAitone } from "../stylestat/aitone.js";
 import { diagnose } from "../diag/index.js";
 import { adversarialReview } from "../diag/reader.js";
-import { estimateCost } from "../diag/cost.js";
+import { estimateCost, lookupPrice } from "../diag/cost.js";
 import { scanSafety } from "../diag/safety.js";
 import { recall } from "../retrieval/recall.js";
 import { deconstruct } from "../runtime/deconstruct.js";
@@ -1288,9 +1288,11 @@ function projectReview(review: unknown): { verdict: string; summary: string; dim
   return { verdict: String(source.verdict ?? ""), summary: String(source.summary ?? ""), dimensions };
 }
 
-const sseClients = new Set<ServerResponse>();
+interface SseSubscription { response: ServerResponse; scope: string }
+const sseClients = new Set<SseSubscription>();
 let sseConsuming = false;
 function sseChunk(event: string, data: unknown): string { return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`; }
+function sseScope(context: RuntimeContext): string { return `${context.user?.id ?? "*"}:${context.bookshelf?.activeId ?? "*"}`; }
 
 /** P11-C2 边缘中继：可选把运行事件推给 Cloudflare Worker 的 RuntimeHub DO（EDGE_RELAY_URL 配置时启用）。 */
 let relayScope = { user: "", book: "" };
@@ -1303,28 +1305,35 @@ function edgeRelay(event: string, data: unknown): void {
   const token = process.env.EDGE_RELAY_TOKEN ?? "";
   void fetch(`${base.replace(/\/$/, "")}/api/internal/events`, { method: "POST", headers: { "content-type": "application/json", "x-internal-token": token }, body: JSON.stringify({ user: relayScope.user, book: relayScope.book, event, data }) }).catch(() => undefined);
 }
-function broadcast(event: string, data: unknown): void { const chunk = sseChunk(event, data); for (const client of sseClients) client.write(chunk); edgeRelay(event, data); }
+/** 按订阅者的 user:book 作用域扇出：运行事件只到达对应书籍的订阅者。 */
+function broadcast(event: string, data: unknown, scope?: string): void {
+  const chunk = sseChunk(event, data);
+  for (const client of sseClients) if (!scope || client.scope === scope) client.response.write(chunk);
+  edgeRelay(event, data);
+}
 function startSseConsumption(context: RuntimeContext): void {
   const host = context.host;
   if (sseConsuming || !host) return;
   sseConsuming = true;
   configureRelayScope(context);
-  void (async () => { try { for await (const event of host.events()) broadcast("runtime", event); } catch { /* host closed */ } })();
-  void (async () => { try { for await (const delta of host.stream(true)) broadcast("delta", { value: delta }); } catch { /* host closed */ } })();
+  const scope = sseScope(context);
+  void (async () => { try { for await (const event of host.events()) broadcast("runtime", event, scope); } catch { /* host closed */ } })();
+  void (async () => { try { for await (const delta of host.stream(true)) broadcast("delta", { value: delta }, scope); } catch { /* host closed */ } })();
 }
 async function handleStream(request: IncomingMessage, response: ServerResponse, context: RuntimeContext): Promise<void> {
   response.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-store", connection: "keep-alive" });
   response.write(sseChunk("snapshot", await lightStatus(context)));
+  const subscription: SseSubscription = { response, scope: sseScope(context) };
   if (context.host) {
     if (!sseConsuming) {
       const backlog = await context.host.replayQueue(12);
       for (const item of backlog) response.write(sseChunk("runtime", item.payload ?? { type: "system", message: item.summary, time: item.time }));
     }
-    sseClients.add(response);
+    sseClients.add(subscription);
     startSseConsumption(context);
   }
-  const heartbeat = setInterval(() => { void lightStatus(context).then((snapshot) => { if (sseClients.has(response)) response.write(sseChunk("snapshot", snapshot)); edgeRelay("snapshot", snapshot); }); }, 5000);
-  request.on("close", () => { clearInterval(heartbeat); sseClients.delete(response); });
+  const heartbeat = setInterval(() => { void lightStatus(context).then((snapshot) => { if (sseClients.has(subscription)) response.write(sseChunk("snapshot", snapshot)); edgeRelay("snapshot", snapshot); }); }, 5000);
+  request.on("close", () => { clearInterval(heartbeat); sseClients.delete(subscription); });
 }
 
 async function lightStatus(context: RuntimeContext): Promise<Record<string, unknown>> {
@@ -1424,6 +1433,7 @@ async function ensureHost(context: RuntimeContext): Promise<Host> {
     if (!context.config) throw new Error("尚未配置模型，请先准备配置文件");
     try {
       const host = await Host.new(context.config, loadAssets(context.config.style));
+      attachQuotaSettlement(context, host);
       context.pool.put(context.user.id, context.bookshelf.activeId, host);
       context.host = host;
       return host;
@@ -1431,8 +1441,30 @@ async function ensureHost(context: RuntimeContext): Promise<Host> {
   }
   if (context.host) return context.host;
   if (!context.config) throw new Error("尚未配置模型，请先准备配置文件");
-  try { context.host = await Host.new(context.config, loadAssets(context.config.style)); return context.host; }
+  try { context.host = await Host.new(context.config, loadAssets(context.config.style)); attachQuotaSettlement(context, context.host); return context.host; }
   catch (error) { context.error = error instanceof Error ? error.message : String(error); throw error; }
+}
+
+/** P10 收尾：商用模式把 Host 每次模型用量写入 usage_ledger 并扣减额度。 */
+export function computeSettlementCost(usage: { inputTokens?: number; outputTokens?: number; totalCost?: number }, modelName: string): number {
+  const inputTokens = usage.inputTokens ?? 0;
+  const outputTokens = usage.outputTokens ?? 0;
+  if (usage.totalCost !== undefined) return usage.totalCost;
+  const price = lookupPrice(modelName);
+  return Math.round(((inputTokens / 1000) * price.in + (outputTokens / 1000) * price.out) * 1e6) / 1e6;
+}
+
+function attachQuotaSettlement(context: RuntimeContext, host: Host): void {
+  if (context.mode !== "commercial" || !context.quotaDao) return;
+  host.setUsageListener((agent, usage, model) => {
+    if (!context.user || !usage) return;
+    const inputTokens = usage.inputTokens ?? 0;
+    const outputTokens = usage.outputTokens ?? 0;
+    if (inputTokens + outputTokens <= 0) return;
+    const modelName = model?.model ?? context.config?.model ?? "unknown";
+    const costUsd = computeSettlementCost(usage, modelName);
+    void context.quotaDao!.settle(context.user.id, { user_id: context.user.id, book_id: context.bookshelf?.activeId ?? null, agent, tokens_in: inputTokens, tokens_out: outputTokens, cost_usd: costUsd, created_at: new Date().toISOString() }).catch(() => undefined);
+  });
 }
 
 /** ---------- P7-1 多书管理 ---------- */

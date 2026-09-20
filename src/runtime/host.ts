@@ -23,6 +23,7 @@ import { EvolutionEngine } from "./evolution.js";
 
 export interface RuntimeObserver { reflection(event: ReflectionEvent & { agent: string }): void | Promise<void>; usage(agent: string, usage: ModelUsage | undefined, model?: ModelIdentity): void; }
 export interface RuntimeAgent { run(prompt: string, signal?: AbortSignal): AsyncIterable<string>; setObserver?(observer: RuntimeObserver): void; abort(reason: string): void; close(): void | Promise<void>; }
+export interface UsageListener { (agent: string, usage: ModelUsage | undefined, model: ModelIdentity | undefined): void }
 export interface HostDependencies { agent?: RuntimeAgent; store?: Store; askUser?: AskUserHandler }
 type RuntimeState = "idle" | "running" | "paused" | "completed" | "closed";
 
@@ -41,7 +42,11 @@ export class Host {
   private readonly injectIO: FileIO;
   private injectionChain = Promise.resolve();
   readonly evolution: EvolutionEngine;
-  private constructor(private readonly config: Config, private readonly agent: RuntimeAgent, store: Store) { this.store = store; this.injectIO = new FileIO(store.dir); this.evolution = new EvolutionEngine(store); this.usage = new UsageTracker((state) => this.store.usage.save(state)); this.agent.setObserver?.({ reflection: (event) => this.observeReflection(event), usage: (agent, usage, model) => this.usage.record(agent, usage?.model ? usage : normalizeUsage(usage, model)) }); }
+  private constructor(private readonly config: Config, private readonly agent: RuntimeAgent, store: Store) { this.store = store; this.injectIO = new FileIO(store.dir); this.evolution = new EvolutionEngine(store); this.usage = new UsageTracker((state) => this.store.usage.save(state)); this.agent.setObserver?.({ reflection: (event) => this.observeReflection(event), usage: (agent, usage, model) => { this.usage.record(agent, usage?.model ? usage : normalizeUsage(usage, model)); this.usageListener?.(agent, usage, model); } }); }
+
+  private usageListener: UsageListener | null = null;
+  /** P10 收尾：注入平台额度结算回调（商用 DB 模式由 server 注入，逐次调用上报）。 */
+  setUsageListener(listener: UsageListener | null): void { this.usageListener = listener; }
 
   static async new(config: Config, bundle: Bundle, dependencies: HostDependencies = {}): Promise<Host> { const cfg = ConfigSchema.parse(config); const store = dependencies.store ?? new Store(cfg.output_dir ?? "output/novel"); await store.init(); let runtimeAgent = dependencies.agent; let host: Host | undefined; if (!runtimeAgent) { const models = createModelSet(cfg); try { await prepareUserRules(store, models); } catch { /* 快照缺失不阻断启动 */ } const built = buildCoordinator(cfg, store, models, bundle, (agent, usage, model) => host?.usage.record(agent, normalizeUsage(usage, model)), undefined, undefined, dependencies.askUser, (event) => host?.observeReflection(event), () => host?.hasBudget() ?? true); runtimeAgent = { run(prompt, signal) { const stream = built.coordinator.stream(prompt, signal); return stream.textStream; }, abort() { built.coordinator.clear(); }, close() { built.coordinator.clear(); } }; } host = new Host(cfg, runtimeAgent, store); host.usage.load(await store.usage.load()); for (const item of await store.runtime.loadQueue()) { const payload = item.payload as RuntimeEvent | undefined; if (item.kind === "ui_event" && payload?.id) host.seenEventIds.add(payload.id); } return host; }
 
