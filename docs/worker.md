@@ -44,17 +44,23 @@ pnpm worker:dev
 
 Worker 使用 PBKDF2-SHA256（100k 轮），Node 主线使用 scrypt。两条线密码互不兼容：同一账号体系请固定一条运行时。会话令牌格式（HMAC-SHA256）与渠道密钥信封格式（AES-256-GCM）两侧完全互通。
 
-## SSE 边缘中继（P11-C2）
+## SSE 边缘中继与内容同步（P11-C2/C3）
 
-生成引擎留在 Node 主线时，Worker 也能提供实时 SSE：
+生成引擎留在 Node 主线时，Worker 也能提供完整门户体验：
 
 ```bash
-# Node 侧环境变量
+# Node 侧环境变量（事件中继 + 内容同步共用同一对配置）
 EDGE_RELAY_URL=https://<worker域名>
 EDGE_RELAY_TOKEN=<与 INTERNAL_TOKEN 相同>
 ```
 
-配置后 Node 的 `broadcast()` 与快照心跳会把 `runtime`/`delta`/`snapshot` 事件推送到 Worker 的 `/api/internal/events`，按 `userId:bookId` 路由进对应 RuntimeHub DO。浏览器订阅 `GET /api/stream?book=<id>` 即可获得回放 + 实时流。未配置时 Node 行为零变化。
+配置后：
+
+- **事件中继**：Node 的 `broadcast()` 与快照心跳把 `runtime`/`delta`/`snapshot` 事件推送到 Worker `/api/internal/events`，按 `userId:bookId` 路由进对应 RuntimeHub DO。浏览器订阅 `GET /api/stream?book=<id>` 获得回放 + 实时流。
+- **内容同步**：Node 的 FileIO 写入（章节、进度、大纲、书架）经 3 秒去抖后按书籍分批推送到 `/api/internal/sync`，写入 Worker D1 kv（`books/<id>/...` + `platform/bookshelf.json`），自动附带所有权映射。边缘 `/api/books`、`/api/shelf`、`/api/shelf/<id>/chapters/<n>` 随即可读。
+- **一次性全量推送**：`EDGE_RELAY_URL=... EDGE_RELAY_TOKEN=... synchronicle edge-sync --book <id>`。
+
+未配置时 Node 行为零变化。
 
 ## 边界与后续
 
@@ -64,8 +70,9 @@ EDGE_RELAY_TOKEN=<与 INTERNAL_TOKEN 相同>
 | 渠道/授权/额度/兑换 | 支持 | 支持 |
 | 举报/下架/审计 | 支持 | 支持 |
 | 书城/发布（含商用安全闸） | 支持 | 支持 |
+| 书籍内容/进度 | D1 kv（边缘同步） | 本地/数据库 |
 | SSE 实时流 | RuntimeHub DO（中继模式） | 原生 |
 | AI 生成/自动驾驶/Steer | 未支持 | 支持 |
 | 文件导入导出 | 未支持 | 支持 |
 
-后续里程碑：C3 Queues 承载长任务；C4 R2 承载导入导出大文件；C5 生成引擎 Worker 化。
+后续里程碑：C4 R2 承载导入导出大文件；C5 生成引擎 Worker 化。

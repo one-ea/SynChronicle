@@ -53,12 +53,16 @@ function ensureReady(db: D1Database): Promise<void> {
   return schemaReady;
 }
 
+/** 测试专用：重置模块级缓存（schema/会话密钥）。 */
+export function resetWorkerCache(): void { schemaReady = null; cachedSecret = null; }
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     try {
       await ensureReady(env.DB);
       const db = d1Adapter(env.DB);
       const mode = env.MODE === "commercial" ? "commercial" : "selfhost";
+      let secretPromise: Promise<string> | null = null;
       const ctx: Ctx = {
         env, kv: new D1KvStore(env.DB), db, mode,
         users: new UsersDao(db),
@@ -67,7 +71,7 @@ export default {
         audit: new AuditDao(db),
         reports: new ReportsDao(db),
         crypto: WorkerCrypto.fromHex(env.MASTER_KEY ?? ""),
-        authSecret: authSecret(env),
+        get authSecret() { return secretPromise ??= authSecret(env); },
       };
       return await route(request, ctx);
     } catch (error) {
@@ -94,6 +98,13 @@ function json(body: unknown, status = 200, headers: Record<string, string> = {})
 }
 
 function fail(message: string, status: number): Response { return json({ error: message }, status); }
+
+/** 同步路径白名单：books/<book>/... 或平台级 platform/{bookshelf,published}.json。 */
+function syncPathAllowed(path: string, book: string | undefined): boolean {
+  if (path === "platform/bookshelf.json" || path === "platform/published.json") return true;
+  if (!/^books\/[^/]+\/[\w./-]+$/.test(path)) return false;
+  return book ? path.startsWith(`books/${book}/`) : true;
+}
 
 async function readBody(request: Request): Promise<Record<string, unknown>> {
   const raw = await request.text();
@@ -157,6 +168,29 @@ async function route(request: Request, ctx: Ctx): Promise<Response> {
     return hub.fetch(forward);
   }
 
+  // 内部内容同步（Node 主线 → 边缘）：批量 upsert/delete 书稿 kv 键
+  if (method === "POST" && path === "/api/internal/sync") {
+    const token = request.headers.get("x-internal-token") ?? "";
+    if (!ctx.env.INTERNAL_TOKEN || token !== ctx.env.INTERNAL_TOKEN) return fail("forbidden", 403);
+    const body = await readBody(request);
+    const book = optional(body.book);
+    const writes = Array.isArray(body.writes) ? body.writes : [];
+    const deletes = Array.isArray(body.deletes) ? body.deletes : [];
+    if (writes.length + deletes.length > 100) return fail("单次同步超过 100 个文件", 400);
+    for (const item of writes as Array<Record<string, unknown>>) {
+      if (typeof item.path !== "string" || typeof item.content !== "string") return fail("writes 条目需要 path/content", 400);
+      if (!syncPathAllowed(item.path, book)) return fail(`非法同步路径: ${item.path}`, 400);
+      if (item.content.length > 900_000) return fail(`文件过大: ${item.path}`, 413);
+    }
+    for (const item of deletes as Array<unknown>) {
+      if (typeof item !== "string" || !syncPathAllowed(item, book)) return fail(`非法同步路径: ${item}`, 400);
+    }
+    for (const item of writes as Array<{ path: string; content: string }>) await ctx.kv.set(item.path, item.content);
+    for (const item of deletes as string[]) await ctx.kv.delete(item);
+    if (book && typeof body.owner === "string") await ctx.kv.set(`books/${book}/meta/book.json`, JSON.stringify({ ownerId: body.owner, updatedAt: new Date().toISOString() }));
+    return json({ applied: writes.length, deleted: deletes.length });
+  }
+
   // 认证入口（setup/register/login 无需会话）
   if (method === "POST" && path === "/api/auth/setup") return authSetup(request, ctx);
   if (method === "POST" && path === "/api/auth/register") return authRegister(request, ctx);
@@ -180,6 +214,17 @@ async function route(request: Request, ctx: Ctx): Promise<Response> {
     const source = await ctx.env.RUNTIME.get(ctx.env.RUNTIME.idFromName(`${ctx.user!.id}:${book}`)).fetch(new Request("https://runtime/snapshot"));
     const payload = (await source.json().catch(() => ({}))) as Record<string, unknown>;
     return json({ ...payload, user: ctx.user, book });
+  }
+
+  // 书籍列表：读取同步上来的书架（platform/bookshelf.json），按所有权过滤
+  if (method === "GET" && path === "/api/books") {
+    const raw = await ctx.kv.get("platform/bookshelf.json");
+    if (!raw) return json({ books: [], activeId: null });
+    try {
+      const shelf = JSON.parse(raw) as { books?: Array<Record<string, unknown>>; activeId?: string | null };
+      const books = (shelf.books ?? []).filter((item) => ctx.user?.role === "admin" || item.ownerId === ctx.user?.id);
+      return json({ books, activeId: books.some((item) => item.id === shelf.activeId) ? shelf.activeId : books[0]?.id ?? null });
+    } catch { return json({ books: [], activeId: null }); }
   }
 
   if (path === "/api/admin/invite-codes") {

@@ -47,6 +47,7 @@ import { PlatformCrypto, maskKey } from "../platform/crypto.js";
 import { ChannelsDao, QuotaDao, type ChannelRow } from "../platform/dao.js";
 import { AuditDao, ReportsDao } from "../platform/dao.js";
 import { HostPool } from "../platform/hostpool.js";
+import { startEdgeSync, stopEdgeSync } from "../platform/edgesync.js";
 
 export type PlatformMode = "selfhost" | "commercial";
 export interface WebServerOptions { port?: number; host?: string; configPath?: string; hostInstance?: Host; auth?: boolean; storage?: "fs" | "db"; dbUrl?: string; mode?: PlatformMode; }
@@ -77,9 +78,18 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
   context.audit = audit;
   context.reports = reports;
   if (options.hostInstance) context.host = options.hostInstance;
+  const edgeRelayUrl = process.env.EDGE_RELAY_URL;
+  if (edgeRelayUrl && process.env.EDGE_RELAY_TOKEN) {
+    startEdgeSync({
+      url: edgeRelayUrl,
+      token: process.env.EDGE_RELAY_TOKEN,
+      booksRoot: context.bookRoot ?? "",
+      getBookshelf: async () => (context.bookshelf?.books ?? []).map((book) => ({ id: book.id, ownerId: book.ownerId, title: book.title })),
+    });
+  }
   const server = createServer((request, response) => void route(request, response, context));
   const port = await listen(server, options.port ?? 3000, options.host ?? "127.0.0.1");
-  return { port, close: async () => { await close(server, context.host); if (storageMode === "db" && context.db) { setStoreBackend(null); await context.db.close(); } } };
+  return { port, close: async () => { stopEdgeSync(); await close(server, context.host); if (storageMode === "db" && context.db) { setStoreBackend(null); await context.db.close(); } } };
 }
 
 async function loadRuntime(configPath?: string, authEnabled = true, mode: PlatformMode = "selfhost", storageMode: "fs" | "db" = "fs", db?: SqlDatabase, usersDao?: UsersDao, channelsDao?: ChannelsDao, quotaDao?: QuotaDao, crypto?: PlatformCrypto): Promise<RuntimeContext> {

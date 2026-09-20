@@ -5,11 +5,13 @@ export type CLIOptions =
   | { command: "mcp"; configPath: string }
   | { command: "migrate-files"; booksRoot: string; dbUrl: string }
   | { command: "verify-migration"; booksRoot: string; dbUrl: string }
+  | { command: "edge-sync"; configPath: string; book: string }
   | { command: "start"; configPath: string; headless: boolean; web: boolean; port: number; prompt: string; promptFile: string; args: string[] };
 
 export function parseCLIOptions(argv: string[]): CLIOptions {
   if (argv[0] === "eval") return { command: "eval", argv: argv.slice(1) };
   if (argv[0] === "mcp") return parseMcp(argv.slice(1));
+  if (argv[0] === "edge-sync") return parseEdgeSync(argv.slice(1));
   if (argv[0] === "migrate-files" || argv[0] === "verify-migration") {
     const command = argv[0] === "migrate-files" ? "migrate-files" : "verify-migration";
     let booksRoot = "output";
@@ -61,6 +63,19 @@ function parseMcp(argv: string[]): CLIOptions {
     else throw new Error(`mcp 不接受参数 ${arg}（仅支持 --config）`);
   }
   return { command: "mcp", configPath };
+}
+
+function parseEdgeSync(argv: string[]): CLIOptions {
+  let configPath = "";
+  let book = "";
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i]!;
+    if (arg === "--config") configPath = requiredValue(argv, ++i, "--config");
+    else if (arg === "--book") book = requiredValue(argv, ++i, "--book");
+    else throw new Error(`edge-sync 不接受参数 ${arg}（仅支持 --config/--book）`);
+  }
+  if (!book) throw new Error("edge-sync 需要 --book 指定书籍 ID");
+  return { command: "edge-sync", configPath, book };
 }
 
 function requiredValue(argv: string[], index: number, flag: string): string {

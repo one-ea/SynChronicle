@@ -20,6 +20,12 @@ let kvBackend: KvBackend | null = null;
 export function setStoreBackend(kv: KvBackend | null): void { kvBackend = kv; }
 export function storeBackend(): KvBackend | null { return kvBackend; }
 
+/** P11-C3 边缘同步：写入观察钩子，FileIO 每次写/删后回调（不抛错、不阻塞）。 */
+export type WriteObserver = (dir: string, rel: string, kind: "write" | "remove") => void;
+let writeObserver: WriteObserver | null = null;
+export function setWriteObserver(observer: WriteObserver | null): void { writeObserver = observer; }
+function observeWrite(dir: string, rel: string, kind: "write" | "remove"): void { try { writeObserver?.(dir, rel, kind); } catch { /* 观察器异常不影响主流程 */ } }
+
 function virtualKey(dir: string, rel: string): string {
   return join(dir || ".", rel).replace(/\\/g, "/").replace(/^\.\//, "");
 }
@@ -44,19 +50,21 @@ export class FileIO {
   }
   async writeFile(rel: string, data: string | Uint8Array) {
     const content = typeof data === "string" ? data : Buffer.from(data).toString("utf8");
-    if (kvBackend) return kvBackend.set(virtualKey(this.dir, rel), content);
+    if (kvBackend) { await kvBackend.set(virtualKey(this.dir, rel), content); observeWrite(this.dir, rel, "write"); return; }
     await atomicWrite(this.path(rel), data);
+    observeWrite(this.dir, rel, "write");
   }
   async writeJSON(rel: string, value: unknown) { await this.writeFile(rel, JSON.stringify(value, null, 2)); }
   async appendJSONLine(rel: string, value: unknown) {
     const line = `${JSON.stringify(value)}\n`;
-    if (kvBackend) { const key = virtualKey(this.dir, rel); const current = (await kvBackend.get(key)) ?? ""; return kvBackend.set(key, current + line); }
+    if (kvBackend) { const key = virtualKey(this.dir, rel); const current = (await kvBackend.get(key)) ?? ""; await kvBackend.set(key, current + line); observeWrite(this.dir, rel, "write"); return; }
     const path = this.path(rel);
     await mkdir(dirname(path), { recursive: true });
     const handle = await open(path, "a", 0o644);
     try { await handle.write(line); await handle.sync(); } finally { await handle.close(); }
+    observeWrite(this.dir, rel, "write");
   }
-  async remove(rel: string) { if (kvBackend) return kvBackend.delete(virtualKey(this.dir, rel)); await rm(this.path(rel), { force: true, recursive: true }); }
+  async remove(rel: string) { if (kvBackend) { await kvBackend.delete(virtualKey(this.dir, rel)); observeWrite(this.dir, rel, "remove"); return; } await rm(this.path(rel), { force: true, recursive: true }); observeWrite(this.dir, rel, "remove"); }
   /** 列出目录下直接子项名称（文件与目录），数据库后端按 key 前缀推导。 */
   async listDir(rel: string): Promise<string[]> {
     if (kvBackend) {
