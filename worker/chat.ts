@@ -59,6 +59,22 @@ function* parseBlock(block: string): Generator<UpstreamPiece> {
   }
 }
 
+export interface UpstreamResult { text: string; usage: { input: number; output: number } }
+
+/** 消费上游流，聚合全文与 usage；可选 sink 逐块回调（客户端流式/枢纽推送）。 */
+export async function collectUpstream(body: ReadableStream<Uint8Array>, sink?: (delta: string) => Promise<void> | void): Promise<UpstreamResult> {
+  let text = "";
+  let usage = { input: 0, output: 0 };
+  for await (const piece of parseUpstreamStream(body)) {
+    if (piece.usage) usage = piece.usage;
+    if (piece.delta) {
+      text += piece.delta;
+      await sink?.(piece.delta);
+    }
+  }
+  return { text, usage };
+}
+
 /** 结算成本（USD）：主线同款价格表。 */
 export function settleCost(model: string, inputTokens: number, outputTokens: number): number {
   const price = lookupPrice(model);

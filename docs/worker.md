@@ -73,6 +73,7 @@ EDGE_RELAY_TOKEN=<与 INTERNAL_TOKEN 相同>
 | 书籍内容/进度 | D1 kv（边缘同步） | 本地/数据库 |
 | SSE 实时流 | RuntimeHub DO（中继模式） | 原生 |
 | 对话式生成 | 支持（渠道直连流式 + 计费） | 支持 |
+| 两段式流水线（策划→成章） | 支持（agent=compose 计费） | 支持（多智能体完整版） |
 | 自动驾驶/Steer/多智能体 | 未支持 | 支持 |
 | 文件导入导出 | txt 导入/导出（R2 可选存储） | 支持（含 EPUB） |
 
@@ -92,4 +93,13 @@ EDGE_RELAY_TOKEN=<与 INTERNAL_TOKEN 相同>
   - 会话轮次持久化到 kv；商用模式按上游 usage 结算成本写入 `usage_ledger` 并扣减额度（主线同款价格表）
   - anthropic/google provider 暂不支持（非 OpenAI 兼容协议）
 
-后续里程碑：C6 多智能体引擎 Worker 化（Coordinator/Architect/Writer/Editor）。
+### 两段式创作流水线（P11-C6）
+
+- `POST /api/compose {bookId, premise, chapters?, wordsPerChapter?, model?}`：
+  - 阶段一策划：输出 `第 N 章｜标题` 计划（解析容错，最多取请求章数）
+  - 阶段二逐章成文：每章按大纲生成约 `wordsPerChapter` 字正文，流式增量推送 SSE 与 RuntimeHub
+  - 产物自动落库：章节 `books/<id>/chapters/NN.md`、摘要、大纲、进度合并（保留既有完成章节与累计字数）
+  - 商用模式合并 usage 一次结算（agent=compose），枢纽发布策划/章节/完成事件
+- 响应为 SSE：`plan` → `delta`（带 chapter 标记）→ `done`（章节数、总 usage、cost）。
+
+后续里程碑：C7 多轮一致性上下文（角色/伏笔召回）与卷级评审。

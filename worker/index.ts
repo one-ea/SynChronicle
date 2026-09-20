@@ -13,7 +13,7 @@ import { UsersDao } from "../src/db/users.js";
 import { PublishedEntrySchema, titleHue } from "../src/domain/publish.js";
 import { scanSafety } from "../src/diag/safety.js";
 import { splitChapters } from "../src/runtime/imp/chapters.js";
-import { buildUpstreamRequest, parseUpstreamStream, settleCost, sseEvent, CHAT_SYSTEM_PROMPT, type ChatTurn } from "./chat.js";
+import { buildUpstreamRequest, collectUpstream, settleCost, sseEvent, CHAT_SYSTEM_PROMPT, type ChatTurn } from "./chat.js";
 import { D1KvStore, type Env } from "./types.js";
 import { WorkerCrypto, issueToken, verifyToken, maskKey, toHex, pbkdf2Hex } from "./crypto.js";
 import { RuntimeHub } from "./object.js";
@@ -260,9 +260,10 @@ async function route(request: Request, ctx: Ctx): Promise<Response> {
   if (method === "POST" && path === "/api/export") return exportBook(request, ctx);
   if (method === "GET" && path.startsWith("/api/export/file/")) return exportFile(ctx, decodeURIComponent(path.slice("/api/export/file/".length)));
 
-  // 对话式生成（P11-C5）：渠道解密 → OpenAI 兼容流式 → SSE 推送 → 商用结算
+  // 对话式生成（P11-C5）与两段式流水线（P11-C6）
   if (method === "GET" && path === "/api/chat") return chatHistory(ctx, url.searchParams.get("book") || "");
   if (method === "POST" && path === "/api/chat") return chatTurn(request, ctx);
+  if (method === "POST" && path === "/api/compose") return compose(request, ctx);
 
   return fail("接口不存在（自动驾驶/Steer 等完整引擎仍需 Node 主线）", 404);
 }
@@ -705,6 +706,41 @@ async function exportFile(ctx: Ctx, key: string): Promise<Response> {
 
 const CHAT_HISTORY_LIMIT = 20;
 
+interface ResolvedChannel { picked: ChannelRow; model: string; apiKey: string }
+type ChannelResolution = ResolvedChannel | { error: Response };
+
+/** 渠道解析：模型匹配 + provider 守护 + 信封解密（chat 与 compose 共用）。 */
+async function resolveGenerationChannel(ctx: Ctx, model?: string): Promise<ChannelResolution> {
+  const channels = await ctx.channels.effective(ctx.user!.id);
+  if (!channels.length) return { error: fail("没有可用模型渠道，请先在系统中创建", 400) };
+  const named = model ? channels.find((row) => safeModels(row.models).includes(model)) : undefined;
+  const picked = named ?? channels[0]!;
+  const models = safeModels(picked.models);
+  const resolvedModel = model && models.includes(model) ? model : models[0];
+  if (!resolvedModel) return { error: fail("渠道没有配置模型", 400) };
+  if (picked.provider === "anthropic" || picked.provider === "google") return { error: fail("该渠道 provider 暂不支持边缘生成（仅 OpenAI 兼容接口）", 400) };
+  const apiKey = await ctx.crypto.decrypt({ ct: picked.api_key_ct, iv: picked.api_key_iv, tag: picked.api_key_tag });
+  return { picked, model: resolvedModel, apiKey };
+}
+
+/** 单次流式生成：返回全文/usage，可选增量 sink；上游失败返回 null。 */
+async function generateOnce(resolved: ResolvedChannel, messages: Array<{ role: string; content: string }>, sink?: (delta: string) => Promise<void> | void): Promise<{ text: string; usage: { input: number; output: number } } | null> {
+  const upstream = await fetch(buildUpstreamRequest(resolved.picked, resolved.apiKey, resolved.model, messages));
+  if (!upstream.ok || !upstream.body) return null;
+  const result = await collectUpstream(upstream.body, sink);
+  return { text: result.text.trim(), usage: result.usage };
+}
+
+/** 结算并审计一次生成（chat 与 compose 共用）。 */
+async function settleAndAudit(ctx: Ctx, bookId: string, agent: string, model: string, usage: { input: number; output: number }): Promise<number> {
+  const costUsd = settleCost(model, usage.input, usage.output);
+  if (ctx.mode === "commercial") {
+    await ctx.quota.settle(ctx.user!.id, { user_id: ctx.user!.id, book_id: bookId, agent, tokens_in: usage.input, tokens_out: usage.output, cost_usd: costUsd, created_at: new Date().toISOString() });
+  }
+  await ctx.audit.log(ctx.user!.id, agent, `book:${bookId}`, { model, tokensIn: usage.input, tokensOut: usage.output, costUsd });
+  return costUsd;
+}
+
 async function loadChatHistory(ctx: Ctx, bookId: string): Promise<ChatTurn[]> {
   const raw = await ctx.kv.get(`books/${bookId}/meta/chat.jsonl`);
   if (!raw) return [];
@@ -742,22 +778,16 @@ async function chatTurn(request: Request, ctx: Ctx): Promise<Response> {
     const denied = await requireBookAccess(ctx, bookId);
     if (denied) return denied;
 
-    // 渠道选择：包含指定模型（或任一可用模型）的 active 渠道
-    const channels = await ctx.channels.effective(ctx.user!.id);
-    if (!channels.length) return fail("没有可用模型渠道，请先在系统中创建", 400);
-    const channel = body.model ? channels.find((row) => safeModels(row.models).includes(body.model!)) : undefined;
-    const picked = channel ?? channels[0]!;
-    const models = safeModels(picked.models);
-    const model = body.model && models.includes(body.model) ? body.model : models[0];
-    if (!model) return fail("渠道没有配置模型", 400);
-    if (picked.provider === "anthropic" || picked.provider === "google") return fail("该渠道 provider 暂不支持边缘生成（仅 OpenAI 兼容接口）", 400);
+    // 渠道选择与鉴权（与流水线共用）
+    const resolved = await resolveGenerationChannel(ctx, body.model);
+    if ("error" in resolved) return resolved.error;
+    const { picked, model, apiKey } = resolved;
 
     if (ctx.mode === "commercial") {
       const balance = await ctx.quota.balance(ctx.user!.id);
       if (balance.remaining <= 0) return fail("额度已用尽，请兑换或联系管理员", 402);
     }
 
-    const apiKey = await ctx.crypto.decrypt({ ct: picked.api_key_ct, iv: picked.api_key_iv, tag: picked.api_key_tag });
     const history = await loadChatHistory(ctx, bookId);
     const messages = [
       { role: "system", content: CHAT_SYSTEM_PROMPT },
@@ -788,14 +818,12 @@ async function chatTurn(request: Request, ctx: Ctx): Promise<Response> {
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         try {
-          for await (const piece of parseUpstreamStream(upstream.body!)) {
-            if (piece.usage) usage = piece.usage;
-            if (piece.delta) {
-              full += piece.delta;
-              controller.enqueue(sseEvent("delta", { value: piece.delta }));
-              await publish("delta", { value: piece.delta });
-            }
-          }
+          const collected = await collectUpstream(upstream.body!, async (delta) => {
+            full += delta;
+            controller.enqueue(sseEvent("delta", { value: delta }));
+            await publish("delta", { value: delta });
+          });
+          usage = collected.usage;
           const costUsd = settleCost(model, usage.input, usage.output);
           if (ctx.mode === "commercial") {
             await ctx.quota.settle(ctx.user!.id, { user_id: ctx.user!.id, book_id: bookId, agent: "chat", tokens_in: usage.input, tokens_out: usage.output, cost_usd: costUsd, created_at: new Date().toISOString() });
@@ -804,6 +832,126 @@ async function chatTurn(request: Request, ctx: Ctx): Promise<Response> {
           await ctx.audit.log(ctx.user!.id, "chat", `book:${bookId}`, { model, tokensIn: usage.input, tokensOut: usage.output, costUsd });
           controller.enqueue(sseEvent("done", { model, usage, costUsd }));
           await publish("runtime", { type: "system", message: "边缘生成完成", model, usage, costUsd });
+        } catch (error) {
+          controller.enqueue(sseEvent("error", { message: error instanceof Error ? error.message : String(error) }));
+        } finally {
+          controller.close();
+        }
+      },
+    });
+    return new Response(stream, { headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-store" } });
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : String(error), 400);
+  }
+}
+
+/** ---------- 两段式创作流水线（P11-C6）：策划 → 逐章成文 ---------- */
+
+const ComposeBody = z.object({ bookId: z.string().trim().min(1).max(64), premise: z.string().trim().min(1).max(4000), chapters: z.number().int().min(1).max(12).default(3), wordsPerChapter: z.number().int().min(200).max(8000).default(800), model: z.string().trim().min(1).max(120).optional() });
+
+interface PipelineChapter { chapter: number; title: string; outline: string; text: string; usage: { input: number; output: number } }
+
+/** 解析策划输出：`第 N 章｜标题` 行 + 段落大纲。 */
+export function parsePlan(text: string, expected: number): Array<{ chapter: number; title: string; outline: string }> {
+  const entries: Array<{ chapter: number; title: string; outline: string }> = [];
+  const lines = text.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = lines[index]!.match(/^\s*(?:#{1,3}\s*)?第\s*(\d+)\s*章\s*[｜:：\-—]\s*(.+?)\s*$/);
+    if (!match) continue;
+    const outlineLines: string[] = [];
+    for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+      if (/^\s*(?:#{1,3}\s*)?第\s*\d+\s*章\s*[｜:：\-—]/.test(lines[cursor]!)) break;
+      if (lines[cursor]!.trim()) outlineLines.push(lines[cursor]!.trim());
+    }
+    entries.push({ chapter: Number(match[1]), title: match[2]!, outline: outlineLines.join("\n") });
+  }
+  entries.sort((a, b) => a.chapter - b.chapter);
+  return entries.slice(0, expected);
+}
+
+async function compose(request: Request, ctx: Ctx): Promise<Response> {
+  try {
+    const body = ComposeBody.parse(await readBody(request));
+    const bookId = body.bookId;
+    const denied = await requireBookAccess(ctx, bookId);
+    if (denied) return denied;
+    const resolved = await resolveGenerationChannel(ctx, body.model);
+    if ("error" in resolved) return resolved.error;
+    if (ctx.mode === "commercial") {
+      const balance = await ctx.quota.balance(ctx.user!.id);
+      if (balance.remaining <= 0) return fail("额度已用尽，请兑换或联系管理员", 402);
+    }
+
+    const hub = ctx.env.RUNTIME.get(ctx.env.RUNTIME.idFromName(`${ctx.user!.id}:${bookId}`));
+    const publish = (event: string, data: unknown): Promise<void> => hub.fetch(new Request("https://runtime/events", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-internal-token": ctx.env.INTERNAL_TOKEN ?? "" },
+      body: JSON.stringify({ event, data }),
+    })).then(() => undefined, () => undefined);
+
+    // 阶段一：策划（大纲 + 每章要点）
+    await publish("runtime", { type: "system", message: "策划开始", model: resolved.model, chapters: body.chapters });
+    const planMessages = [
+      { role: "system", content: "你是长篇小说策划。只输出章节计划，每章一行标题行，格式严格为：第 N 章｜标题，随后缩进列出 2-3 条剧情要点。不输出其他内容。" },
+      { role: "user", content: `创作需求：${body.premise}\n请规划 ${body.chapters} 章的章节计划。` },
+    ];
+    const plan = await generateOnce(resolved, planMessages);
+    if (plan === null) { await publish("runtime", { type: "error", message: "上游模型调用失败" }); return fail("上游模型调用失败", 502); }
+    const planned = parsePlan(plan.text, body.chapters);
+    if (!planned.length) { await publish("runtime", { type: "error", message: "策划输出无法解析章节计划" }); return fail("策划输出无法解析章节计划", 502); }
+    await publish("runtime", { type: "system", message: "策划完成", planned: planned.length, usage: plan.usage });
+
+    // 阶段二：逐章成文（流式增量推送到 SSE 与枢纽）
+    const completed: PipelineChapter[] = [];
+    const totalUsage = { input: plan.usage.input, output: plan.usage.output };
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        try {
+          controller.enqueue(sseEvent("plan", { chapters: planned.map((item) => ({ chapter: item.chapter, title: item.title })), usage: plan.usage }));
+          for (const item of planned) {
+            await publish("runtime", { type: "system", message: `第 ${item.chapter} 章开始`, title: item.title });
+            const writeMessages = [
+              { role: "system", content: `你是长篇小说写手。依据大纲撰写本章正文，约 ${body.wordsPerChapter} 字。直接输出正文，不写章节标题，不复述大纲。` },
+              { role: "user", content: `作品前提：${body.premise}\n\n本章大纲（第 ${item.chapter} 章 ${item.title}）：\n${item.outline}` },
+            ];
+            const chapterText = await generateOnce(resolved, writeMessages, async (delta) => {
+              controller.enqueue(sseEvent("delta", { chapter: item.chapter, value: delta }));
+              await publish("delta", { chapter: item.chapter, value: delta });
+            });
+            if (chapterText === null) { controller.enqueue(sseEvent("error", { message: `第 ${item.chapter} 章生成失败` })); continue; }
+            completed.push({ chapter: item.chapter, title: item.title, outline: item.outline, text: `# ${item.title}\n\n${chapterText.text}`, usage: chapterText.usage });
+            totalUsage.input += chapterText.usage.input;
+            totalUsage.output += chapterText.usage.output;
+            const words = [...chapterText.text.replace(/\s/g, "")].length;
+            await ctx.kv.set(`books/${bookId}/chapters/${String(item.chapter).padStart(2, "0")}.md`, `# ${item.title}\n\n${chapterText.text}`);
+            await ctx.kv.set(`books/${bookId}/summaries/${String(item.chapter).padStart(2, "0")}.json`, JSON.stringify({ chapter: item.chapter, summary: item.outline.slice(0, 200), characters: [], key_events: [] }));
+            await publish("runtime", { type: "system", message: `第 ${item.chapter} 章完成`, words });
+          }
+          // 进度/大纲/书架元数据落库
+          const numbers = completed.map((item) => item.chapter);
+          const wordCount = completed.reduce((sum, item) => sum + [...item.text.replace(/\s/g, "")].length, 0);
+          const progressRaw = await ctx.kv.get(`books/${bookId}/meta/progress.json`);
+          const previous = progressRaw ? JSON.parse(progressRaw) as { completed_chapters?: number[]; total_word_count?: number; novel_name?: string } : null;
+          const mergedChapters = [...new Set([...(previous?.completed_chapters ?? []), ...numbers])].sort((a, b) => a - b);
+          await ctx.kv.set(`books/${bookId}/meta/progress.json`, JSON.stringify({
+            novel_name: previous?.novel_name ?? "", phase: "writing", current_chapter: Math.max(...mergedChapters, 0) + 1, total_chapters: Math.max(...mergedChapters, 0),
+            completed_chapters: mergedChapters, total_word_count: (previous?.total_word_count ?? 0) + wordCount,
+            chapter_word_counts: Object.fromEntries(completed.map((item) => [String(item.chapter), [...item.text.replace(/\s/g, "")].length])),
+            flow: "writing", in_progress_chapter: 0, pending_rewrites: [],
+          }));
+          const outlineRaw = await ctx.kv.get(`books/${bookId}/meta/outline.json`);
+          const outline = outlineRaw ? JSON.parse(outlineRaw) as Array<Record<string, unknown>> : [];
+          for (const item of completed) {
+            const existing = outline.findIndex((entry) => entry.chapter === item.chapter);
+            const entry = { chapter: item.chapter, title: item.title, scenes: [], hook: item.outline.slice(0, 120) };
+            if (existing >= 0) outline[existing] = entry; else outline.push(entry);
+          }
+          outline.sort((a, b) => Number(a.chapter) - Number(b.chapter));
+          await ctx.kv.set(`books/${bookId}/meta/outline.json`, JSON.stringify(outline));
+
+          const costUsd = await settleAndAudit(ctx, bookId, "compose", resolved.model, totalUsage);
+          controller.enqueue(sseEvent("done", { chapters: completed.map((item) => item.chapter), usage: totalUsage, costUsd }));
+          await publish("runtime", { type: "system", message: "流水线完成", chapters: numbers, usage: totalUsage, costUsd });
         } catch (error) {
           controller.enqueue(sseEvent("error", { message: error instanceof Error ? error.message : String(error) }));
         } finally {
