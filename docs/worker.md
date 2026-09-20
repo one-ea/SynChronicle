@@ -73,6 +73,13 @@ EDGE_RELAY_TOKEN=<与 INTERNAL_TOKEN 相同>
 | 书籍内容/进度 | D1 kv（边缘同步） | 本地/数据库 |
 | SSE 实时流 | RuntimeHub DO（中继模式） | 原生 |
 | AI 生成/自动驾驶/Steer | 未支持 | 支持 |
-| 文件导入导出 | 未支持 | 支持 |
+| 文件导入导出 | txt 导入/导出（R2 可选存储） | 支持（含 EPUB） |
 
-后续里程碑：C4 R2 承载导入导出大文件；C5 生成引擎 Worker 化。
+### 导入导出（P11-C4）
+
+- `POST /api/import`：纯文本按主线同款章节标记切分（`第 N 章` / 中文数字 / `chapter N`），写入 `books/<id>/`（章节、摘要、大纲、进度、所有权），自动登记书架；`bookId` 缺省时按标题新建。
+- `POST /api/export`：按 `progress.completed_chapters` 组装 txt；绑定 `EXPORTS`（R2）时落桶 `exports/<userId>/<book>-<ts>.txt` 并返回下载路径，未绑定时内联返回全文。
+- `GET /api/export/file/<key>`：仅文件属主可下载。
+- 启用 R2：在 `wrangler.toml` 取消 `[[r2_buckets]]` 注释并 `npx wrangler r2 bucket create synchronicle-exports`。
+
+后续里程碑：C5 生成引擎 Worker 化。

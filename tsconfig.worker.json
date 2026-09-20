@@ -14,5 +14,5 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true
   },
-  "include": ["worker", "src/db/sql-core.ts", "src/platform/dao.ts", "src/db/users.ts", "src/domain/publish.ts", "src/diag/safety.ts", "src/store/io.ts"]
+  "include": ["worker", "src/db/sql-core.ts", "src/platform/dao.ts", "src/db/users.ts", "src/domain/publish.ts", "src/diag/safety.ts", "src/runtime/imp/chapters.ts", "src/store/io.ts"]
 }

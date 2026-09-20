@@ -12,6 +12,8 @@ export interface Env {
   INTERNAL_TOKEN?: string;
   /** KV 命名空间绑定，存放书稿内容（key 与 Node 版 kv_files 绝对路径键一致）。 */
   CONTENT: KVNamespace;
+  /** R2 桶绑定（可选）：导出文件存储；未绑定时导出返回内联文本。 */
+  EXPORTS?: R2Bucket;
   /** 信封加密主密钥（64 位 hex），wrangler secret put MASTER_KEY。 */
   MASTER_KEY: string;
   /** 平台模式：selfhost（默认）| commercial。 */

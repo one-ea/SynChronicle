@@ -12,6 +12,7 @@ import { ChannelsDao, QuotaDao, AuditDao, ReportsDao, type ChannelRow } from "..
 import { UsersDao } from "../src/db/users.js";
 import { PublishedEntrySchema, titleHue } from "../src/domain/publish.js";
 import { scanSafety } from "../src/diag/safety.js";
+import { splitChapters } from "../src/runtime/imp/chapters.js";
 import { D1KvStore, type Env } from "./types.js";
 import { WorkerCrypto, issueToken, verifyToken, maskKey } from "./crypto.js";
 import { RuntimeHub } from "./object.js";
@@ -252,6 +253,11 @@ async function route(request: Request, ctx: Ctx): Promise<Response> {
   if (method === "GET" && path === "/api/publish") return publishList(ctx);
   if (method === "POST" && path === "/api/publish") return publish(request, ctx);
   if (method === "POST" && path === "/api/unpublish") return unpublish(request, ctx);
+
+  // 导入：纯文本切分入库（R4 拆书同款解析器）；导出：txt 组装，R2 可选存储
+  if (method === "POST" && path === "/api/import") return importText(request, ctx);
+  if (method === "POST" && path === "/api/export") return exportBook(request, ctx);
+  if (method === "GET" && path.startsWith("/api/export/file/")) return exportFile(ctx, decodeURIComponent(path.slice("/api/export/file/".length)));
 
   return fail("接口不存在（Worker 切片当前覆盖平台面；AI 生成请使用 Node 主线）", 404);
 }
@@ -601,4 +607,100 @@ async function unpublish(request: Request, ctx: Ctx): Promise<Response> {
   const next = entries.filter((item) => item.id !== id);
   await saveShelf(ctx, { entries: next, updatedAt: new Date().toISOString() });
   return json({ unpublished: next.length !== entries.length });
+}
+
+/** ---------- 导入/导出（P11-C4） ---------- */
+
+async function bookOwner(ctx: Ctx, id: string): Promise<string | undefined> {
+  const meta = await ctx.kv.get(`books/${id}/meta/book.json`);
+  if (meta) { try { return (JSON.parse(meta) as { ownerId?: string }).ownerId; } catch { /* 忽略 */ } }
+  const shelfRaw = await ctx.kv.get("platform/bookshelf.json");
+  if (!shelfRaw) return undefined;
+  try { const shelf = JSON.parse(shelfRaw) as { books?: Array<{ id: string; ownerId: string }> }; return shelf.books?.find((book) => book.id === id)?.ownerId; } catch { return undefined; }
+}
+
+async function requireBookAccess(ctx: Ctx, id: string): Promise<Response | null> {
+  if (ctx.user?.role === "admin") return null;
+  const owner = await bookOwner(ctx, id);
+  if (owner !== ctx.user!.id) return fail("无权访问该书", 403);
+  return null;
+}
+
+const ImportBody = z.object({ bookId: z.string().trim().min(1).max(64).regex(/^[\w-]+$/).optional(), title: z.string().trim().min(1).max(60).optional(), text: z.string().min(1).max(4_000_000) });
+
+async function importText(request: Request, ctx: Ctx): Promise<Response> {
+  try {
+    const body = ImportBody.parse(await readBody(request));
+    const chapters = splitChapters(body.text);
+    if (!chapters.length) return fail("文本中没有可导入的章节", 400);
+    const numbers = chapters.map((chapter) => chapter.chapter);
+    if (new Set(numbers).size !== numbers.length || numbers.some((chapter) => chapter <= 0)) return fail("导入章节编号必须是唯一的正整数", 400);
+    let id = body.bookId;
+    if (id) {
+      const denied = await requireBookAccess(ctx, id);
+      if (denied) return denied;
+    } else {
+      id = `${(body.title ?? "import").replace(/[^\w-]/g, "").slice(0, 24) || "import"}-${Date.now().toString(36)}`;
+    }
+    const title = body.title ?? id;
+    const now = new Date().toISOString();
+    for (const chapter of chapters) {
+      await ctx.kv.set(`books/${id}/chapters/${String(chapter.chapter).padStart(2, "0")}.md`, `# ${chapter.title}\n\n${chapter.content}`);
+      await ctx.kv.set(`books/${id}/summaries/${String(chapter.chapter).padStart(2, "0")}.json`, JSON.stringify({ chapter: chapter.chapter, summary: "导入章节", characters: [], key_events: [] }));
+    }
+    const outline = chapters.map((chapter) => ({ chapter: chapter.chapter, title: chapter.title, scenes: [], hook: "" }));
+    await ctx.kv.set(`books/${id}/meta/outline.json`, JSON.stringify(outline));
+    await ctx.kv.set(`books/${id}/meta/progress.json`, JSON.stringify({
+      novel_name: title, phase: "writing", current_chapter: Math.max(...numbers) + 1, total_chapters: Math.max(...numbers),
+      completed_chapters: numbers, total_word_count: chapters.reduce((sum, chapter) => sum + [...chapter.content.replace(/\s/g, "")].length, 0),
+      chapter_word_counts: Object.fromEntries(chapters.map((chapter) => [String(chapter.chapter), [...chapter.content.replace(/\s/g, "")].length])),
+      flow: "writing", in_progress_chapter: 0, pending_rewrites: [],
+    }));
+    await ctx.kv.set(`books/${id}/meta/book.json`, JSON.stringify({ ownerId: ctx.user!.id, title, updatedAt: now }));
+    const shelfRaw = await ctx.kv.get("platform/bookshelf.json");
+    const shelf = shelfRaw ? JSON.parse(shelfRaw) as { books?: Array<Record<string, unknown>>; activeId?: string | null } : { books: [], activeId: null };
+    const books = (shelf.books ?? []).filter((book) => book.id !== id);
+    books.push({ id, title, createdAt: now, updatedAt: now, ownerId: ctx.user!.id });
+    await ctx.kv.set("platform/bookshelf.json", JSON.stringify({ books, activeId: id, updatedAt: now }));
+    await ctx.audit.log(ctx.user!.id, "import", `book:${id}`, { chapters: chapters.length });
+    return json({ imported: true, bookId: id, chapters: chapters.length }, 201);
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : String(error), 400);
+  }
+}
+
+const ExportBody = z.object({ bookId: z.string().trim().min(1).max(64), format: z.enum(["txt"]).default("txt") });
+
+async function exportBook(request: Request, ctx: Ctx): Promise<Response> {
+  try {
+    const body = ExportBody.parse(await readBody(request));
+    const denied = await requireBookAccess(ctx, body.bookId);
+    if (denied) return denied;
+    const progressRaw = await ctx.kv.get(`books/${body.bookId}/meta/progress.json`);
+    const progress = progressRaw ? JSON.parse(progressRaw) as { completed_chapters?: number[]; novel_name?: string } : null;
+    const completed = (progress?.completed_chapters ?? []).slice().sort((a, b) => a - b);
+    if (!completed.length) return fail("没有可导出的已完成章节", 400);
+    const title = (progress?.novel_name ?? body.bookId).trim() || body.bookId;
+    const parts: string[] = [title];
+    for (const chapter of completed) {
+      const chapterText = await ctx.kv.get(`books/${body.bookId}/chapters/${String(chapter).padStart(2, "0")}.md`);
+      if (chapterText) parts.push(`第 ${chapter} 章\n\n${chapterText.replace(/^#\s*[^\n]*\n+/, "")}`);
+    }
+    const text = parts.join("\n\n");
+    if (!ctx.env.EXPORTS) return json({ stored: false, format: "txt", chapters: completed.length, text });
+    const key = `exports/${ctx.user!.id}/${body.bookId}-${Date.now().toString(36)}.txt`;
+    await ctx.env.EXPORTS.put(key, text, { httpMetadata: { contentType: "text/plain; charset=utf-8" } });
+    await ctx.audit.log(ctx.user!.id, "export", `book:${body.bookId}`, { key, chapters: completed.length });
+    return json({ stored: true, format: "txt", chapters: completed.length, key, path: `/api/export/file/${key}` }, 201);
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : String(error), 400);
+  }
+}
+
+async function exportFile(ctx: Ctx, key: string): Promise<Response> {
+  if (!key.startsWith(`exports/${ctx.user!.id}/`)) return fail("无权下载该导出文件", 403);
+  if (!ctx.env.EXPORTS) return fail("导出存储未配置", 501);
+  const object = await ctx.env.EXPORTS.get(key);
+  if (!object) return fail("导出文件不存在", 404);
+  return new Response(object.body, { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store", "content-disposition": `attachment; filename="${key.split("/").pop()}"` } });
 }

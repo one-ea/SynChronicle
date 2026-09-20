@@ -18,6 +18,11 @@ bindings = [{ name = "RUNTIME", class_name = "RuntimeHub" }]
 tag = "v1"
 new_sqlite_classes = ["RuntimeHub"]
 
+# R2（可选）：导出文件存储；未绑定时 /api/export 返回内联文本
+# [[r2_buckets]]
+# binding = "EXPORTS"
+# bucket_name = "synchronicle-exports"
+
 # KV：可选缓存命名空间（当前切片未强制使用）
 # [[kv_namespaces]]
 # binding = "CONTENT"
