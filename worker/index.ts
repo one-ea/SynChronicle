@@ -14,6 +14,7 @@ import { PublishedEntrySchema, titleHue } from "../src/domain/publish.js";
 import { scanSafety } from "../src/diag/safety.js";
 import { splitChapters } from "../src/runtime/imp/chapters.js";
 import { buildUpstreamRequest, collectUpstream, settleCost, sseEvent, CHAT_SYSTEM_PROMPT, type ChatTurn } from "./chat.js";
+import { buildChapterContext, renderMemoryBlock } from "./memory.js";
 import { D1KvStore, type Env } from "./types.js";
 import { WorkerCrypto, issueToken, verifyToken, maskKey, toHex, pbkdf2Hex } from "./crypto.js";
 import { RuntimeHub } from "./object.js";
@@ -260,10 +261,20 @@ async function route(request: Request, ctx: Ctx): Promise<Response> {
   if (method === "POST" && path === "/api/export") return exportBook(request, ctx);
   if (method === "GET" && path.startsWith("/api/export/file/")) return exportFile(ctx, decodeURIComponent(path.slice("/api/export/file/".length)));
 
-  // 对话式生成（P11-C5）与两段式流水线（P11-C6）
+  // 对话式生成（P11-C5）与两段式流水线（P11-C6/C7）
   if (method === "GET" && path === "/api/chat") return chatHistory(ctx, url.searchParams.get("book") || "");
   if (method === "POST" && path === "/api/chat") return chatTurn(request, ctx);
   if (method === "POST" && path === "/api/compose") return compose(request, ctx);
+
+  // 一致性记忆（P11-C7）：角色卡与伏笔台账
+  if (path === "/api/entities") {
+    if (method === "GET") return entitiesList(ctx, url.searchParams.get("book") ?? "");
+    if (method === "POST") return entityUpsert(request, ctx);
+  }
+  if (path === "/api/foreshadows") {
+    if (method === "GET") return foreshadowsList(ctx, url.searchParams.get("book") ?? "");
+    if (method === "POST") return foreshadowUpsert(request, ctx);
+  }
 
   return fail("接口不存在（自动驾驶/Steer 等完整引擎仍需 Node 主线）", 404);
 }
@@ -910,8 +921,10 @@ async function compose(request: Request, ctx: Ctx): Promise<Response> {
           controller.enqueue(sseEvent("plan", { chapters: planned.map((item) => ({ chapter: item.chapter, title: item.title })), usage: plan.usage }));
           for (const item of planned) {
             await publish("runtime", { type: "system", message: `第 ${item.chapter} 章开始`, title: item.title });
+            const memory = await buildChapterContext(ctx.kv, bookId, item.chapter, `${item.title} ${item.outline}`);
+            const memoryBlock = renderMemoryBlock(memory);
             const writeMessages = [
-              { role: "system", content: `你是长篇小说写手。依据大纲撰写本章正文，约 ${body.wordsPerChapter} 字。直接输出正文，不写章节标题，不复述大纲。` },
+              { role: "system", content: `你是长篇小说写手。依据大纲撰写本章正文，约 ${body.wordsPerChapter} 字。直接输出正文，不写章节标题，不复述大纲。${memoryBlock ? `\n\n${memoryBlock}` : ""}` },
               { role: "user", content: `作品前提：${body.premise}\n\n本章大纲（第 ${item.chapter} 章 ${item.title}）：\n${item.outline}` },
             ];
             const chapterText = await generateOnce(resolved, writeMessages, async (delta) => {
@@ -960,6 +973,81 @@ async function compose(request: Request, ctx: Ctx): Promise<Response> {
       },
     });
     return new Response(stream, { headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-store" } });
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : String(error), 400);
+  }
+}
+
+/** ---------- 一致性记忆（P11-C7）：角色卡与伏笔台账 ---------- */
+
+function requireBook(ctx: Ctx, bookId: string): Promise<Response | null> { return requireBookAccess(ctx, bookId); }
+
+const EntityBody = z.object({ bookId: z.string().trim().min(1).max(64), entity: z.object({ id: z.string().trim().min(1).max(64), name: z.string().trim().min(1).max(60), type: z.enum(["character", "faction", "item", "location"]), aliases: z.array(z.string().trim().max(30)).max(10).default([]), description: z.string().trim().max(2000).default(""), mood: z.string().trim().max(60).optional(), goals: z.array(z.string().trim().max(120)).max(8).optional(), chapter: z.number().int().positive().optional() }) });
+
+async function loadEntities(ctx: Ctx, bookId: string): Promise<Array<Record<string, unknown>>> {
+  const raw = await ctx.kv.get(`books/${bookId}/meta/entities.json`);
+  if (!raw) return [];
+  try { const parsed = JSON.parse(raw) as unknown; return Array.isArray(parsed) ? parsed as Array<Record<string, unknown>> : []; } catch { return []; }
+}
+
+async function entitiesList(ctx: Ctx, bookId: string): Promise<Response> {
+  if (!bookId) return json({ entities: [] });
+  const denied = await requireBook(ctx, bookId);
+  if (denied) return denied;
+  return json({ entities: await loadEntities(ctx, bookId) });
+}
+
+async function entityUpsert(request: Request, ctx: Ctx): Promise<Response> {
+  try {
+    const body = EntityBody.parse(await readBody(request));
+    const denied = await requireBook(ctx, body.bookId);
+    if (denied) return denied;
+    const entities = await loadEntities(ctx, body.bookId);
+    const input = body.entity;
+    const existingIndex = entities.findIndex((item) => item.id === input.id);
+    const existing = existingIndex >= 0 ? entities[existingIndex] as { states?: Array<Record<string, unknown>> } : {};
+    const states = Array.isArray(existing.states) ? [...existing.states] : [];
+    if (input.mood !== undefined || input.goals !== undefined || input.chapter !== undefined) {
+      states.push({ chapter: input.chapter ?? 1, mood: input.mood ?? "平淡", goals: input.goals ?? [] });
+    }
+    const record = { id: input.id, name: input.name, type: input.type, aliases: input.aliases, description: input.description, relations: [], states, firstAppearedChapter: input.chapter };
+    if (existingIndex >= 0) entities[existingIndex] = record; else entities.push(record);
+    await ctx.kv.set(`books/${body.bookId}/meta/entities.json`, JSON.stringify(entities));
+    await ctx.audit.log(ctx.user!.id, "entity.upsert", `book:${body.bookId}`, { id: input.id, name: input.name });
+    return json({ saved: true, entity: record }, 201);
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : String(error), 400);
+  }
+}
+
+const ForeshadowBody = z.object({ bookId: z.string().trim().min(1).max(64), foreshadow: z.object({ id: z.string().trim().min(1).max(64), title: z.string().trim().min(1).max(80), description: z.string().trim().max(1000).default(""), type: z.enum(["mystery", "secret", "worldview", "tension", "prophecy", "chekhov", "unfinished", "identity"]).default("mystery"), stage: z.enum(["planted", "hinted", "misled", "resolved"]).default("planted"), plantedChapter: z.number().int().positive(), urgency: z.enum(["low", "medium", "high", "critical"]).default("medium") }) });
+
+async function loadForeshadows(ctx: Ctx, bookId: string): Promise<{ items: Array<Record<string, unknown>> }> {
+  const raw = await ctx.kv.get(`books/${bookId}/meta/foreshadows.json`);
+  if (!raw) return { items: [] };
+  try { const parsed = JSON.parse(raw) as { items?: unknown }; return { items: Array.isArray(parsed.items) ? parsed.items as Array<Record<string, unknown>> : [] }; } catch { return { items: [] }; }
+}
+
+async function foreshadowsList(ctx: Ctx, bookId: string): Promise<Response> {
+  if (!bookId) return json({ items: [] });
+  const denied = await requireBook(ctx, bookId);
+  if (denied) return denied;
+  return json(await loadForeshadows(ctx, bookId));
+}
+
+async function foreshadowUpsert(request: Request, ctx: Ctx): Promise<Response> {
+  try {
+    const body = ForeshadowBody.parse(await readBody(request));
+    const denied = await requireBook(ctx, body.bookId);
+    if (denied) return denied;
+    const { items } = await loadForeshadows(ctx, body.bookId);
+    const input = body.foreshadow;
+    const existingIndex = items.findIndex((item) => item.id === input.id);
+    const record = { ...input, lastUpdatedChapter: input.plantedChapter, ...(input.stage === "resolved" ? { resolvedChapter: input.plantedChapter } : {}), missedRecoveries: 0 };
+    if (existingIndex >= 0) items[existingIndex] = record; else items.push(record);
+    await ctx.kv.set(`books/${body.bookId}/meta/foreshadows.json`, JSON.stringify({ items, updatedAt: new Date().toISOString() }));
+    await ctx.audit.log(ctx.user!.id, "foreshadow.upsert", `book:${body.bookId}`, { id: input.id, stage: input.stage });
+    return json({ saved: true, foreshadow: record }, 201);
   } catch (error) {
     return fail(error instanceof Error ? error.message : String(error), 400);
   }

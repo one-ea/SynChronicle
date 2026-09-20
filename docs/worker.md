@@ -74,6 +74,7 @@ EDGE_RELAY_TOKEN=<与 INTERNAL_TOKEN 相同>
 | SSE 实时流 | RuntimeHub DO（中继模式） | 原生 |
 | 对话式生成 | 支持（渠道直连流式 + 计费） | 支持 |
 | 两段式流水线（策划→成章） | 支持（agent=compose 计费） | 支持（多智能体完整版） |
+| 一致性记忆（角色/伏笔/前文） | 支持（BM25 + schema 兼容） | 支持 |
 | 自动驾驶/Steer/多智能体 | 未支持 | 支持 |
 | 文件导入导出 | txt 导入/导出（R2 可选存储） | 支持（含 EPUB） |
 
@@ -102,4 +103,14 @@ EDGE_RELAY_TOKEN=<与 INTERNAL_TOKEN 相同>
   - 商用模式合并 usage 一次结算（agent=compose），枢纽发布策划/章节/完成事件
 - 响应为 SSE：`plan` → `delta`（带 chapter 标记）→ `done`（章节数、总 usage、cost）。
 
-后续里程碑：C7 多轮一致性上下文（角色/伏笔召回）与卷级评审。
+### 一致性记忆（P11-C7）
+
+- `GET/POST /api/entities?book=<id>`：角色卡 CRUD（`meta/entities.json`，主线 Entity schema 兼容），`mood/goals/chapter` 追加角色状态时间线。
+- `GET/POST /api/foreshadows?book=<id>`：伏笔台账 CRUD（`meta/foreshadows.json`，主线 Foreshadow schema 兼容）。
+- compose 逐章写作自动注入记忆块（写手 system prompt）：
+  - 【前文回顾】已完成章节摘要（BM25 按本章大纲相关性排序，取前 5）
+  - 【上一章结尾】上一章末尾 400 字（衔接用）
+  - 【登场角色】相关角色卡 + 最新情绪/目标（BM25 排序取前 6）
+  - 【未回收伏笔】非 resolved 伏笔按紧迫度排序（取前 8）
+
+后续里程碑：C8 卷级评审与摘要自动化（Editor 角色边缘化）。
